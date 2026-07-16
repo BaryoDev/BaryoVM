@@ -1,0 +1,11 @@
+# Binaries
+/baryovm
+/dist/
+*.exe
+
+# Go
+/vendor/
+
+# Local state / secrets
+*.pem
+.env
