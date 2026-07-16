@@ -31,7 +31,7 @@ func newRoot() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
-	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd())
+	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd())
 	return root
 }
 

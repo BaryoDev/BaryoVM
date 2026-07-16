@@ -32,9 +32,18 @@ func (v VM) Target() sshx.Target {
 	return sshx.Target{Host: v.Host, Port: v.Port, User: v.User, KeyPath: v.KeyPath}
 }
 
+// Stack is a docker compose project living on one of the fleet's VMs.
+type Stack struct {
+	Name string `json:"name"`
+	VM   string `json:"vm"`             // references a VM by name
+	Dir  string `json:"dir"`            // remote project directory, e.g. /opt/barakocms
+	File string `json:"file,omitempty"` // compose file name; empty = compose default
+}
+
 // Store is the whole fleet.
 type Store struct {
-	VMs []VM `json:"vms"`
+	VMs    []VM    `json:"vms"`
+	Stacks []Stack `json:"stacks,omitempty"`
 }
 
 func dir() string {
@@ -96,6 +105,36 @@ func (s *Store) Remove(name string) bool {
 	for i := range s.VMs {
 		if s.VMs[i].Name == name {
 			s.VMs = append(s.VMs[:i], s.VMs[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// FindStack returns the stack with the given name, or nil.
+func (s *Store) FindStack(name string) *Stack {
+	for i := range s.Stacks {
+		if s.Stacks[i].Name == name {
+			return &s.Stacks[i]
+		}
+	}
+	return nil
+}
+
+// UpsertStack adds or replaces a stack by name.
+func (s *Store) UpsertStack(st Stack) {
+	if existing := s.FindStack(st.Name); existing != nil {
+		*existing = st
+		return
+	}
+	s.Stacks = append(s.Stacks, st)
+}
+
+// RemoveStack deletes a stack by name, reporting whether it existed.
+func (s *Store) RemoveStack(name string) bool {
+	for i := range s.Stacks {
+		if s.Stacks[i].Name == name {
+			s.Stacks = append(s.Stacks[:i], s.Stacks[i+1:]...)
 			return true
 		}
 	}
