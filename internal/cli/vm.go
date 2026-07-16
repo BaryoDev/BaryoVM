@@ -17,7 +17,7 @@ import (
 
 func newVMCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "vm", Short: "Manage the VMs in your fleet"}
-	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMBootstrapCmd(), newVMRemoveCmd())
+	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMBootstrapCmd(), newVMRemoveCmd(), newVMProvisionCmd())
 	return cmd
 }
 

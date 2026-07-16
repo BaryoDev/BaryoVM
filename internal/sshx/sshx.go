@@ -81,6 +81,21 @@ func (c *Client) Close() error { return c.c.Close() }
 // Quote single-quotes an argument so it is safe to embed in a remote shell command.
 func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// PublicKeyFromPrivate reads a private key and returns its OpenSSH public key
+// line (authorized_keys form), so a provisioner can authorize the same key it
+// will later connect with.
+func PublicKeyFromPrivate(keyPath string) (string, error) {
+	b, err := os.ReadFile(expand(keyPath))
+	if err != nil {
+		return "", fmt.Errorf("read key %s: %w", keyPath, err)
+	}
+	signer, err := ssh.ParsePrivateKey(b)
+	if err != nil {
+		return "", fmt.Errorf("parse key %s: %w", keyPath, err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), nil
+}
+
 func expand(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {

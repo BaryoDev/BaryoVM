@@ -20,10 +20,10 @@ type Instance struct {
 
 // Spec describes a VM to create.
 type Spec struct {
-	Name      string // instance + resource name
-	Region    string // provider region / availability domain
-	Size      string // provider bundle/shape id
-	PublicKey string // SSH public key material to authorize
+	Name      string `json:"name"`      // instance + resource name
+	Region    string `json:"region"`    // provider region / availability domain
+	Size      string `json:"size"`      // provider bundle/shape id
+	PublicKey string `json:"publicKey"` // SSH public key material to authorize
 }
 
 // Provider provisions and tears down VMs on one cloud.

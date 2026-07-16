@@ -7,6 +7,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -14,6 +15,9 @@ import (
 )
 
 var outputFormat string
+
+// errDryRun signals that a command stopped early because --dry-run was set.
+var errDryRun = errors.New("dry run")
 
 func newRoot() *cobra.Command {
 	root := &cobra.Command{
@@ -27,7 +31,7 @@ func newRoot() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
-	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd())
+	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd())
 	return root
 }
 
