@@ -1,7 +1,11 @@
 # BaryoVM — planning doc
 
-> **Status: PARKED / tabled** (drafted 2026-07-15). This is a design record to pick up later.
-> Nothing built yet. No infrastructure touched.
+> **Status: building (CLI first).** A Go CLI is underway; see **[USAGE.md](USAGE.md)** for the
+> commands that work today. This file remains the design record for the fuller product (Control API,
+> MCP server, MAUI app). Local only, not on GitHub yet.
+>
+> Decision update: the CLI/engine is **Go** (single binary, native Docker/SSH/cloud SDKs); the MAUI
+> app is a thin .NET client that calls the Go CLI. The rest of this document still holds.
 
 A self-hosted control plane to manage a fleet of VMs and the apps/databases/domains on them —
 from a UI, a CLI, and an MCP server — instead of doing everything by hand over SSH.
