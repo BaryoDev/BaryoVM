@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -20,12 +21,15 @@ func newStackCmd() *cobra.Command {
 	cmd.AddCommand(
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
+		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
 	)
 	return cmd
 }
 
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
+	var dbContainer, dbName, dbUser, envFile, backupDir string
+	var keep int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Register a compose stack (a project dir on a VM)",
@@ -38,7 +42,11 @@ func newStackAddCmd() *cobra.Command {
 			if store.Find(vm) == nil {
 				return fmt.Errorf("no VM named %q — register it first with `baryovm vm add`", vm)
 			}
-			st := fleet.Stack{Name: args[0], VM: vm, Dir: path, File: file}
+			st := fleet.Stack{
+				Name: args[0], VM: vm, Dir: path, File: file,
+				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser,
+				EnvFile: envFile, BackupDir: backupDir, Keep: keep,
+			}
 			store.UpsertStack(st)
 			if err := store.Save(); err != nil {
 				return err
@@ -50,8 +58,111 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&vm, "vm", "", "VM the stack runs on (required)")
 	cmd.Flags().StringVar(&path, "path", "", "remote project directory, e.g. /opt/barakocms (required)")
 	cmd.Flags().StringVar(&file, "file", "", "compose file name (default: compose's own default)")
+	cmd.Flags().StringVar(&dbContainer, "db-container", "", "postgres container for backups, e.g. deploy-postgres-1")
+	cmd.Flags().StringVar(&dbName, "db-name", "", "database to back up")
+	cmd.Flags().StringVar(&dbUser, "db-user", "", "database user (default: postgres)")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "config file to back up, relative to the project dir (e.g. .env)")
+	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
+	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
+	return cmd
+}
+
+func backupConfig(st *fleet.Stack) backup.Config {
+	return backup.Config{
+		Name: st.Name, Dir: st.Dir, EnvFile: st.EnvFile,
+		DBContainer: st.DBContainer, DBName: st.DBName, DBUser: st.DBUser,
+		BackupDir: st.BackupDir, Keep: st.Keep,
+	}
+}
+
+// runStackBackup resolves a stack (which must have backup config), dials its VM,
+// and runs a backup op with a spinner.
+func runStackBackup(name, action, step string, fn func(c *sshx.Client, st *fleet.Stack) (string, error)) error {
+	store, err := fleet.Load()
+	if err != nil {
+		return err
+	}
+	st := store.FindStack(name)
+	if st == nil {
+		return fmt.Errorf("no stack named %q", name)
+	}
+	if st.DBContainer == "" || st.DBName == "" {
+		return fmt.Errorf("stack %q has no backup config — set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+	}
+	vm := store.Find(st.VM)
+	if vm == nil {
+		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
+	}
+	var out string
+	err = ui.Step(step, func() error {
+		c, err := sshx.Dial(vm.Target())
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		out, err = fn(c, st)
+		return err
+	})
+	if err != nil {
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		return err
+	}
+	if ui.JSON() {
+		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: map[string]string{"output": out}})
+		return nil
+	}
+	if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
+		fmt.Println(trimmed)
+	}
+	ui.Successf("%s: %s done", name, action)
+	return nil
+}
+
+func newStackBackupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup <name>",
+		Short: "Back up the stack's database + config (pg_dump + .env)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStackBackup(args[0], "stack backup", fmt.Sprintf("backing up %s", args[0]),
+				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.Backup(c, backupConfig(st)) })
+		},
+	}
+}
+
+func newStackBackupsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backups <name>",
+		Short: "List the stack's database backups",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStackBackup(args[0], "stack backups", fmt.Sprintf("listing backups for %s", args[0]),
+				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.List(c, backupConfig(st)) })
+		},
+	}
+}
+
+func newStackRestoreCmd() *cobra.Command {
+	var file string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "restore <name>",
+		Short: "Restore the stack's database from a backup (REPLACES current data)",
+		Args:  cobra.ExactArgs(1),
+		Example: "  baryovm stack restore baryoclub --yes\n" +
+			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				return fmt.Errorf("restore REPLACES the %q database — re-run with --yes to confirm", args[0])
+			}
+			return runStackBackup(args[0], "stack restore", fmt.Sprintf("restoring %s", args[0]),
+				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.Restore(c, backupConfig(st), file) })
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", "", "backup to restore (name or path); default: newest")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the destructive restore")
 	return cmd
 }
 

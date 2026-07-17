@@ -38,6 +38,14 @@ type Stack struct {
 	VM   string `json:"vm"`             // references a VM by name
 	Dir  string `json:"dir"`            // remote project directory, e.g. /opt/barakocms
 	File string `json:"file,omitempty"` // compose file name; empty = compose default
+
+	// Backup config (optional) — lets `stack backup/restore` dump this stack's Postgres DB + config.
+	DBContainer string `json:"dbContainer,omitempty"` // postgres container, e.g. deploy-postgres-1
+	DBName      string `json:"dbName,omitempty"`      // database to dump
+	DBUser      string `json:"dbUser,omitempty"`      // defaults to postgres
+	EnvFile     string `json:"envFile,omitempty"`     // config file to back up, relative to Dir (e.g. .env)
+	BackupDir   string `json:"backupDir,omitempty"`   // remote dir for backups
+	Keep        int    `json:"keep,omitempty"`        // retention count (default 14)
 }
 
 // Store is the whole fleet.

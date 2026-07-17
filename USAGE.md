@@ -59,6 +59,25 @@ baryovm stack remove barako                               # forget the registrat
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
 `--force-recreate`, `--no-deps`.
 
+### Backups (pg_dump + config, over SSH)
+
+Register the DB + config once, then back up / restore with one command:
+
+```sh
+baryovm stack add baryoclub --vm oracle --path /home/opc/baryoclub-src/BaryoClub/deploy \
+  --db-container deploy-postgres-1 --db-name baryoclub --env-file .env \
+  --backup-dir /home/opc/baryoclub-backups --keep 14
+
+baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune to --keep
+baryovm stack backups baryoclub     # list backups, newest first
+baryovm stack restore baryoclub --yes                    # newest (REPLACES data)
+baryovm stack restore baryoclub --file db-YYYY….dump --yes
+```
+
+Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
+(default postgres), `--env-file` (relative to the project dir), `--backup-dir`
+(default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
+
 Example: the barakoCMS admin health-page redeploy is one command:
 
 ```sh
