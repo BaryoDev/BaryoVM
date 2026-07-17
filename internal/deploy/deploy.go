@@ -17,7 +17,7 @@ import (
 // Spec describes a container to run.
 type Spec struct {
 	Name    string            // container name (stable across redeploys)
-	Image   string            // e.g. arnelirobles/barako-cms:latest
+	Image   string            // e.g. example/app:latest
 	Ports   []string          // "hostPort:containerPort", optionally "ip:host:container"
 	Env     map[string]string // environment variables
 	Restart string            // docker restart policy; default "unless-stopped"

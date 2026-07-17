@@ -30,7 +30,7 @@ owner-only (0600) and references SSH key paths, not key contents.
 
 ```sh
 # Register an existing VM (e.g. the Oracle box)
-baryovm vm add oracle --host 140.245.103.105 --user opc --key ~/.ssh/oracle_vm_key
+baryovm vm add oracle --host <your-vm-ip> --user opc --key ~/.ssh/id_ed25519
 
 baryovm vm list
 baryovm vm ping oracle           # SSH in, report host + Docker version
@@ -70,7 +70,7 @@ the sync list, so secrets can't be wiped by `--delete`.
 ```json
 {
   "localRoot": "~/repos/BaryoClub",
-  "remoteRoot": "/home/opc/baryoclub-src/BaryoClub",
+  "remoteRoot": "/home/deploy/baryoclub-src/BaryoClub",
   "sync": ["api", "web"],
   "exclude": ["bin", "obj", "node_modules", ".next", ".git"],
   "builds": [
@@ -100,9 +100,9 @@ Per-build options: `image`, `dockerfile`, `context` (both relative to `remoteRoo
 Register the DB + config once, then back up / restore with one command:
 
 ```sh
-baryovm stack add baryoclub --vm oracle --path /home/opc/baryoclub-src/BaryoClub/deploy \
+baryovm stack add baryoclub --vm oracle --path /home/deploy/baryoclub-src/BaryoClub/deploy \
   --db-container deploy-postgres-1 --db-name baryoclub --env-file .env \
-  --backup-dir /home/opc/baryoclub-backups --keep 14
+  --backup-dir /home/deploy/baryoclub-backups --keep 14
 
 baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune to --keep
 baryovm stack backups baryoclub     # list backups, newest first
