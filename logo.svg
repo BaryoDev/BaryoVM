@@ -1,0 +1,17 @@
+<svg width="96" height="96" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BaryoVM">
+  <rect width="64" height="64" rx="14" fill="#3498db"/>
+  <!-- Stacked VMs / a small fleet -->
+  <g fill="#ffffff">
+    <rect x="16" y="17" width="32" height="9" rx="3"/>
+    <rect x="16" y="29.5" width="32" height="9" rx="3"/>
+    <rect x="16" y="42" width="32" height="9" rx="3"/>
+  </g>
+  <!-- port/LED on each -->
+  <g fill="#3498db">
+    <circle cx="21.5" cy="21.5" r="1.6"/>
+    <circle cx="21.5" cy="34" r="1.6"/>
+    <circle cx="21.5" cy="46.5" r="1.6"/>
+  </g>
+  <!-- "running" indicator on the top node -->
+  <circle cx="42.5" cy="21.5" r="2.3" fill="#2ecc71"/>
+</svg>

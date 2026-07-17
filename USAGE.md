@@ -1,7 +1,7 @@
 # BaryoVM CLI usage
 
-> Local, early-stage. Built CLI-first in Go; the .NET MAUI app and MCP server
-> will drive this same CLI via `-o json`. Not on GitHub yet (immature).
+> Early-stage. Built CLI-first in Go; the .NET MAUI app and MCP server will
+> drive this same CLI via `-o json`. See the [README](README.md) for an overview.
 
 ## Build
 

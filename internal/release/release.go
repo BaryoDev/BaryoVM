@@ -20,11 +20,11 @@ import (
 
 // Build describes one image to build on the VM.
 type Build struct {
-	Image      string            `json:"image"`                // tag, e.g. app:latest
-	Dockerfile string            `json:"dockerfile"`           // relative to remoteRoot
-	Context    string            `json:"context"`              // build context, relative to remoteRoot
-	Args       map[string]string `json:"args,omitempty"`       // --build-arg values
-	NoCache    bool              `json:"noCache,omitempty"`    // pass --no-cache
+	Image      string            `json:"image"`             // tag, e.g. app:latest
+	Dockerfile string            `json:"dockerfile"`        // relative to remoteRoot
+	Context    string            `json:"context"`           // build context, relative to remoteRoot
+	Args       map[string]string `json:"args,omitempty"`    // --build-arg values
+	NoCache    bool              `json:"noCache,omitempty"` // pass --no-cache
 }
 
 // Manifest is the whole release recipe. Kept in the project (e.g. baryovm.release.json).

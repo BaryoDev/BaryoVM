@@ -1,231 +1,122 @@
-# BaryoVM — planning doc
+<div align="center">
+  <img src="logo.svg" alt="BaryoVM" width="96" height="96" />
+  <h1>BaryoVM</h1>
+  <p><em>PaaS-style deploys on your own cheap VMs — agentless, over SSH, from one CLI.</em></p>
+  <p>
+    <img alt="CI" src="https://github.com/BaryoDev/BaryoVM/actions/workflows/ci.yml/badge.svg" />
+    <img alt="License: MPL-2.0" src="https://img.shields.io/badge/license-MPL--2.0-blue.svg" />
+    <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8.svg" />
+  </p>
+</div>
 
-> **Status: building (CLI first).** A Go CLI is underway; see **[USAGE.md](USAGE.md)** for the
-> commands that work today. This file remains the design record for the fuller product (Control API,
-> MCP server, MAUI app). Local only, not on GitHub yet.
->
-> Decision update: the CLI/engine is **Go** (single binary, native Docker/SSH/cloud SDKs); the MAUI
-> app is a thin .NET client that calls the Go CLI. The rest of this document still holds.
+BaryoVM is a small Go CLI that registers your existing VMs and drives the Docker
+Compose stacks on them **over plain SSH** — no agent or daemon to install. It
+gives you the day-to-day parts of a PaaS (deploy, release, backup, restore, logs)
+without a control-plane to host, and every command speaks `-o json` so a future
+UI, MCP server, or agent can drive the exact same surface.
 
-A self-hosted control plane to manage a fleet of VMs and the apps/databases/domains on them —
-from a UI, a CLI, and an MCP server — instead of doing everything by hand over SSH.
+> **Status: early-stage.** The SSH · compose · **release** · **backup/restore**
+> paths are tested and used daily. VM *provisioning* (AWS Lightsail) is billable
+> and ships behind `--dry-run` — treat it as experimental. Not affiliated with any
+> cloud provider.
 
-**Model: open source, MPL-2.0** (same as Talaan and the barakoCMS modules) — free to use, source
-published, file-level copyleft. Right call for an infra tool: it holds your SSH keys + secrets, and
-people trust what they can audit. Puts it on equal footing with open-source rivals (Coolify/Dokploy),
-so the differentiation rests where it should — MCP-first, native mobile, Baryo-ecosystem fit.
+## Install
 
----
-
-## Why (the problem)
-
-Deploying one site to the existing Oracle VM today takes: SSH in → `rsync` source → `docker build`
-→ hand-write a `.env` → `docker compose up` → write an nginx server block → run `certbot` → reload
-nginx → add a GoDaddy A record. The VM already juggles nginx per-domain TLS by hand, certbot
-renewals, ~6 containers, several databases, and credentials scattered in `CREDENTIALS.md` files.
-
-BaryoVM erases that: **click a domain → live HTTPS site**, plus databases, secrets, and DNS handled
-for you.
-
----
-
-## Decisions already made (log)
-
-1. **Engine strategy: thin layer over Docker API + a reverse proxy.** Not a from-scratch PaaS, not
-   wrapping Coolify/Dokploy. BaryoVM owns the API/CLI/MCP/UI; Docker + the proxy do the heavy lifting.
-2. **Do NOT touch the current Oracle VM.** It stays on nginx + certbot, untouched. BaryoVM is designed
-   and first proven against a **new** Linux VM.
-3. **Reverse proxy is an adapter, not a forced migration.**
-   - Existing boxes → `NginxProxy` (BaryoVM scripts the nginx + certbot steps we already do by hand).
-   - Greenfield boxes → `TraefikProxy` (label-driven, auto-TLS) — no migration cost, so use it there.
-   - Traefik's advantage is *where complexity lives*: routing + TLS become a property of the container
-     (Docker is the source of truth), so BaryoVM stays a thin "run container, done" layer instead of a
-     config-file templating + certbot-lifecycle manager. Blast radius is one container, not all sites.
-     But it is **not required** — nginx-scripted is a valid path for what already exists.
-4. **First target: a fresh AWS Lightsail Ubuntu VM** that we connect to over SSH.
-5. Reuse the Baryo ecosystem: Verdict (results), Carom (resilience on SSH/Docker/DNS calls),
-   BarakoCMS.Email.Resend (email). State in Postgres/Marten. Secrets in an encrypted vault.
-
----
-
-## Architecture
-
-Everything is a **control plane + thin front-ends + pluggable provider adapters** (the barakoCMS
-module idea, applied to infrastructure).
-
-```
-        ┌────────── front-ends (thin) ──────────┐
-        │  MAUI app   ·   CLI   ·   MCP server   │   all call the same API
-        └───────────────────┬────────────────────┘
-                   BaryoVM Control API (.NET / FastEndpoints)
-        inventory · desired-state · secrets vault · audit · orchestration
-                   │  SSH + Docker API (agentless)
-        ┌──────────┴───────────┬───────────────────┐
-       VM (Lightsail)       VM …               VM …
-        Docker + Traefik (greenfield)  /  Docker + nginx (existing)
-
-Provider adapters:
- ├─ IVmProvider      → Ssh (any Linux box) · Lightsail (AWS API) · OracleCloud (OCI) · Hetzner · DO …
- ├─ IReverseProxy    → Traefik (greenfield) · Nginx (existing, scripted)
- ├─ IGitProvider     → GitHub (App + webhooks) · GitLab …
- ├─ IDnsProvider     → GoDaddy · Cloudflare …
- └─ IEmailProvider   → Resend (reuse BarakoCMS.Email.Resend)
+```sh
+go install github.com/BaryoDev/BaryoVM/cmd/baryovm@latest   # -> $(go env GOPATH)/bin
+# or build locally:
+go build -o /usr/local/bin/baryovm ./cmd/baryovm
+baryovm version
 ```
 
-**Agentless:** the Control API talks to each VM's Docker daemon over an SSH tunnel
-(`ssh://user@host`, Docker.DotNet). No daemon to install. An optional per-VM agent can be added
-later for live status/log streaming.
+State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written
+owner-only (`0600`). It stores hostnames, users and **SSH key paths — never key
+contents or secrets**. See [SECURITY.md](SECURITY.md).
 
----
+## Quickstart
 
-## Interfaces
+```sh
+# 1) Register a VM you already have (agentless — uses your SSH key)
+baryovm vm add oracle --host <your-vm-ip> --user opc --key ~/.ssh/id_ed25519
+baryovm vm ping oracle          # SSH in, report host + Docker version
+baryovm vm bootstrap oracle     # install Docker if missing
 
-- **Control API** (.NET, FastEndpoints + Marten/Postgres for state) — the brain; everything else is a client.
-- **CLI** — `baryovm deploy`, `baryovm db create`, `baryovm vm add` (System.CommandLine) over the API.
-- **MCP server** — exposes the API as agent tools; an AI agent can run the whole fleet conversationally.
-  This is the sharpest differentiator vs. Coolify/Dokploy (which are web-only, no MCP).
-- **MAUI app** (Blazor Hybrid) — native **desktop + phone**; manage infra from your phone. Shares UI
-  with a web Blazor front-end. Also a differentiator.
+# 2) Register a compose stack (a project dir on that VM), with backup + release config
+baryovm stack add app --vm oracle --path /home/deploy/app/deploy \
+  --db-container app-postgres-1 --db-name app --env-file .env \
+  --release-file ./baryovm.release.json
 
-### MCP / CLI tool surface (initial)
-`list_vms · vm_status · add_vm · deploy_site · redeploy · list_apps · stop_app · create_database ·
-list_databases · set_secret · rotate_secret · set_dns_record · app_logs · provision_tls`
+# 3) Deploy: sync source -> build images on the VM -> compose up (backs up first)
+baryovm stack release app
 
----
-
-## Capabilities
-
-### Manage Linux + Oracle VMs
-- **Manage any existing VM:** register by host + SSH key → BaryoVM drives its Docker/apps. Works for
-  Lightsail, Hetzner, a Pi — anything with SSH + Docker. (MVP.)
-- **Provision new VMs:** `LightsailProvider` / `OracleCloudProvider` use the cloud APIs to create an
-  instance, allocate a static IP, open 80/443, install Docker + Traefik, and auto-register. ("New VM"
-  becomes a button.) Later than MVP.
-
-### Connect to GitHub
-- A **GitHub App** → list repos; **deploy = pick repo + branch** (clone, build, ship with proxy labels).
-- **Webhooks** → push to `main` auto-redeploys. Your CI/CD, no per-repo Actions YAML.
-
-### Type a domain, click → configures GoDaddy ("like Resend")
-- GoDaddy **REST API** (developer.godaddy.com key+secret) → deploy a site and the `A` record is created
-  automatically to the VM's IP. No dashboard.
-- Email setup writes the Resend **MX / SPF / DKIM** records into GoDaddy, then polls Resend to flip
-  verification green.
-
-### Databases & secrets
-- "Add Postgres/Redis" → run container, create db+user, store creds in the vault, return the connection
-  string, attach to the app as env.
-- **Encrypted secrets vault** (envelope encryption, stored in Postgres) — replaces the `CREDENTIALS.md`
-  files entirely.
-
----
-
-## First scenario: a fresh Lightsail VM (the greenfield path)
-
-**You do (once, ~2 min in the AWS console):** create an **Ubuntu** Lightsail instance, **attach a static
-IP**, **open ports 22/80/443** in the Lightsail firewall, download the **.pem key** (user `ubuntu`).
-
-**BaryoVM onboards it ("Add VM"):** you give it the static IP + `ubuntu` + .pem (stored in the vault).
-It SSHes in → installs Docker → creates the `baryo-edge` network → deploys **Traefik** (80/443, Docker
-provider, Let's Encrypt resolver, persistent `acme.json`) → optional hardening (ufw, auto-updates,
-fail2ban). VM shows "ready" in the fleet.
-
-**Deploy a site (the click):** pick a GitHub repo+branch (or image), type `app.baryo.dev`, deploy.
-BaryoVM builds/pulls → runs the container with Traefik labels → injects vault secrets → calls the
-GoDaddy API to create the `app` A-record → Traefik routes + issues the cert. **Live at
-`https://app.baryo.dev`** — no SSH, no nginx, no certbot, no manual DNS. Push later → webhook →
-auto-redeploy.
-
----
-
-## Proposed solution layout (.NET)
-
-```
-BaryoVM.Core      — domain: Vm, App, Database, Secret, Deployment, DnsRecord + interfaces
-BaryoVM.Api       — control plane (FastEndpoints + Marten/Postgres)
-BaryoVM.Docker    — remote Docker control via Docker.DotNet over SSH
-BaryoVM.Proxy     — IReverseProxy: TraefikProxy + NginxProxy
-BaryoVM.Vm        — IVmProvider: SshVmProvider (+ Lightsail/OCI later)
-BaryoVM.Dns       — IDnsProvider: GoDaddy (+ Cloudflare)
-BaryoVM.Git       — IGitProvider: GitHub App + webhook receiver
-BaryoVM.Secrets   — encrypted vault (envelope encryption)
-BaryoVM.Cli       — System.CommandLine client
-BaryoVM.Mcp       — MCP server over the API
-BaryoVM.App       — MAUI Blazor Hybrid (desktop + mobile)
+# 4) Backups, any time
+baryovm stack backup app
+baryovm stack restore app --yes
 ```
 
-Reuse: **Verdict**, **Carom**, **BarakoCMS.Email.Resend**.
+## Commands
 
----
+| Area | Commands |
+|------|----------|
+| **VMs** | `vm add · list · ping · bootstrap · remove` |
+| **Stacks** | `stack add · list · remove · ps · logs · pull` |
+| **Deploy** | `stack deploy` (compose up) · **`stack release`** (sync → build → deploy) |
+| **Backups** | **`stack backup`** · `stack backups` · **`stack restore --yes`** |
+| **Single container** | `deploy` |
+| **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
+| **Local** | `doctor [--fix]` · `version` |
 
-## Phased roadmap
+Full flags and examples: **[USAGE.md](USAGE.md)**.
 
-- **Phase 0 — Substrate.** Onboard a fresh Lightsail VM: SSH register → bootstrap Docker + Traefik.
-  (Greenfield → Traefik; Oracle untouched.)
-- **Phase 1 — Control API + CLI.** Deploy-a-site (image first, then GitHub build), secrets vault,
-  GoDaddy DNS adapter, database provisioning. "New site / new db" become one call.
-- **Phase 2 — MCP server** over the API.
-- **Phase 3 — MAUI app** (desktop + phone).
-- **Later** — VM provisioning adapters (Lightsail/OCI), GitHub push-to-deploy webhooks, more DNS/VM
-  providers, per-VM agent for live logs.
+### `stack release` is config-driven
 
----
+A JSON manifest in your repo describes what to sync + build + deploy — the CLI has
+no app-specific logic. The compose dir (with its `.env`) is deliberately **never**
+in the sync list, so `--delete` can't wipe your secrets.
 
-## Credentials / integrations to wire (when we resume)
+```json
+{
+  "localRoot": "~/repos/app",
+  "remoteRoot": "/home/deploy/app",
+  "sync": ["api", "web"],
+  "exclude": ["bin", "obj", "node_modules", ".next", ".git"],
+  "builds": [
+    { "image": "app-api:latest", "dockerfile": "deploy/Dockerfile.api", "context": "api" },
+    { "image": "app-web:latest", "dockerfile": "deploy/Dockerfile.web", "context": "web",
+      "args": { "NEXT_PUBLIC_API_URL": "" } }
+  ]
+}
+```
 
-- **Lightsail:** static IP + `ubuntu` user + .pem key. Open 22/80/443 in the Lightsail firewall.
-- **GoDaddy API key + secret** (developer.godaddy.com) — for click-to-DNS.
-- **GitHub App** — for repo deploys + push-to-deploy (optional at first; image deploys need nothing).
-- **AWS keys / OCI keys** — only if/when we auto-*provision* VMs (managing existing ones needs just SSH).
+## Automation-friendly
 
-All stored in BaryoVM's encrypted vault, never in markdown files.
+Add `-o json` to any command for a stable result envelope:
 
----
+```json
+{ "ok": true, "action": "stack release", "message": "app released" }
+```
 
-## Use case
+This is how the planned MAUI desktop/mobile app and **MCP server** will drive
+BaryoVM — the CLI is the single source of truth.
 
-**Who:** a solo dev / small team / indie consultant who runs their **own** cheap VMs (Lightsail,
-Hetzner, Oracle free tier) and puts several small apps + databases on them.
+## Where it's going
 
-**Job to be done:** *"Give me a domain and a repo/image, make it a live HTTPS site on my own box —
-and let me manage all my VMs, apps, DBs, domains, and secrets from one place: by clicking, from my
-phone, or by telling an AI agent."*
+BaryoVM today is the CLI core. The broader plan — a self-hosted control plane
+(native app + MCP server) over Docker with provider adapters (SSH / Lightsail /
+OCI), reverse-proxy and DNS ("type a domain, click"), GitHub deploys and email —
+lives in [docs/VISION.md](docs/VISION.md).
 
-The PaaS experience (Vercel/Render ease) on infrastructure **you** own and pay a flat VM price for —
-without the SSH + nginx + certbot toil, and without per-app cloud bills. For BaryoDev specifically,
-it's the cockpit for barakoCMS, umami, BaryoClub, and whatever's next.
+## Development
 
-## How it competes
+```sh
+go build ./...
+go vet ./...
+go test -race ./...
+gofmt -l .          # should print nothing
+```
 
-Three things it's measured against:
+## License
 
-1. **Doing it by hand (SSH + docker + nginx + certbot).** The baseline. BaryoVM turns a 9-step deploy
-   into one click. Easy win — but only vs. yourself.
-2. **Managed PaaS (Vercel, Render, Railway, Fly.io).** Easy, but you rent their infra, costs scale per
-   app, and there's lock-in. BaryoVM gives similar ease on **your** boxes at a flat VM cost, fully
-   owned. Wins on cost + control; loses on zero-ops polish.
-3. **Self-hosted PaaS (Coolify, Dokploy, CapRover, Komodo, Portainer).** The real competitors — mature,
-   open-source, big communities. **Do not out-feature them.** BaryoVM competes on a narrow, sharp edge:
-
-   - **AI-native / MCP-first** — an AI agent can provision, deploy, and operate the fleet. None of them
-     have this. Timely and genuinely novel.
-   - **Native desktop + MOBILE app (MAUI)** — they're web dashboards; BaryoVM manages infra from your
-     phone with a native app. Manage-on-the-go + push alerts.
-   - **Opinionated Baryo-ecosystem fit** — one-click barakoCMS, Resend email + GoDaddy DNS wired
-     together, curated for the solo-dev-with-own-VMs workflow rather than every option under the sun.
-
-**Honest headwinds:** Coolify/Dokploy are open source with years of features and community — hard to
-match on breadth. Being open source (MPL-2.0) puts BaryoVM on the same trust footing (auditable, no
-lock-in), so it competes on the wedge rather than defending a closed binary. The wedge stays
-narrow-and-deep (MCP + mobile + ecosystem), not broad. If the differentiation ever stops mattering,
-the fallback is to wrap Dokploy's API instead of owning the engine.
-
----
-
-## Open questions (parked)
-
-- MAUI desktop-first or mobile-first for the initial UI?
-- Vault master-key custody: key file on the control host, or a cloud KMS?
-- Build strategy for GitHub deploys: Dockerfile-only, or add buildpacks (e.g. Paketo) for repos
-  without a Dockerfile?
-- Does the Control API itself run on one of the managed VMs, or a separate always-on host?
+[MPL-2.0](LICENSE) — open source; per-file notices in every source file. Chosen
+deliberately: a tool that holds SSH key paths and drives your machines should be
+auditable.

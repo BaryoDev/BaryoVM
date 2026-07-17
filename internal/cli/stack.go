@@ -284,7 +284,9 @@ func newStackRestoreCmd() *cobra.Command {
 				return fmt.Errorf("restore REPLACES the %q database — re-run with --yes to confirm", args[0])
 			}
 			return runStackBackup(args[0], "stack restore", fmt.Sprintf("restoring %s", args[0]),
-				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.Restore(c, backupConfig(st), file) })
+				func(c *sshx.Client, st *fleet.Stack) (string, error) {
+					return backup.Restore(c, backupConfig(st), file)
+				})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "backup to restore (name or path); default: newest")
