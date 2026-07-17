@@ -59,6 +59,42 @@ baryovm stack remove barako                               # forget the registrat
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
 `--force-recreate`, `--no-deps`.
 
+### Release: sync source, build, deploy (config-driven)
+
+`stack release` is the full deploy in one command: **back up → rsync source → build
+images on the VM → compose up**. It's driven by a JSON manifest in your project, so the
+pipeline is generic (no app-specific logic). The compose dir (with its `.env`) is never in
+the sync list, so secrets can't be wiped by `--delete`.
+
+`baryovm.release.json`:
+```json
+{
+  "localRoot": "~/repos/BaryoClub",
+  "remoteRoot": "/home/opc/baryoclub-src/BaryoClub",
+  "sync": ["api", "web"],
+  "exclude": ["bin", "obj", "node_modules", ".next", ".git"],
+  "builds": [
+    { "image": "baryoclub-api:latest", "dockerfile": "deploy/Dockerfile.api", "context": "api" },
+    { "image": "baryoclub-web:latest", "dockerfile": "deploy/Dockerfile.web", "context": "web",
+      "args": { "NEXT_PUBLIC_API_URL": "" } }
+  ]
+}
+```
+
+```sh
+baryovm stack add baryoclub --vm oracle --path …/deploy \
+  --release-file ~/repos/BaryoClub/baryovm.release.json \
+  --db-container deploy-postgres-1 --db-name baryoclub --env-file .env
+
+baryovm stack release baryoclub                 # backup → sync → build → deploy
+baryovm stack release baryoclub --no-backup     # skip the pre-release backup
+baryovm stack release baryoclub --no-build      # just sync + compose up
+baryovm stack release baryoclub --config ./other.release.json
+```
+
+Per-build options: `image`, `dockerfile`, `context` (both relative to `remoteRoot`), `args`
+(build args), `noCache`.
+
 ### Backups (pg_dump + config, over SSH)
 
 Register the DB + config once, then back up / restore with one command:

@@ -6,11 +6,13 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -20,7 +22,7 @@ func newStackCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "stack", Short: "Manage docker compose stacks on your VMs"}
 	cmd.AddCommand(
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
-		newStackDeployCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
+		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
 	)
 	return cmd
@@ -28,7 +30,7 @@ func newStackCmd() *cobra.Command {
 
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
-	var dbContainer, dbName, dbUser, envFile, backupDir string
+	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile string
 	var keep int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -46,6 +48,7 @@ func newStackAddCmd() *cobra.Command {
 				Name: args[0], VM: vm, Dir: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser,
 				EnvFile: envFile, BackupDir: backupDir, Keep: keep,
+				ReleaseFile: releaseFile,
 			}
 			store.UpsertStack(st)
 			if err := store.Save(); err != nil {
@@ -64,9 +67,132 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&envFile, "env-file", "", "config file to back up, relative to the project dir (e.g. .env)")
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
+	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
+}
+
+// runLocal runs a local command (e.g. rsync) and returns combined output.
+func runLocal(c *exec.Cmd) (string, error) {
+	out, err := c.CombinedOutput()
+	return string(out), err
+}
+
+func newStackReleaseCmd() *cobra.Command {
+	var config string
+	var noBuild, noBackup bool
+	cmd := &cobra.Command{
+		Use:   "release <name>",
+		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
+		Args:  cobra.ExactArgs(1),
+		Example: "  baryovm stack release baryoclub\n" +
+			"  baryovm stack release baryoclub --config ./baryovm.release.json --no-backup",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := fleet.Load()
+			if err != nil {
+				return err
+			}
+			st := store.FindStack(args[0])
+			if st == nil {
+				return fmt.Errorf("no stack named %q", args[0])
+			}
+			vm := store.Find(st.VM)
+			if vm == nil {
+				return fmt.Errorf("stack %q references unknown VM %q", args[0], st.VM)
+			}
+			manifestPath := config
+			if manifestPath == "" {
+				manifestPath = st.ReleaseFile
+			}
+			if manifestPath == "" {
+				return fmt.Errorf("no release manifest — pass --config <file> or set --release-file on `stack add`")
+			}
+			m, err := release.Load(manifestPath)
+			if err != nil {
+				return err
+			}
+
+			fail := func(e error) error {
+				ui.Emit(ui.Result{OK: false, Action: "stack release", Error: e.Error()})
+				return e
+			}
+
+			// Safety first: back up before releasing (unless opted out / no DB configured).
+			if !noBackup && st.DBContainer != "" && st.DBName != "" {
+				if err := ui.Step("backup", func() error {
+					c, err := sshx.Dial(vm.Target())
+					if err != nil {
+						return err
+					}
+					defer c.Close()
+					_, err = backup.Backup(c, backupConfig(st))
+					return err
+				}); err != nil {
+					return fail(fmt.Errorf("pre-release backup failed: %w", err))
+				}
+			}
+
+			// 1. Sync each source subdir (local rsync). The compose dir (with .env) is never synced.
+			for _, sub := range m.Sync {
+				sub := sub
+				if err := ui.Step("sync "+sub, func() error {
+					out, e := runLocal(m.RsyncCmd(sub, vm.User, vm.Host, vm.KeyPath))
+					if e != nil {
+						return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
+					}
+					return nil
+				}); err != nil {
+					return fail(err)
+				}
+			}
+
+			// 2 + 3: build images on the VM, then compose up.
+			c, err := sshx.Dial(vm.Target())
+			if err != nil {
+				return fail(err)
+			}
+			defer c.Close()
+
+			if !noBuild {
+				for _, b := range m.Builds {
+					b := b
+					if err := ui.Step("build "+b.Image, func() error {
+						out, e := c.Run(m.BuildCmd(b))
+						if e != nil {
+							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+						}
+						return nil
+					}); err != nil {
+						return fail(err)
+					}
+				}
+			}
+
+			if err := ui.Step("deploy", func() error {
+				_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File}, compose.UpOptions{})
+				return e
+			}); err != nil {
+				return fail(err)
+			}
+
+			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released"})
+			ui.Successf("%s: release done", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
+	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
+	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
+	return cmd
+}
+
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func backupConfig(st *fleet.Stack) backup.Config {

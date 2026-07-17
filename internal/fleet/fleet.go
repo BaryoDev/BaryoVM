@@ -46,6 +46,9 @@ type Stack struct {
 	EnvFile     string `json:"envFile,omitempty"`     // config file to back up, relative to Dir (e.g. .env)
 	BackupDir   string `json:"backupDir,omitempty"`   // remote dir for backups
 	Keep        int    `json:"keep,omitempty"`        // retention count (default 14)
+
+	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
+	ReleaseFile string `json:"releaseFile,omitempty"`
 }
 
 // Store is the whole fleet.
