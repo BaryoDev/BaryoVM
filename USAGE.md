@@ -120,6 +120,41 @@ Example: the barakoCMS admin health-page redeploy is one command:
 baryovm stack deploy barako --force-recreate --service app,admin
 ```
 
+### Updates (health-gated, with rollback)
+
+`stack deploy` applies whatever is there. `stack update` decides whether to, and undoes it if the
+result is not healthy:
+
+```sh
+baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
+baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
+
+baryovm stack update barako --dry-run   # report what is pending, change nothing
+baryovm stack update barako             # apply, verify, roll back if it does not come up
+baryovm stack update barako --auto      # what a scheduler runs
+```
+
+What it does: pull, compare each container against what its reference now points at, and stop if
+nothing is stale — an unchanged stack is never recreated, so a nightly job is not a nightly restart.
+When something is stale it backs up the database, recreates only the affected services, and polls the
+health URL from the VM. If health does not come back, it points the references at the images that were
+running before and brings those back up, then checks again and says which of the two states it ended in.
+
+`--auto` refuses any stack without `autoUpdate`, and any stack without a `healthUrl`: an unattended
+update that cannot tell a healthy start from a crash loop is worse than no update at all. `--auto`
+also refuses `--no-backup`. Set `autoUpdate` on the tiers you are willing to have change unattended —
+playground, not production.
+
+Run it from cron on the VM, or from anywhere with SSH access:
+
+```sh
+0 4 * * * /usr/local/bin/baryovm stack update barako --auto -o json >> ~/baryovm-update.log 2>&1
+```
+
+Verified against a stack whose image was swapped for one that exits on start: the update was applied,
+the health check failed, the previous image was restored and the site was serving again — and
+separately, that a genuine new image is kept when it comes up healthy.
+
 ## Single-container deploy
 
 ```sh

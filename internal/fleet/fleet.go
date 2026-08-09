@@ -49,6 +49,22 @@ type Stack struct {
 
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
+
+	// Update policy — used by `stack update`.
+	//
+	// AutoUpdate is what separates a stack that may be updated unattended from one that may not.
+	// `stack update --auto`, the form a scheduler runs, refuses any stack without it. It defaults to
+	// false so a newly registered stack is never picked up by a cron job nobody remembered writing.
+	AutoUpdate bool `json:"autoUpdate,omitempty"`
+
+	// HealthURL is probed from the VM after containers are recreated, e.g.
+	// http://127.0.0.1:8091/health. Without it an update cannot be verified, so it cannot be rolled
+	// back either, and --auto refuses to run: an unattended update that cannot tell success from a
+	// crash loop is worse than no update at all.
+	HealthURL string `json:"healthUrl,omitempty"`
+
+	// UpdateServices limits which services an update touches. Empty means all of them.
+	UpdateServices []string `json:"updateServices,omitempty"`
 }
 
 // Store is the whole fleet.

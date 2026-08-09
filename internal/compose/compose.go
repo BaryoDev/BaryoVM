@@ -8,6 +8,9 @@
 package compose
 
 import (
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -65,9 +68,148 @@ func Pull(c *sshx.Client, s Stack, svcs []string) (string, error) {
 	return c.Run(s.base() + " pull" + services(svcs))
 }
 
+// PullUpdatable is Pull for the update path, tolerating images that cannot be pulled.
+//
+// Real stacks mix registry images with ones built on the host — BaryoClub runs postgres from Docker
+// Hub alongside a locally built api and web. A plain pull fails the whole command on the first
+// local-only image, which would make those stacks permanently un-updatable. Skipping them is right:
+// an image with no registry to check cannot have a newer version to find.
+func PullUpdatable(c *sshx.Client, s Stack, svcs []string) (string, error) {
+	return c.Run(s.base() + " pull --ignore-pull-failures" + services(svcs))
+}
+
 // Ps lists the stack's containers.
 func Ps(c *sshx.Client, s Stack) (string, error) {
 	return c.Run(s.base() + " ps")
+}
+
+// Image describes one service's deployed-versus-declared state.
+type Image struct {
+	Service string // compose service name
+	Ref     string // declared in the compose file, e.g. ghcr.io/baryodev/barako-cms:playground
+	ID      string // what Ref resolves to on this host right now — the target
+	Running string // what the container is actually running — may lag behind Ref after a pull
+}
+
+// Stale reports that the container is running something other than what its reference now points at.
+// This, rather than "did the pull change anything", is what an update should act on: it catches a tag
+// moved by a pull and a tag moved by a local rebuild alike, and it stays true until the container is
+// actually recreated, so an interrupted update is still visible as pending afterwards.
+func (i Image) Stale() bool {
+	return i.ID != "" && i.Running != "" && i.ID != i.Running
+}
+
+// Images reports, for each service that declares an image, the reference from the compose file and
+// the id that reference resolves to right now.
+//
+// The reference has to come from the compose file, not from `ps` or `compose images`. Those report
+// what the container is actually running, which on a host that resolved a tag to a digest is a bare
+// sha256 with a Repository of "sha256" — useless as a rollback target, since `docker tag` needs a
+// name. The id is what makes rollback possible at all: once a pull moves the tag, the previous image
+// survives on the host as an untagged id and nothing else points at it.
+func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
+	// The Go template over `config` avoids depending on a JSON shape that differs between compose
+	// versions, and skips build-only services, which have no image to pull or roll back.
+	out, err := c.Run(s.base() + ` config --format json`)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := parseConfigImages(out)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := map[string]bool{}
+	for _, s := range svcs {
+		if s != "" {
+			wanted[s] = true
+		}
+	}
+
+	running, err := runningImages(c, s, svcs)
+	if err != nil {
+		return nil, err
+	}
+
+	var imgs []Image
+	for _, svc := range sortedKeys(refs) {
+		if len(wanted) > 0 && !wanted[svc] {
+			continue
+		}
+		ref := refs[svc]
+		img := Image{Service: svc, Ref: ref, Running: running[svc]}
+		if id, err := c.Run("docker image inspect --format '{{.Id}}' " + sshx.Quote(ref)); err == nil {
+			img.ID = strings.TrimSpace(id)
+		}
+		// A reference with no local image cannot be compared or rolled back to; it is recorded so
+		// the caller can report it rather than silently dropping the service.
+		imgs = append(imgs, img)
+	}
+	return imgs, nil
+}
+
+// runningImages maps service -> the image id its container is actually running.
+func runningImages(c *sshx.Client, s Stack, svcs []string) (map[string]string, error) {
+	out, err := c.Run(s.base() + ` ps -a --format '{{.Service}}\t{{.Image}}'` + services(svcs))
+	if err != nil {
+		return nil, err
+	}
+	running := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		svc, img := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if svc == "" || img == "" {
+			continue
+		}
+		// Depending on the compose version this is either a bare image id or a reference; resolve a
+		// reference so both sides of the comparison are ids.
+		if strings.HasPrefix(img, "sha256:") {
+			running[svc] = img
+			continue
+		}
+		if id, err := c.Run("docker image inspect --format '{{.Id}}' " + sshx.Quote(img)); err == nil {
+			running[svc] = strings.TrimSpace(id)
+		}
+	}
+	return running, nil
+}
+
+// parseConfigImages pulls service -> image out of `docker compose config --format json`.
+func parseConfigImages(jsonOut string) (map[string]string, error) {
+	var cfg struct {
+		Services map[string]struct {
+			Image string `json:"image"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &cfg); err != nil {
+		return nil, fmt.Errorf("reading compose config: %w", err)
+	}
+	refs := map[string]string{}
+	for name, svc := range cfg.Services {
+		if svc.Image != "" {
+			refs[name] = svc.Image
+		}
+	}
+	return refs, nil
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Retag points a reference back at a specific image id, so `up -d` recreates from it. This is how an
+// update is undone: the tag has already moved to the new image, and the old one survives only as an
+// id until the next prune.
+func Retag(c *sshx.Client, id, ref string) (string, error) {
+	return c.Run("docker tag " + sshx.Quote(id) + " " + sshx.Quote(ref))
 }
 
 // Logs returns recent logs for the stack (or selected services).
