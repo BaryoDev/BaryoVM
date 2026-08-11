@@ -33,6 +33,7 @@ func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
 	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile string
 	var keep int
+	var useSudo bool
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Register a compose stack (a project dir on a VM)",
@@ -49,7 +50,7 @@ func newStackAddCmd() *cobra.Command {
 				Name: args[0], VM: vm, Dir: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser,
 				EnvFile: envFile, BackupDir: backupDir, Keep: keep,
-				ReleaseFile: releaseFile,
+				ReleaseFile: releaseFile, Sudo: useSudo,
 			}
 			store.UpsertStack(st)
 			if err := store.Save(); err != nil {
@@ -69,6 +70,7 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
+	cmd.Flags().BoolVar(&useSudo, "sudo", false, "run this stack's docker commands via sudo -n (needed when its .env is root-owned)")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
@@ -171,7 +173,7 @@ func newStackReleaseCmd() *cobra.Command {
 			}
 
 			if err := ui.Step("deploy", func() error {
-				_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File}, compose.UpOptions{})
+				_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}, compose.UpOptions{})
 				return e
 			}); err != nil {
 				return fail(err)
@@ -198,6 +200,7 @@ func lastLines(s string, n int) string {
 
 func backupConfig(st *fleet.Stack) backup.Config {
 	return backup.Config{
+		Sudo: st.Sudo,
 		Name: st.Name, Dir: st.Dir, EnvFile: st.EnvFile,
 		DBContainer: st.DBContainer, DBName: st.DBName, DBUser: st.DBUser,
 		BackupDir: st.BackupDir, Keep: st.Keep,
@@ -433,7 +436,7 @@ func runStackOp(name, action, step string, fn func(c *sshx.Client, cs compose.St
 			return err
 		}
 		defer c.Close()
-		out, err = fn(c, compose.Stack{Dir: st.Dir, File: st.File})
+		out, err = fn(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo})
 		return err
 	})
 	if err != nil {

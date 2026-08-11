@@ -110,6 +110,16 @@ baryovm stack restore baryoclub --yes                    # newest (REPLACES data
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
 ```
 
+If the project's `.env` is root-owned — the right posture for a file holding the database password —
+add `--sudo`, and every docker and file operation for that stack runs through `sudo -n`. Without it
+compose fails with "permission denied" reading the file, even though Docker itself is reachable.
+Loosening the file to suit the tool would be the wrong trade.
+
+```sh
+baryovm stack add baryodev --vm oracle --path /opt/baryo-cms --sudo \
+  --db-container baryo-postgres --db-name barako_cms --env-file .env
+```
+
 Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.

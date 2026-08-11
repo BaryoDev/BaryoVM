@@ -99,7 +99,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 
 		runner := update.SSHRunner{
 			Client:    c,
-			Stack:     compose.Stack{Dir: st.Dir, File: st.File},
+			Stack:     compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo},
 			HealthURL: st.HealthURL,
 		}
 		if hasBackup {

@@ -21,14 +21,35 @@ import (
 type Stack struct {
 	Dir  string // project directory, e.g. /opt/barakocms
 	File string // compose file name; empty uses compose's default
+	// Sudo runs compose through sudo.
+	//
+	// Needed more often than it sounds. A project whose .env holds the database password is
+	// reasonably kept root-owned and mode 600, and compose reads that file — so every command fails
+	// with "permission denied" for an ordinary SSH user, even though Docker itself is reachable.
+	// Loosening the file to fix the tool would be the wrong trade.
+	Sudo bool
 }
 
 func (s Stack) base() string {
-	b := "cd " + sshx.Quote(s.Dir) + " && docker compose"
+	b := "cd " + sshx.Quote(s.Dir) + " && "
+	if s.Sudo {
+		// -n so a host that would prompt for a password fails loudly instead of hanging a
+		// non-interactive session until it times out.
+		b += "sudo -n "
+	}
+	b += "docker compose"
 	if s.File != "" {
 		b += " -f " + sshx.Quote(s.File)
 	}
 	return b
+}
+
+// docker returns a plain `docker` invocation (not compose), honouring the same sudo choice.
+func (s Stack) docker() string {
+	if s.Sudo {
+		return "sudo -n docker"
+	}
+	return "docker"
 }
 
 // UpOptions controls a deploy.
@@ -65,8 +86,11 @@ func Up(c *sshx.Client, s Stack, o UpOptions) (string, error) {
 
 // Pull fetches the latest images for the stack (or selected services).
 func Pull(c *sshx.Client, s Stack, svcs []string) (string, error) {
-	return c.Run(s.base() + " pull" + services(svcs))
+	return c.Run(s.PullCmd(svcs))
 }
+
+// PullCmd is the command Pull runs. Exposed so it can be asserted without a host.
+func (s Stack) PullCmd(svcs []string) string { return s.base() + " pull" + services(svcs) }
 
 // PullUpdatable is Pull for the update path, tolerating images that cannot be pulled.
 //
@@ -75,7 +99,12 @@ func Pull(c *sshx.Client, s Stack, svcs []string) (string, error) {
 // local-only image, which would make those stacks permanently un-updatable. Skipping them is right:
 // an image with no registry to check cannot have a newer version to find.
 func PullUpdatable(c *sshx.Client, s Stack, svcs []string) (string, error) {
-	return c.Run(s.base() + " pull --ignore-pull-failures" + services(svcs))
+	return c.Run(s.PullUpdatableCmd(svcs))
+}
+
+// PullUpdatableCmd is the command PullUpdatable runs.
+func (s Stack) PullUpdatableCmd(svcs []string) string {
+	return s.base() + " pull --ignore-pull-failures" + services(svcs)
 }
 
 // Ps lists the stack's containers.
@@ -110,7 +139,7 @@ func (i Image) Stale() bool {
 func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
 	// The Go template over `config` avoids depending on a JSON shape that differs between compose
 	// versions, and skips build-only services, which have no image to pull or roll back.
-	out, err := c.Run(s.base() + ` config --format json`)
+	out, err := c.Run(s.ConfigCmd())
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +167,7 @@ func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
 		}
 		ref := refs[svc]
 		img := Image{Service: svc, Ref: ref, Running: running[svc]}
-		if id, err := c.Run("docker image inspect --format '{{.Id}}' " + sshx.Quote(ref)); err == nil {
+		if id, err := c.Run(s.docker() + " image inspect --format '{{.Id}}' " + sshx.Quote(ref)); err == nil {
 			img.ID = strings.TrimSpace(id)
 		}
 		// A reference with no local image cannot be compared or rolled back to; it is recorded so
@@ -147,6 +176,10 @@ func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
 	}
 	return imgs, nil
 }
+
+// ConfigCmd asks compose for the resolved project. This, not `ps`, is where an image *reference*
+// comes from — see Images.
+func (s Stack) ConfigCmd() string { return s.base() + " config --format json" }
 
 // runningImages maps service -> the image id its container is actually running.
 func runningImages(c *sshx.Client, s Stack, svcs []string) (map[string]string, error) {
@@ -170,7 +203,7 @@ func runningImages(c *sshx.Client, s Stack, svcs []string) (map[string]string, e
 			running[svc] = img
 			continue
 		}
-		if id, err := c.Run("docker image inspect --format '{{.Id}}' " + sshx.Quote(img)); err == nil {
+		if id, err := c.Run(s.docker() + " image inspect --format '{{.Id}}' " + sshx.Quote(img)); err == nil {
 			running[svc] = strings.TrimSpace(id)
 		}
 	}
@@ -208,8 +241,8 @@ func sortedKeys(m map[string]string) []string {
 // Retag points a reference back at a specific image id, so `up -d` recreates from it. This is how an
 // update is undone: the tag has already moved to the new image, and the old one survives only as an
 // id until the next prune.
-func Retag(c *sshx.Client, id, ref string) (string, error) {
-	return c.Run("docker tag " + sshx.Quote(id) + " " + sshx.Quote(ref))
+func Retag(c *sshx.Client, s Stack, id, ref string) (string, error) {
+	return c.Run(s.docker() + " tag " + sshx.Quote(id) + " " + sshx.Quote(ref))
 }
 
 // Logs returns recent logs for the stack (or selected services).

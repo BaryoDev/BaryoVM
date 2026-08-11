@@ -273,7 +273,9 @@ func (s SSHRunner) Up(svcs []string) (string, error) {
 	return compose.Up(s.Client, s.Stack, compose.UpOptions{Services: svcs})
 }
 
-func (s SSHRunner) Retag(id, ref string) (string, error) { return compose.Retag(s.Client, id, ref) }
+func (s SSHRunner) Retag(id, ref string) (string, error) {
+	return compose.Retag(s.Client, s.Stack, id, ref)
+}
 
 func (s SSHRunner) Healthy() (bool, error) {
 	if s.HealthURL == "" {
@@ -287,11 +289,20 @@ func (s SSHRunner) Healthy() (bool, error) {
 	// healthy" rather than an error. Treating it as an error made a failed update read as though the
 	// health check itself had broken.
 	out, err := s.Client.Run("curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + sshx.Quote(s.HealthURL))
-	if err != nil {
-		return false, nil
+	return healthyFromProbe(out, err), nil
+}
+
+// healthyFromProbe reads a curl probe.
+//
+// A container that is still starting — or has just died — refuses the connection and curl exits
+// non-zero (7). That is the ordinary case while waiting, not a fault in the check. Reporting it as an
+// error made a failed update read as though the health check itself had broken, which sent the reader
+// looking in the wrong place.
+func healthyFromProbe(out string, runErr error) bool {
+	if runErr != nil {
+		return false
 	}
-	code := strings.TrimSpace(out)
-	return strings.HasPrefix(code, "2"), nil
+	return strings.HasPrefix(strings.TrimSpace(out), "2")
 }
 
 func (s SSHRunner) Backup() (string, error) {

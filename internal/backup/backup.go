@@ -16,6 +16,10 @@ import (
 
 // Config describes what to back up for a stack.
 type Config struct {
+	// Sudo elevates the docker and file operations. A stack whose .env is root-owned (which is the
+	// right thing for a file holding a database password) cannot be read, dumped or copied by an
+	// ordinary SSH user at all.
+	Sudo        bool
 	Name        string // stack name (used for the default backup dir)
 	Dir         string // project dir (holds the env/config files)
 	EnvFile     string // config file to copy, relative to Dir (e.g. ".env"); empty skips it
@@ -24,6 +28,14 @@ type Config struct {
 	DBUser      string // defaults to "postgres"
 	BackupDir   string // remote dir to store backups; defaults to ~/<name>-backups
 	Keep        int    // how many of each kind to retain; defaults to 14
+}
+
+// dockerCmd is `docker`, elevated when the stack needs it.
+func (c Config) dockerCmd() string {
+	if c.Sudo {
+		return "sudo -n docker"
+	}
+	return "docker"
 }
 
 func (c Config) user() string {
@@ -57,11 +69,20 @@ func Backup(c *sshx.Client, cfg Config) (string, error) {
 	b.WriteString(cfg.bkVar())
 	b.WriteString("mkdir -p \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
-	b.WriteString(fmt.Sprintf("docker exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
+	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
 	if cfg.EnvFile != "" {
-		b.WriteString(fmt.Sprintf("if [ -f %s/%s ]; then cp %s/%s \"$BK/env-$ts\" && chmod 600 \"$BK/env-$ts\"; fi\n",
-			q(cfg.Dir), cfg.EnvFile, q(cfg.Dir), cfg.EnvFile))
+		// The config file is the reason Sudo exists: it is the one holding the database password, so
+		// it is often root-owned and mode 600. Copy it the same way the rest of the stack is reached,
+		// and hand ownership of the copy to the SSH user so listing and restoring do not need root
+		// again. chmod stays 600 — a readable backup of a secrets file is still a secrets file.
+		cp, chown := "cp", ""
+		if cfg.Sudo {
+			cp = "sudo -n cp"
+			chown = " && sudo -n chown \"$(id -u):$(id -g)\" \"$BK/env-$ts\""
+		}
+		b.WriteString(fmt.Sprintf("if [ -f %s/%s ]; then %s %s/%s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
+			q(cfg.Dir), cfg.EnvFile, cp, q(cfg.Dir), cfg.EnvFile, chown))
 	}
 	// Retention: keep the newest N of each kind.
 	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))
@@ -94,11 +115,11 @@ func Restore(c *sshx.Client, cfg Config, file string) (string, error) {
 	}
 	b.WriteString(`[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }` + "\n")
 	b.WriteString(`echo "restoring $f"` + "\n")
-	b.WriteString(fmt.Sprintf("docker exec -i %s dropdb -U %s --force --if-exists %s\n",
+	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf("docker exec -i %s createdb -U %s %s\n",
+	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf("docker exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
+	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
 	b.WriteString(`echo "restored from $f"` + "\n")
 	return c.Run(b.String())

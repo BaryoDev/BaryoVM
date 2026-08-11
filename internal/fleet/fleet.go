@@ -50,6 +50,11 @@ type Stack struct {
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
+	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
+	// .env is root-owned — the right posture for a file holding the database password, and one that
+	// otherwise makes every command fail with "permission denied" for the SSH user.
+	Sudo bool `json:"sudo,omitempty"`
+
 	// Update policy — used by `stack update`.
 	//
 	// AutoUpdate is what separates a stack that may be updated unattended from one that may not.
