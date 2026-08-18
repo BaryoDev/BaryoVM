@@ -80,7 +80,12 @@ func (m *Manifest) RsyncCmd(sub, user, host, key string) *exec.Cmd {
 	if m.Sudo {
 		// The remote end, not the local one. rsync runs a copy of itself on the far side and
 		// that is the process which needs to write into a root-owned destination.
-		args = append(args, "--rsync-path=sudo rsync")
+		//
+		// -n so sudo never prompts. Without it, a host lacking passwordless sudo writes a
+		// password prompt into rsync's data channel, which corrupts the protocol stream: the
+		// transfer hangs or dies with an opaque protocol error instead of saying what is wrong.
+		// With -n it fails immediately and legibly.
+		args = append(args, "--rsync-path=sudo -n rsync")
 	}
 	for _, e := range m.Exclude {
 		args = append(args, "--exclude", e)

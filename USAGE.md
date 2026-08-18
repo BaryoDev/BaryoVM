@@ -119,7 +119,7 @@ Get it wrong on a webroot and `--delete` empties the directory the site is serve
 putting the site one level down. Check with a dry run before the first release of a new stack:
 
 ```sh
-rsync -az --delete --dry-run --itemize-changes --rsync-path="sudo rsync" \
+rsync -az --delete --dry-run --itemize-changes --rsync-path="sudo -n rsync" \
   -e "ssh -i ~/.ssh/your_key" ~/repos/site/out/ user@host:/var/www/site/
 ```
 
@@ -155,9 +155,13 @@ baryovm stack release baryo-web
 
 Three notes worth having before you run it:
 
-**`sudo` elevates the remote rsync, not the local one.** It becomes `--rsync-path="sudo rsync"`,
+**`sudo` elevates the remote rsync, not the local one.** It becomes `--rsync-path="sudo -n rsync"`,
 because it is the copy of rsync running on the VM that needs to write into a root-owned path. The
-account you SSH as needs passwordless sudo for that command.
+account you SSH as needs passwordless sudo for it.
+
+The `-n` matters. Without it, a host that does want a password writes the prompt into rsync's data
+channel, which corrupts the protocol stream, so the transfer hangs or dies with something opaque
+instead of telling you sudo needs a password. With `-n` it fails at once and says so.
 
 **`postDeploy` runs in order and stops at the first failure.** Putting `nginx -t` before the reload
 means a broken config fails the release loudly instead of reloading nothing and reporting success.

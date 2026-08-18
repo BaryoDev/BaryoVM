@@ -20,8 +20,13 @@ func TestRsyncCmdUsesRemoteSudoOnlyWhenAsked(t *testing.T) {
 
 	m.Sudo = true
 	withSudo := strings.Join(m.RsyncCmd("out", "opc", "h", "/k").Args, " ")
-	if !strings.Contains(withSudo, "--rsync-path=sudo rsync") {
+	if !strings.Contains(withSudo, "--rsync-path=sudo -n rsync") {
 		t.Fatalf("sudo requested, but the remote rsync is not elevated: %s", withSudo)
+	}
+	// -n specifically. Without it a host without passwordless sudo prompts into rsync's data
+	// channel and the transfer hangs instead of failing.
+	if strings.Contains(withSudo, "--rsync-path=sudo rsync") {
+		t.Fatalf("remote sudo is interactive; it will prompt into the data channel: %s", withSudo)
 	}
 }
 
