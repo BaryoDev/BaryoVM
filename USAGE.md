@@ -95,6 +95,80 @@ baryovm stack release baryoclub --config ./other.release.json
 Per-build options: `image`, `dockerfile`, `context` (both relative to `remoteRoot`), `args`
 (build args), `noCache`.
 
+Manifest options:
+
+| key | default | what it does |
+|---|---|---|
+| `localRoot` | required | local source root, `~` allowed |
+| `remoteRoot` | required | absolute destination on the VM |
+| `sync` | required | paths under `localRoot` to rsync. **A trailing slash follows rsync's own rule** |
+| `exclude` | none | rsync excludes |
+| `builds` | none | images to build on the VM after syncing |
+| `sudo` | `false` | run the **remote** rsync as root |
+| `noCompose` | `false` | skip `docker compose up` at the end |
+| `postDeploy` | none | commands to run on the VM after syncing and building |
+
+#### The trailing slash on `sync` entries
+
+This is rsync's rule, kept rather than invented, and it decides where files land:
+
+- `"out"` copies the **directory**, giving `remoteRoot/out/...`
+- `"out/"` copies its **contents**, giving `remoteRoot/...`
+
+Get it wrong on a webroot and `--delete` empties the directory the site is served from while
+putting the site one level down. Check with a dry run before the first release of a new stack:
+
+```sh
+rsync -az --delete --dry-run --itemize-changes --rsync-path="sudo -n rsync" \
+  -e "ssh -i ~/.ssh/your_key" ~/repos/site/out/ user@host:/var/www/site/
+```
+
+### Static sites (no containers)
+
+Not everything on a VM is a container. A built static site is files the host's own web server
+serves, and it needs three things a compose stack does not: a root-owned destination, no
+`compose up`, and a command or two afterwards.
+
+```json
+{
+  "localRoot": "~/repos/baryo-web",
+  "remoteRoot": "/var/www/baryo-web",
+  "sync": ["out/"],
+  "builds": [],
+  "sudo": true,
+  "noCompose": true,
+  "postDeploy": [
+    "sudo restorecon -R /var/www/baryo-web || true",
+    "sudo nginx -t",
+    "sudo systemctl reload nginx"
+  ]
+}
+```
+
+```sh
+baryovm stack add baryo-web --vm oracle --path /var/www/baryo-web \
+  --release-file ~/repos/baryo-web/baryovm.release.json
+
+npm run build          # or whatever produces out/
+baryovm stack release baryo-web
+```
+
+Three notes worth having before you run it:
+
+**`sudo` elevates the remote rsync, not the local one.** It becomes `--rsync-path="sudo -n rsync"`,
+because it is the copy of rsync running on the VM that needs to write into a root-owned path. The
+account you SSH as needs passwordless sudo for it.
+
+The `-n` matters. Without it, a host that does want a password writes the prompt into rsync's data
+channel, which corrupts the protocol stream, so the transfer hangs or dies with something opaque
+instead of telling you sudo needs a password. With `-n` it fails at once and says so.
+
+**`postDeploy` runs in order and stops at the first failure.** Putting `nginx -t` before the reload
+means a broken config fails the release loudly instead of reloading nothing and reporting success.
+
+**No backup runs for a static stack**, because there is no database registered. The previous
+release is not kept, so the rollback is to rebuild the previous commit and release again.
+
 ### Backups (pg_dump + config, over SSH)
 
 Register the DB + config once, then back up / restore with one command:

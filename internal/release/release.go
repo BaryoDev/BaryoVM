@@ -31,9 +31,24 @@ type Build struct {
 type Manifest struct {
 	LocalRoot  string   `json:"localRoot"`         // local source root (~ ok)
 	RemoteRoot string   `json:"remoteRoot"`        // remote dest root (absolute)
-	Sync       []string `json:"sync"`              // subdirs of localRoot to rsync (e.g. api, web)
+	Sync       []string `json:"sync"`              // paths under localRoot to rsync; a trailing "/" syncs CONTENTS
 	Exclude    []string `json:"exclude,omitempty"` // rsync excludes (bin, obj, node_modules, .next, .git…)
 	Builds     []Build  `json:"builds"`            // images to build after syncing
+
+	// Sudo runs the REMOTE rsync as root. Needed when remoteRoot is a root-owned path such as
+	// a webroot; without it rsync fails on the first write and the deploy looks like an SSH
+	// problem rather than a permissions one.
+	Sudo bool `json:"sudo,omitempty"`
+
+	// NoCompose skips `docker compose up` at the end. A static site is files served by the
+	// host's own web server, so there is no compose file to bring up and the default behaviour
+	// would fail after the sync had already succeeded.
+	NoCompose bool `json:"noCompose,omitempty"`
+
+	// PostDeploy runs on the VM after syncing and building. This is where a static site
+	// restores its SELinux context and reloads the web server. Commands run in order and the
+	// release stops at the first failure.
+	PostDeploy []string `json:"postDeploy,omitempty"`
 }
 
 // Load reads and validates a manifest file.
@@ -62,10 +77,30 @@ func Load(path string) (*Manifest, error) {
 func (m *Manifest) RsyncCmd(sub, user, host, key string) *exec.Cmd {
 	ssh := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=accept-new -o BatchMode=yes", key)
 	args := []string{"-az", "--delete", "-e", ssh}
+	if m.Sudo {
+		// The remote end, not the local one. rsync runs a copy of itself on the far side and
+		// that is the process which needs to write into a root-owned destination.
+		//
+		// -n so sudo never prompts. Without it, a host lacking passwordless sudo writes a
+		// password prompt into rsync's data channel, which corrupts the protocol stream: the
+		// transfer hangs or dies with an opaque protocol error instead of saying what is wrong.
+		// With -n it fails immediately and legibly.
+		args = append(args, "--rsync-path=sudo -n rsync")
+	}
 	for _, e := range m.Exclude {
 		args = append(args, "--exclude", e)
 	}
+	// rsync's own trailing-slash rule, preserved rather than invented: "out" copies the
+	// directory INTO the destination (dest/out/...), "out/" copies its CONTENTS to the
+	// destination root. filepath.Join strips the slash, so it has to be re-applied.
+	//
+	// This matters more than it reads. A static site wants its build output AT the webroot,
+	// so it needs the trailing form; getting it wrong combines with --delete to empty the
+	// webroot and put the site one directory down, which is a live outage rather than a typo.
 	src := filepath.Join(expand(m.LocalRoot), sub)
+	if strings.HasSuffix(sub, "/") {
+		src += "/"
+	}
 	dst := fmt.Sprintf("%s@%s:%s/", user, host, m.RemoteRoot)
 	args = append(args, src, dst)
 	return exec.Command("rsync", args...)
