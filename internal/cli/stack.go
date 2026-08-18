@@ -172,11 +172,33 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
-			if err := ui.Step("deploy", func() error {
-				_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}, compose.UpOptions{})
-				return e
-			}); err != nil {
-				return fail(err)
+			// A static site has no compose file: it is files the host's own web server serves.
+			// Running compose up there fails after the sync has already landed, which is the
+			// worst place to fail, so the manifest says up front that there is nothing to bring up.
+			if !m.NoCompose {
+				if err := ui.Step("deploy", func() error {
+					_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}, compose.UpOptions{})
+					return e
+				}); err != nil {
+					return fail(err)
+				}
+			}
+
+			// Whatever has to happen on the VM once the files are in place: restore an SELinux
+			// context, reload nginx, warm a cache. Ordered, and the first failure stops the release
+			// rather than reporting success over a half-applied deploy.
+			for i, cmdStr := range m.PostDeploy {
+				cmdStr := cmdStr
+				label := fmt.Sprintf("post %d/%d", i+1, len(m.PostDeploy))
+				if err := ui.Step(label, func() error {
+					out, e := c.Run(cmdStr)
+					if e != nil {
+						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+					}
+					return nil
+				}); err != nil {
+					return fail(err)
+				}
 			}
 
 			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released"})
