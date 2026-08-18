@@ -16,10 +16,10 @@ down.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.
-- **Cloud APIs**. provider calls use the official Go SDKs, which read your
+- **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.
-- **Remote commands**. all values interpolated into remote shell commands are
+- **Remote commands**. All values interpolated into remote shell commands are
   single-quote escaped (`internal/sshx.Quote`, covered by tests) to prevent
   command injection.
 

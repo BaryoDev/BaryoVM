@@ -51,8 +51,8 @@ type Stack struct {
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
 	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
-	// .env is root-owned, the right posture for a file holding the database password, and one that
-	// otherwise makes every command fail with "permission denied" for the SSH user.
+	// .env is root-owned, which is the right posture for a file holding a database password.
+	// Without it every command fails with "permission denied" for the SSH user.
 	Sudo bool `json:"sudo,omitempty"`
 
 	// Update policy, used by `stack update`.

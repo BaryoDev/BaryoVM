@@ -84,7 +84,7 @@ later for live status/log streaming.
 
 - **Control API** (.NET, FastEndpoints + Marten/Postgres for state). The brain; everything else is a client.
 - **CLI**. `baryovm deploy`, `baryovm db create`, `baryovm vm add` (System.CommandLine) over the API.
-- **MCP server**. exposes the API as agent tools; an AI agent can run the whole fleet conversationally.
+- **MCP server**. Exposes the API as agent tools; an AI agent can run the whole fleet conversationally.
   This is the sharpest differentiator vs. Coolify/Dokploy (which are web-only, no MCP).
 - **MAUI app** (Blazor Hybrid). Native **desktop + phone**; manage infra from your phone. Shares UI
   with a web Blazor front-end. Also a differentiator.
@@ -142,18 +142,18 @@ auto-redeploy.
 
 ## Proposed solution layout (.NET)
 
-```
-BaryoVM.Core      : domain: Vm, App, Database, Secret, Deployment, DnsRecord + interfaces
-BaryoVM.Api       : control plane (FastEndpoints + Marten/Postgres)
-BaryoVM.Docker    : remote Docker control via Docker.DotNet over SSH
-BaryoVM.Proxy     : IReverseProxy: TraefikProxy + NginxProxy
-BaryoVM.Vm        : IVmProvider: SshVmProvider (+ Lightsail/OCI later)
-BaryoVM.Dns       : IDnsProvider: GoDaddy (+ Cloudflare)
-BaryoVM.Git       : IGitProvider: GitHub App + webhook receiver
-BaryoVM.Secrets   : encrypted vault (envelope encryption)
-BaryoVM.Cli       : System.CommandLine client
-BaryoVM.Mcp       : MCP server over the API
-BaryoVM.App       : MAUI Blazor Hybrid (desktop + mobile)
+```text
+BaryoVM.Core      domain: Vm, App, Database, Secret, Deployment, DnsRecord + interfaces
+BaryoVM.Api       control plane (FastEndpoints + Marten/Postgres)
+BaryoVM.Docker    remote Docker control via Docker.DotNet over SSH
+BaryoVM.Proxy     IReverseProxy: TraefikProxy + NginxProxy
+BaryoVM.Vm        IVmProvider: SshVmProvider (+ Lightsail/OCI later)
+BaryoVM.Dns       IDnsProvider: GoDaddy (+ Cloudflare)
+BaryoVM.Git       IGitProvider: GitHub App + webhook receiver
+BaryoVM.Secrets   encrypted vault (envelope encryption)
+BaryoVM.Cli       System.CommandLine client
+BaryoVM.Mcp       MCP server over the API
+BaryoVM.App       MAUI Blazor Hybrid (desktop + mobile)
 ```
 
 Reuse: **Verdict**, **Carom**, **BarakoCMS.Email.Resend**.
@@ -177,8 +177,8 @@ Reuse: **Verdict**, **Carom**, **BarakoCMS.Email.Resend**.
 
 - **Lightsail:** static IP + `ubuntu` user + .pem key. Open 22/80/443 in the Lightsail firewall.
 - **GoDaddy API key + secret** (developer.godaddy.com), for click-to-DNS.
-- **GitHub App**. for repo deploys + push-to-deploy (optional at first; image deploys need nothing).
-- **AWS keys / OCI keys**. only if/when we auto-*provision* VMs (managing existing ones needs just SSH).
+- **GitHub App**. For repo deploys + push-to-deploy (optional at first; image deploys need nothing).
+- **AWS keys / OCI keys**. Only if/when we auto-*provision* VMs (managing existing ones needs just SSH).
 
 All stored in BaryoVM's encrypted vault, never in markdown files.
 
@@ -209,11 +209,11 @@ Three things it's measured against:
 3. **Self-hosted PaaS (Coolify, Dokploy, CapRover, Komodo, Portainer).** The real competitors: mature,
    open-source, big communities. **Do not out-feature them.** BaryoVM competes on a narrow, sharp edge:
 
-   - **AI-native / MCP-first**. an AI agent can provision, deploy, and operate the fleet. None of them
+   - **AI-native / MCP-first**. An AI agent can provision, deploy, and operate the fleet. None of them
      have this. Timely and genuinely novel.
-   - **Native desktop + MOBILE app (MAUI)**. they're web dashboards; BaryoVM manages infra from your
+   - **Native desktop + MOBILE app (MAUI)**. They're web dashboards; BaryoVM manages infra from your
      phone with a native app. Manage-on-the-go + push alerts.
-   - **Opinionated Baryo-ecosystem fit**. one-click barakoCMS, Resend email + GoDaddy DNS wired
+   - **Opinionated Baryo-ecosystem fit**. One-click barakoCMS, Resend email + GoDaddy DNS wired
      together, curated for the solo-dev-with-own-VMs workflow rather than every option under the sun.
 
 **Honest headwinds:** Coolify/Dokploy are open source with years of features and community, which is hard to
