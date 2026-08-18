@@ -4,7 +4,7 @@
 
 // Package release runs a config-driven release: rsync local source to a VM,
 // build images there, then compose up. Everything is described by a JSON
-// manifest so the pipeline is generic — no app-specific logic in the CLI.
+// manifest so the pipeline is generic, with no app-specific logic in the CLI.
 package release
 
 import (
@@ -72,7 +72,7 @@ func Load(path string) (*Manifest, error) {
 
 // RsyncCmd builds the local rsync command for one sync subdir. It syncs
 // localRoot/<sub> → user@host:remoteRoot/ (so it lands at remoteRoot/<sub>),
-// with --delete scoped to that subdir — the compose dir (with its .env) is never
+// with --delete scoped to that subdir, so the compose dir (with its .env) is never
 // in the sync list, so secrets can't be wiped.
 func (m *Manifest) RsyncCmd(sub, user, host, key string) *exec.Cmd {
 	ssh := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=accept-new -o BatchMode=yes", key)
@@ -136,7 +136,7 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		ks = append(ks, k)
 	}
-	// simple insertion sort — arg sets are tiny
+	// simple insertion sort; arg sets are tiny
 	for i := 1; i < len(ks); i++ {
 		for j := i; j > 0 && ks[j-1] > ks[j]; j-- {
 			ks[j-1], ks[j] = ks[j], ks[j-1]

@@ -1,4 +1,4 @@
-# GoReleaser — cross-platform binaries + checksums on each vX.Y.Z tag.
+# GoReleaser: cross-platform binaries + checksums on each vX.Y.Z tag.
 # Local dry run:  goreleaser release --snapshot --clean
 version: 2
 

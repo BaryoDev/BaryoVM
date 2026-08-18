@@ -4,7 +4,7 @@
 
 // Package sshx is BaryoVM's agentless SSH engine: dial a host with a key and
 // run commands. Everything BaryoVM does to a VM (install Docker, run
-// containers) goes through here — no per-VM agent to install.
+// containers) goes through here, so there is no per-VM agent to install.
 package sshx
 
 import (

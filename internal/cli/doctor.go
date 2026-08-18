@@ -29,7 +29,7 @@ func newDoctorCmd() *cobra.Command {
 			}
 			var results []check
 
-			// Cloud credentials (used by the in-process SDKs — nothing to install).
+			// Cloud credentials (used by the in-process SDKs, so nothing to install).
 			home, _ := os.UserHomeDir()
 			for _, c := range []struct{ name, path string }{
 				{"aws credentials", filepath.Join(home, ".aws", "credentials")},
@@ -64,10 +64,10 @@ func newDoctorCmd() *cobra.Command {
 			allOK := true
 			for _, r := range results {
 				if r.Present {
-					ui.Successf("%s — %s", r.Name, r.Detail)
+					ui.Successf("%s: %s", r.Name, r.Detail)
 				} else {
 					allOK = false
-					ui.Warnf("%s — %s", r.Name, r.Detail)
+					ui.Warnf("%s: %s", r.Name, r.Detail)
 				}
 			}
 			if !allOK && !fix {

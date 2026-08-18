@@ -8,7 +8,7 @@ import (
 // A stack whose .env is root-owned (the right posture for a file holding a database password) cannot
 // be driven by an ordinary SSH user: compose reads that file, so every command fails with "permission
 // denied" even though Docker itself is reachable. Sudo is how such a stack stays managed without
-// loosening the file. These pin that every command path honours the flag — one that forgot would fail
+// loosening the file. These pin that every command path honours the flag; one that forgot would fail
 // only against a real host, which is exactly where it is most expensive to find out.
 func TestSudoAppliesToComposeCommands(t *testing.T) {
 	plain := Stack{Dir: "/opt/app"}
@@ -28,7 +28,7 @@ func TestSudoAppliesToComposeCommands(t *testing.T) {
 
 func TestSudoAppliesToPlainDockerCommands(t *testing.T) {
 	// Rollback retags images with `docker tag`, and detection inspects them. Those are not compose
-	// calls, so they need elevating separately — miss one and a rollback fails at the worst moment.
+	// calls, so they need elevating separately. Miss one and a rollback fails at the worst moment.
 	if got := (Stack{Dir: "/opt/app"}).docker(); got != "docker" {
 		t.Errorf("unelevated: got %q", got)
 	}

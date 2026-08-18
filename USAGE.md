@@ -184,7 +184,7 @@ baryovm stack restore baryoclub --yes                    # newest (REPLACES data
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
 ```
 
-If the project's `.env` is root-owned — the right posture for a file holding the database password —
+If the project's `.env` is root-owned, the right posture for a file holding the database password,
 add `--sudo`, and every docker and file operation for that stack runs through `sudo -n`. Without it
 compose fails with "permission denied" reading the file, even though Docker itself is reachable.
 Loosening the file to suit the tool would be the wrong trade.
@@ -219,14 +219,14 @@ baryovm stack update barako --auto      # what a scheduler runs
 ```
 
 What it does: pull, compare each container against what its reference now points at, and stop if
-nothing is stale — an unchanged stack is never recreated, so a nightly job is not a nightly restart.
+nothing is stale. An unchanged stack is never recreated, so a nightly job is not a nightly restart.
 When something is stale it backs up the database, recreates only the affected services, and polls the
 health URL from the VM. If health does not come back, it points the references at the images that were
 running before and brings those back up, then checks again and says which of the two states it ended in.
 
 `--auto` refuses any stack without `autoUpdate`, and any stack without a `healthUrl`: an unattended
 update that cannot tell a healthy start from a crash loop is worse than no update at all. `--auto`
-also refuses `--no-backup`. Set `autoUpdate` on the tiers you are willing to have change unattended —
+also refuses `--no-backup`. Set `autoUpdate` on the tiers you are willing to have change unattended:
 playground, not production.
 
 Run it from cron on the VM, or from anywhere with SSH access:
@@ -236,7 +236,7 @@ Run it from cron on the VM, or from anywhere with SSH access:
 ```
 
 Verified against a stack whose image was swapped for one that exits on start: the update was applied,
-the health check failed, the previous image was restored and the site was serving again — and
+the health check failed, the previous image was restored and the site was serving again, and
 separately, that a genuine new image is kept when it comes up healthy.
 
 ## Single-container deploy

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Package compose drives `docker compose` on a VM over SSH — the day-to-day
+// Package compose drives `docker compose` on a VM over SSH, the day-to-day
 // path for real workloads (barakoCMS, BaryoClub) that run as compose stacks
 // rather than single containers.
 package compose
@@ -24,7 +24,7 @@ type Stack struct {
 	// Sudo runs compose through sudo.
 	//
 	// Needed more often than it sounds. A project whose .env holds the database password is
-	// reasonably kept root-owned and mode 600, and compose reads that file — so every command fails
+	// reasonably kept root-owned and mode 600, and compose reads that file, so every command fails
 	// with "permission denied" for an ordinary SSH user, even though Docker itself is reachable.
 	// Loosening the file to fix the tool would be the wrong trade.
 	Sudo bool
@@ -94,7 +94,7 @@ func (s Stack) PullCmd(svcs []string) string { return s.base() + " pull" + servi
 
 // PullUpdatable is Pull for the update path, tolerating images that cannot be pulled.
 //
-// Real stacks mix registry images with ones built on the host — BaryoClub runs postgres from Docker
+// Real stacks mix registry images with ones built on the host. BaryoClub runs postgres from Docker
 // Hub alongside a locally built api and web. A plain pull fails the whole command on the first
 // local-only image, which would make those stacks permanently un-updatable. Skipping them is right:
 // an image with no registry to check cannot have a newer version to find.
@@ -116,8 +116,8 @@ func Ps(c *sshx.Client, s Stack) (string, error) {
 type Image struct {
 	Service string // compose service name
 	Ref     string // declared in the compose file, e.g. ghcr.io/baryodev/barako-cms:playground
-	ID      string // what Ref resolves to on this host right now — the target
-	Running string // what the container is actually running — may lag behind Ref after a pull
+	ID      string // what Ref resolves to on this host right now, the target
+	Running string // what the container is actually running, which may lag behind Ref after a pull
 }
 
 // Stale reports that the container is running something other than what its reference now points at.
@@ -133,7 +133,7 @@ func (i Image) Stale() bool {
 //
 // The reference has to come from the compose file, not from `ps` or `compose images`. Those report
 // what the container is actually running, which on a host that resolved a tag to a digest is a bare
-// sha256 with a Repository of "sha256" — useless as a rollback target, since `docker tag` needs a
+// sha256 with a Repository of "sha256", which is useless as a rollback target, since `docker tag` needs a
 // name. The id is what makes rollback possible at all: once a pull moves the tag, the previous image
 // survives on the host as an untagged id and nothing else points at it.
 func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
@@ -178,7 +178,7 @@ func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
 }
 
 // ConfigCmd asks compose for the resolved project. This, not `ps`, is where an image *reference*
-// comes from — see Images.
+// comes from. See Images.
 func (s Stack) ConfigCmd() string { return s.base() + " config --format json" }
 
 // runningImages maps service -> the image id its container is actually running.

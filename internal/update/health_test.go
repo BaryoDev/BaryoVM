@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The health probe runs curl on the VM. A container that is still starting — or has just died —
+// The health probe runs curl on the VM. A container that is still starting, or has just died,
 // refuses the connection, and curl exits non-zero (7), which surfaces as an error from the SSH run.
 //
 // Treating that as an error rather than as "not healthy yet" made a failed update report

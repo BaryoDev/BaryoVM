@@ -4,7 +4,7 @@ import "testing"
 
 // The image reference has to come from `compose config`, because that is the only place it appears
 // as a name. `compose ps` and `compose images` report what the container actually runs, which on a
-// host that resolved the tag to a digest is a bare sha256 — no use as a rollback target, since
+// host that resolved the tag to a digest is a bare sha256, which is no use as a rollback target, since
 // `docker tag` needs a name. Getting this wrong is quiet: no reference means no detected change,
 // which reads as "already up to date" forever.
 func TestParseConfigImages(t *testing.T) {

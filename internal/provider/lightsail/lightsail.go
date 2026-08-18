@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Package lightsail provisions VMs on AWS Lightsail using the in-process AWS
-// Go SDK (it reads ~/.aws directly — no aws CLI required). It implements
+// Go SDK (it reads ~/.aws directly, so no aws CLI is required). It implements
 // provider.Provider: create an Ubuntu instance, open 22/80/443, attach a static
 // IP, and return how to reach it over SSH.
 package lightsail
@@ -48,7 +48,7 @@ func New(ctx context.Context, region string) (*Provider, error) {
 		region = cfg.Region
 	}
 	if region == "" {
-		return nil, fmt.Errorf("no AWS region set — pass --region or configure one in ~/.aws/config")
+		return nil, fmt.Errorf("no AWS region set: pass --region or configure one in ~/.aws/config")
 	}
 	return &Provider{client: lightsail.NewFromConfig(cfg), region: region}, nil
 }

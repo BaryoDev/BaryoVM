@@ -6,12 +6,12 @@ import (
 )
 
 // Regression cover for bugs found by running this against a real host. Each one passed its unit
-// tests and its code review, and failed only against an actual Docker daemon — which is the most
+// tests and its code review, and failed only against an actual Docker daemon, which is the most
 // expensive place to find out, so they get pinned here.
 
 // The image reference has to come from `compose config`. `ps` and `compose images` report what the
 // container is running, which on a host that resolved a tag to a digest is a bare sha256 with a
-// Repository of literally "sha256" — no use as a rollback target, since `docker tag` needs a name.
+// Repository of literally "sha256", which is no use as a rollback target, since `docker tag` needs a name.
 // The first version read `ps`, so rollback would have failed at exactly the moment it was needed.
 func TestImageReferencesComeFromConfigNotPs(t *testing.T) {
 	s := Stack{Dir: "/opt/app"}
@@ -25,8 +25,8 @@ func TestImageReferencesComeFromConfigNotPs(t *testing.T) {
 	}
 }
 
-// A stack mixing registry images with locally built ones — BaryoClub runs postgres from Docker Hub
-// beside its own api and web — cannot be pulled wholesale: compose fails the entire command on the
+// A stack mixing registry images with locally built ones (BaryoClub runs postgres from Docker Hub
+// beside its own api and web) cannot be pulled wholesale: compose fails the entire command on the
 // first image with no registry behind it, which made such stacks permanently un-updatable.
 func TestUpdatePullToleratesLocallyBuiltImages(t *testing.T) {
 	s := Stack{Dir: "/opt/app"}
@@ -43,7 +43,7 @@ func TestUpdatePullToleratesLocallyBuiltImages(t *testing.T) {
 
 // Staleness is deployed-versus-declared, not what-moved-during-this-command. The first version
 // compared the tag's id before and after the pull, so it saw nothing when a tag had been moved by a
-// local rebuild, and — worse — reported "already up to date" for a stack whose containers were
+// local rebuild, and worse, reported "already up to date" for a stack whose containers were
 // running an image the tag no longer pointed at, which is what a half-finished deploy leaves behind.
 func TestStaleComparesDeployedAgainstDeclared(t *testing.T) {
 	cases := []struct {
@@ -66,7 +66,7 @@ func TestStaleComparesDeployedAgainstDeclared(t *testing.T) {
 }
 
 // A service with no image (build-only) has nothing to pull or roll back to, so it must not appear at
-// all — otherwise it would be counted as a service that could not be resolved.
+// all. Otherwise it would be counted as a service that could not be resolved.
 func TestBuildOnlyServicesAreExcluded(t *testing.T) {
 	refs, err := parseConfigImages(`{"services":{"app":{"image":"repo:tag"},"worker":{"build":{"context":"."}}}}`)
 	if err != nil {
