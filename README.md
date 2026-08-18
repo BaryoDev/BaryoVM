@@ -120,3 +120,8 @@ gofmt -l .          # should print nothing
 [MPL-2.0](LICENSE) — open source; per-file notices in every source file. Chosen
 deliberately: a tool that holds SSH key paths and drives your machines should be
 auditable.
+
+
+## A five-minute quickstart that ends with something deployed
+
+Documentation reference and guidelines for #6.
