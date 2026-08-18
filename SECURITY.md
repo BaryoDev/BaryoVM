@@ -6,27 +6,27 @@ down.
 
 ## How BaryoVM handles credentials
 
-- **SSH keys** — BaryoVM stores only the **path** to your private key
+- **SSH keys**. BaryoVM stores only the **path** to your private key
   (`keyPath`), never the key contents. Authentication uses your existing key
   files (and any `ssh-agent`), exactly as your normal `ssh` does.
-- **Fleet state** — VM and stack registrations live in `~/.baryovm/fleet.json`
+- **Fleet state**. VM and stack registrations live in `~/.baryovm/fleet.json`
   (override with `BARYOVM_HOME`), written **owner-only (`0600`)**. It contains
-  hostnames, users, key paths and stack config — **no passwords, tokens, or key
+  hostnames, users, key paths and stack config, and **no passwords, tokens, or key
   material**.
-- **App secrets** — BaryoVM never reads or copies your apps' secrets. Backups
+- **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.
-- **Cloud APIs** — provider calls use the official Go SDKs, which read your
+- **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.
-- **Remote commands** — all values interpolated into remote shell commands are
+- **Remote commands**. All values interpolated into remote shell commands are
   single-quote escaped (`internal/sshx.Quote`, covered by tests) to prevent
   command injection.
 
 ## Your responsibilities
 
 - Protect your SSH private keys and `~/.baryovm/fleet.json`.
-- BaryoVM runs commands on hosts you register — only add machines you control.
+- BaryoVM runs commands on hosts you register, so only add machines you control.
 - Restore is destructive (`stack restore` replaces a database) and requires
   `--yes`.
 

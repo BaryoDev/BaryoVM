@@ -179,7 +179,7 @@ func TestRollbackReportsWhenThereIsNothingToRestore(t *testing.T) {
 		healthy: []bool{false},
 	}
 
-	// With no previous id the update is not even detected as a change, which is itself correct —
+	// With no previous id the update is not even detected as a change, which is itself correct:
 	// there is no safe update to make. Assert that rather than pretending otherwise.
 	res, err := Run(f, opts())
 	if err != nil {

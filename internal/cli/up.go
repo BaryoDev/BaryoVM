@@ -45,7 +45,7 @@ func newUpCmd() *cobra.Command {
 				vm = *existing
 			} else {
 				if pf.keyPath == "" {
-					return fmt.Errorf("%q is not registered — pass --provider and --key to provision it, or `vm add` it first", name)
+					return fmt.Errorf("%q is not registered: pass --provider and --key to provision it, or `vm add` it first", name)
 				}
 				provisioned, err := provisionVM(ctx, name, &pf)
 				if err == errDryRun {

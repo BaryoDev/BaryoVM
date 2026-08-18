@@ -18,7 +18,7 @@ import (
 	"golang.org/x/term"
 )
 
-// adaptive picks the right shade for light vs dark terminals — same codes as baryo-cli.
+// adaptive picks the right shade for light vs dark terminals, using the same codes as baryo-cli.
 func adaptive(light, dark string) lipgloss.AdaptiveColor {
 	return lipgloss.AdaptiveColor{Light: light, Dark: dark}
 }
@@ -140,7 +140,7 @@ func Step(msg string, fn func() error) error {
 	<-done
 	fmt.Fprint(os.Stderr, "\r\033[K") // clear the spinner line
 	if err != nil {
-		Errorf("%s — %s", msg, err.Error())
+		Errorf("%s: %s", msg, err.Error())
 		return err
 	}
 	Successf("%s", msg)

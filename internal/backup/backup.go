@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Package backup takes and restores backups of a compose stack's Postgres
-// database (and its .env/config) over SSH — so "did you back it up?" is one
+// database (and its .env/config) over SSH, so "did you back it up?" is one
 // command, not a hand-rolled pg_dump every time.
 package backup
 
@@ -75,7 +75,7 @@ func Backup(c *sshx.Client, cfg Config) (string, error) {
 		// The config file is the reason Sudo exists: it is the one holding the database password, so
 		// it is often root-owned and mode 600. Copy it the same way the rest of the stack is reached,
 		// and hand ownership of the copy to the SSH user so listing and restoring do not need root
-		// again. chmod stays 600 — a readable backup of a secrets file is still a secrets file.
+		// again. chmod stays 600; a readable backup of a secrets file is still a secrets file.
 		cp, chown := "cp", ""
 		if cfg.Sudo {
 			cp = "sudo -n cp"

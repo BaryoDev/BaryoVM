@@ -44,7 +44,7 @@ func newStackAddCmd() *cobra.Command {
 				return err
 			}
 			if store.Find(vm) == nil {
-				return fmt.Errorf("no VM named %q — register it first with `baryovm vm add`", vm)
+				return fmt.Errorf("no VM named %q: register it first with `baryovm vm add`", vm)
 			}
 			st := fleet.Stack{
 				Name: args[0], VM: vm, Dir: path, File: file,
@@ -109,7 +109,7 @@ func newStackReleaseCmd() *cobra.Command {
 				manifestPath = st.ReleaseFile
 			}
 			if manifestPath == "" {
-				return fmt.Errorf("no release manifest — pass --config <file> or set --release-file on `stack add`")
+				return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
 			}
 			m, err := release.Load(manifestPath)
 			if err != nil {
@@ -241,7 +241,7 @@ func runStackBackup(name, action, step string, fn func(c *sshx.Client, st *fleet
 		return fmt.Errorf("no stack named %q", name)
 	}
 	if st.DBContainer == "" || st.DBName == "" {
-		return fmt.Errorf("stack %q has no backup config — set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
 	}
 	vm := store.Find(st.VM)
 	if vm == nil {
@@ -307,7 +307,7 @@ func newStackRestoreCmd() *cobra.Command {
 			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
-				return fmt.Errorf("restore REPLACES the %q database — re-run with --yes to confirm", args[0])
+				return fmt.Errorf("restore REPLACES the %q database: re-run with --yes to confirm", args[0])
 			}
 			return runStackBackup(args[0], "stack restore", fmt.Sprintf("restoring %s", args[0]),
 				func(c *sshx.Client, st *fleet.Stack) (string, error) {
@@ -334,7 +334,7 @@ func newStackListCmd() *cobra.Command {
 				return nil
 			}
 			if len(store.Stacks) == 0 {
-				ui.Warnf("no stacks registered — add one with `baryovm stack add`")
+				ui.Warnf("no stacks registered: add one with `baryovm stack add`")
 				return nil
 			}
 			ui.Title(fmt.Sprintf("Stacks (%d)", len(store.Stacks)))
@@ -444,7 +444,7 @@ func runStackOp(name, action, step string, fn func(c *sshx.Client, cs compose.St
 	}
 	st := store.FindStack(name)
 	if st == nil {
-		return fmt.Errorf("no stack named %q — register it with `baryovm stack add %s --vm ... --path ...`", name, name)
+		return fmt.Errorf("no stack named %q: register it with `baryovm stack add %s --vm ... --path ...`", name, name)
 	}
 	vm := store.Find(st.VM)
 	if vm == nil {

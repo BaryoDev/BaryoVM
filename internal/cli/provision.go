@@ -52,7 +52,7 @@ func provisionVM(ctx context.Context, name string, f *provisionFlags) (fleet.VM,
 		ui.Detail("size", orDefault(f.size, "provider default"))
 		ui.Detail("key", f.keyPath)
 		ui.Detail("ports", "22, 80, 443")
-		ui.Emit(ui.Result{OK: true, Action: "vm provision", Message: "dry run — nothing created", Data: spec})
+		ui.Emit(ui.Result{OK: true, Action: "vm provision", Message: "dry run: nothing created", Data: spec})
 		return fleet.VM{}, errDryRun
 	}
 

@@ -56,7 +56,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	}
 	st := store.FindStack(name)
 	if st == nil {
-		return fmt.Errorf("no stack named %q — register it with `baryovm stack add %s --vm ... --path ...`", name, name)
+		return fmt.Errorf("no stack named %q: register it with `baryovm stack add %s --vm ... --path ...`", name, name)
 	}
 	vm := store.Find(st.VM)
 	if vm == nil {
@@ -71,7 +71,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	// Refuse an unattended run before opening a connection, so a misconfigured cron entry is a clean
 	// no-op rather than a partially applied change.
 	if auto && !st.AutoUpdate {
-		err := fmt.Errorf("%w: %s is not marked autoUpdate — set it deliberately with `baryovm stack set-update %s --auto`", update.ErrNotAutoUpdatable, name, name)
+		err := fmt.Errorf("%w: %s is not marked autoUpdate: set it deliberately with `baryovm stack set-update %s --auto`", update.ErrNotAutoUpdatable, name, name)
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
@@ -139,9 +139,9 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 
 	if runErr != nil {
 		if res.RolledBack {
-			ui.Errorf("%s: update failed and was rolled back — %v", name, runErr)
+			ui.Errorf("%s: update failed and was rolled back: %v", name, runErr)
 		} else {
-			ui.Errorf("%s: update failed — %v", name, runErr)
+			ui.Errorf("%s: update failed: %v", name, runErr)
 		}
 		return runErr
 	}

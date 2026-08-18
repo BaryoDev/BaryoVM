@@ -8,7 +8,7 @@ import (
 // A stack's settings only matter if they survive being written and read back. `--sudo` was bound to
 // its flag but never copied into the struct, so it registered as false, the update ran without
 // elevation, and the failure ("permission denied" on a root-owned .env) looked like a host problem
-// rather than a dropped field. Go did not catch it: the variable *was* used — by the flag binding.
+// rather than a dropped field. Go did not catch it: the variable *was* used, by the flag binding.
 //
 // These round-trip the fields that change behaviour, since a silently-dropped one fails only against
 // a real machine.
@@ -42,10 +42,10 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	}
 
 	if !got.Sudo {
-		t.Error("Sudo was lost — an elevated stack would silently run unelevated")
+		t.Error("Sudo was lost: an elevated stack would silently run unelevated")
 	}
 	if !got.AutoUpdate {
-		t.Error("AutoUpdate was lost — a stack would be skipped by --auto, or worse, picked up when it should not be")
+		t.Error("AutoUpdate was lost: a stack would be skipped by --auto, or worse, picked up when it should not be")
 	}
 	if got.HealthURL != want.HealthURL {
 		t.Errorf("HealthURL: got %q", got.HealthURL)

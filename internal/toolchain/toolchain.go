@@ -28,7 +28,7 @@ var registry = map[string]installer{
 }
 
 // EnsureCLI guarantees a tool is available, installing it if missing, and
-// returns its resolved path. It never errors just because the tool was absent —
+// returns its resolved path. It never errors just because the tool was absent,
 // only if the install itself fails or the tool is unknown.
 func EnsureCLI(name string) (string, error) {
 	if p, err := exec.LookPath(name); err == nil {
@@ -38,7 +38,7 @@ func EnsureCLI(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s is not installed and BaryoVM has no installer for it", name)
 	}
-	err := ui.Step(fmt.Sprintf("%s not found — downloading and installing it", name), inst)
+	err := ui.Step(fmt.Sprintf("%s not found: downloading and installing it", name), inst)
 	if err != nil {
 		return "", fmt.Errorf("install %s: %w", name, err)
 	}

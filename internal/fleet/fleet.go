@@ -39,7 +39,7 @@ type Stack struct {
 	Dir  string `json:"dir"`            // remote project directory, e.g. /opt/barakocms
 	File string `json:"file,omitempty"` // compose file name; empty = compose default
 
-	// Backup config (optional) — lets `stack backup/restore` dump this stack's Postgres DB + config.
+	// Backup config (optional). Lets `stack backup/restore` dump this stack's Postgres DB + config.
 	DBContainer string `json:"dbContainer,omitempty"` // postgres container, e.g. deploy-postgres-1
 	DBName      string `json:"dbName,omitempty"`      // database to dump
 	DBUser      string `json:"dbUser,omitempty"`      // defaults to postgres
@@ -51,11 +51,11 @@ type Stack struct {
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
 	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
-	// .env is root-owned — the right posture for a file holding the database password, and one that
-	// otherwise makes every command fail with "permission denied" for the SSH user.
+	// .env is root-owned, which is the right posture for a file holding a database password.
+	// Without it every command fails with "permission denied" for the SSH user.
 	Sudo bool `json:"sudo,omitempty"`
 
-	// Update policy — used by `stack update`.
+	// Update policy, used by `stack update`.
 	//
 	// AutoUpdate is what separates a stack that may be updated unattended from one that may not.
 	// `stack update --auto`, the form a scheduler runs, refuses any stack without it. It defaults to

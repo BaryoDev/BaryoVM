@@ -107,7 +107,7 @@ func Run(r Runner, o Options) (Result, error) {
 		// No services with images means the query failed or the project is build-only. Either way,
 		// silently reporting "up to date" would hide a scheduler that has been doing nothing for
 		// weeks.
-		return Result{Skipped: "no services with images found"}, errors.New("found no services with images to update — check the stack's dir and compose file")
+		return Result{Skipped: "no services with images found"}, errors.New("found no services with images to update: check the stack's dir and compose file")
 	}
 
 	changed := staleServices(after)
@@ -166,7 +166,7 @@ func rollback(r Runner, o Options, before []compose.Image, changed []string, res
 			continue
 		}
 		// Point the reference back at the image the container was running before this update. That
-		// image is still on the host — untagged now, reachable only by id, which is why the id was
+		// image is still on the host, untagged now and reachable only by id, which is why the id was
 		// captured before anything was recreated.
 		if img.Running == "" {
 			failures = append(failures, img.Service+" (no previous image to restore)")
@@ -223,7 +223,7 @@ func waitHealthy(r Runner, o Options) (bool, error) {
 // reference now points at.
 //
 // An earlier version compared the tag's id before and after the pull, which only ever noticed
-// changes the pull itself caused. It missed a tag moved by a local rebuild, and — worse — reported
+// changes the pull itself caused. It missed a tag moved by a local rebuild, and worse, reported
 // "already up to date" for a stack whose containers were running an image the tag no longer pointed
 // to, which is exactly the state a half-finished deploy leaves behind.
 func staleServices(imgs []compose.Image) []string {
@@ -284,7 +284,7 @@ func (s SSHRunner) Healthy() (bool, error) {
 	// Probed from the VM, so a stack bound to localhost is reachable and no port has to be exposed
 	// publicly just to be checked.
 	//
-	// A container that is still starting — or has just died — refuses the connection, and curl exits
+	// A container that is still starting, or has just died, refuses the connection, and curl exits
 	// non-zero. That is the ordinary case while waiting, not a fault in the check, so it reports "not
 	// healthy" rather than an error. Treating it as an error made a failed update read as though the
 	// health check itself had broken.
@@ -294,7 +294,7 @@ func (s SSHRunner) Healthy() (bool, error) {
 
 // healthyFromProbe reads a curl probe.
 //
-// A container that is still starting — or has just died — refuses the connection and curl exits
+// A container that is still starting, or has just died, refuses the connection and curl exits
 // non-zero (7). That is the ordinary case while waiting, not a fault in the check. Reporting it as an
 // error made a failed update read as though the health check itself had broken, which sent the reader
 // looking in the wrong place.

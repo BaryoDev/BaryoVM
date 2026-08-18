@@ -66,7 +66,7 @@ func newVMListCmd() *cobra.Command {
 				return nil
 			}
 			if len(store.VMs) == 0 {
-				ui.Warnf("no VMs registered yet — add one with `baryovm vm add`")
+				ui.Warnf("no VMs registered yet: add one with `baryovm vm add`")
 				return nil
 			}
 			ui.Title(fmt.Sprintf("Fleet (%d)", len(store.VMs)))
@@ -160,9 +160,9 @@ func newVMBootstrapCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: false, Action: "vm bootstrap", Error: err.Error()})
 				return err
 			}
-			msg := vm.Name + " ready — " + rep.DockerVersion
+			msg := vm.Name + " ready: " + rep.DockerVersion
 			if rep.AlreadyReady {
-				msg = vm.Name + " already had Docker — " + rep.DockerVersion
+				msg = vm.Name + " already had Docker: " + rep.DockerVersion
 			}
 			ui.Emit(ui.Result{OK: true, Action: "vm bootstrap", Message: msg, Data: rep})
 			return nil
@@ -178,7 +178,7 @@ func requireVM(name string) (fleet.VM, error) {
 	}
 	vm := store.Find(name)
 	if vm == nil {
-		return fleet.VM{}, fmt.Errorf("no VM named %q — register it with `baryovm vm add %s --host ... --key ...`", name, name)
+		return fleet.VM{}, fmt.Errorf("no VM named %q: register it with `baryovm vm add %s --host ... --key ...`", name, name)
 	}
 	return *vm, nil
 }
