@@ -48,7 +48,7 @@ anywhere else.
 
 ## Layout
 
-```
+```text
 cmd/baryovm/main.go        five lines; calls cli.Execute()
 internal/cli/              cobra command surface (one file per command area)
 internal/sshx/             the SSH engine everything remote goes through
@@ -67,7 +67,7 @@ internal/provider/lightsail/  AWS Lightsail implementation
 
 The dependency direction is strictly one way:
 
-```
+```text
 cmd -> internal/cli -> engine packages (compose, release, update, backup,
                        deploy, bootstrap) -> internal/sshx
                     -> internal/fleet (state)
