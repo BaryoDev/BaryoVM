@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
@@ -49,6 +50,20 @@ type Manifest struct {
 	// restores its SELinux context and reloads the web server. Commands run in order and the
 	// release stops at the first failure.
 	PostDeploy []string `json:"postDeploy,omitempty"`
+
+	// Verify runs on the VM after PostDeploy and decides whether the release worked. Every command
+	// must exit zero.
+	//
+	// Without this, and without a healthUrl on the stack, a release reports success having asked
+	// the running site nothing. That is how a deploy can serve the wrong page and still be called
+	// done: the sync landed, compose came up, and no one looked. A repository that already has a
+	// check script should point at it here rather than have this reimplement one.
+	Verify []string `json:"verify,omitempty"`
+
+	// VerifyAttempts and VerifyDelaySeconds bound how long to wait for a stack to come back before
+	// calling the release failed. A service that restarts is normal; one that never answers is not.
+	VerifyAttempts     int `json:"verifyAttempts,omitempty"`
+	VerifyDelaySeconds int `json:"verifyDelaySeconds,omitempty"`
 }
 
 // Load reads and validates a manifest file.
@@ -143,4 +158,47 @@ func sortedKeys(m map[string]string) []string {
 		}
 	}
 	return ks
+}
+
+// VerifyPlan is what a release should run to satisfy itself that the deploy worked, and how long to
+// keep trying.
+type VerifyPlan struct {
+	// Commands run on the VM, in order. Empty means nothing was configured.
+	Commands []string
+	// Attempts is how many times the whole plan may be retried before the release is failed.
+	Attempts int
+	// Delay is how long to wait between attempts.
+	Delay time.Duration
+}
+
+// Verification builds the plan for a release. The manifest's own verify commands win; otherwise a
+// stack healthUrl becomes a probe.
+//
+// The probe runs on the VM rather than locally on purpose. A healthUrl is usually loopback
+// (http://127.0.0.1:5005/health), which resolves to the wrong machine from a laptop: the request
+// would either fail or, worse, reach something local and pass. Curl is asked for the status code
+// only, with --fail so a 500 is an error rather than a body.
+func (m *Manifest) Verification(healthURL string) VerifyPlan {
+	p := VerifyPlan{
+		Attempts: m.VerifyAttempts,
+		Delay:    time.Duration(m.VerifyDelaySeconds) * time.Second,
+	}
+	if p.Attempts <= 0 {
+		p.Attempts = 5
+	}
+	if p.Delay <= 0 {
+		p.Delay = 3 * time.Second
+	}
+
+	if len(m.Verify) > 0 {
+		p.Commands = append(p.Commands, m.Verify...)
+		return p
+	}
+
+	if strings.TrimSpace(healthURL) != "" {
+		p.Commands = append(p.Commands,
+			fmt.Sprintf("curl --fail --silent --show-error --max-time 10 -o /dev/null %s",
+				sshx.Quote(healthURL)))
+	}
+	return p
 }
