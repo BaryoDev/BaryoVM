@@ -108,7 +108,7 @@ Manifest options:
 | `noCompose` | `false` | skip `docker compose up` at the end |
 | `postDeploy` | none | commands to run on the VM after syncing and building |
 | `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
-| `verifyAttempts` | `5` | how many times the whole verify plan may be retried |
+| `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
 | `verifyDelaySeconds` | `3` | wait between attempts |
 
 #### Verifying a release

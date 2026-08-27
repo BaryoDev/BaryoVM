@@ -38,11 +38,14 @@ sequenceDiagram
     You->>VM: docker compose up
     You->>VM: post-deploy: reload nginx, restore SELinux context
 
-    You->>Site: verify: healthUrl, or your own check script
+    You->>VM: verify: run the check on the VM
+    VM->>Site: curl healthUrl, or your own check script
     alt serving
-        Site-->>You: release done
+        Site-->>VM: 200
+        VM-->>You: release done
     else not serving
-        Site-->>You: release fails, the stack needs attention
+        Site-->>VM: error, or no answer
+        VM-->>You: release fails, the stack needs attention
     end
 
     Note over You,VM: agentless. no daemon on the VM,<br/>no control plane, SSH key paths only

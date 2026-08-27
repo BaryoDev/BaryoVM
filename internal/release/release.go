@@ -202,3 +202,44 @@ func (m *Manifest) Verification(healthURL string) VerifyPlan {
 	}
 	return p
 }
+
+// SyncDest is where one sync entry lands on the VM.
+//
+// rsync's trailing-slash rule decides this: "out" copies the directory, giving remoteRoot/out,
+// while "out/" copies its contents to remoteRoot itself.
+func (m *Manifest) SyncDest(sub string) string {
+	if strings.HasSuffix(sub, "/") {
+		return strings.TrimSuffix(m.RemoteRoot, "/")
+	}
+	return strings.TrimSuffix(m.RemoteRoot, "/") + "/" + strings.Trim(sub, "/")
+}
+
+// CheckComposeDir refuses a manifest whose sync would let --delete reach the stack's compose
+// directory, which is where a root-owned .env lives.
+//
+// The README has described this as a guarantee for a long time and it was only ever a convention:
+// nothing stopped a manifest listing the compose dir, and rsync --delete would then remove any file
+// on the VM that is not in the local source. A .env holding a database password is exactly such a
+// file. Documenting a safety property without enforcing it is worse than not claiming it, because
+// people stop checking.
+//
+// An empty composeDir disables the check rather than failing, since a stack may legitimately have
+// no compose directory at all (a static site).
+func (m *Manifest) CheckComposeDir(composeDir string) error {
+	composeDir = strings.TrimSuffix(strings.TrimSpace(composeDir), "/")
+	if composeDir == "" {
+		return nil
+	}
+
+	for _, sub := range m.Sync {
+		dest := m.SyncDest(sub)
+		if dest == composeDir || strings.HasPrefix(composeDir, dest+"/") {
+			return fmt.Errorf(
+				"sync entry %q lands on %s, which contains the compose directory %s: "+
+					"rsync --delete would remove its .env. Sync the application directories "+
+					"individually instead of the root that holds them",
+				sub, dest, composeDir)
+		}
+	}
+	return nil
+}

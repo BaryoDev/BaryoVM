@@ -137,6 +137,13 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
+			// The compose dir holds a root-owned .env. Refuse before anything is transferred, rather
+			// than documenting the exclusion and hoping: rsync --delete removes whatever is on the
+			// VM and not in the local source, and a database password is exactly such a file.
+			if err := m.CheckComposeDir(st.Dir); err != nil {
+				return fail(err)
+			}
+
 			// 1. Sync each source subdir (local rsync). The compose dir (with .env) is never synced.
 			for _, sub := range m.Sync {
 				sub := sub

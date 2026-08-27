@@ -95,3 +95,67 @@ func TestVerificationHonoursConfiguredAttemptsAndDelay(t *testing.T) {
 		t.Fatalf("delay: want 7s, got %v", p.Delay)
 	}
 }
+
+// The README has claimed for a long time that the compose dir is never in the sync list, so
+// --delete cannot wipe a .env. Until now that was a convention rather than a check.
+func TestASyncEntryCoveringTheComposeDirIsRefused(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/opt/app", Sync: []string{"deploy"}}
+
+	err := m.CheckComposeDir("/opt/app/deploy")
+
+	if err == nil {
+		t.Fatal("expected a refusal: rsync --delete would reach the .env")
+	}
+	if !strings.Contains(err.Error(), ".env") {
+		t.Fatalf("the error should say what is at risk, got %q", err)
+	}
+}
+
+// A trailing slash syncs CONTENTS to remoteRoot itself, so it covers everything under it including
+// a compose dir one level down. This is the case the trailing-slash rule makes easy to miss.
+func TestATrailingSlashSyncCoveringTheComposeDirIsRefused(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/var/www/site", Sync: []string{"out/"}}
+
+	if err := m.CheckComposeDir("/var/www/site/deploy"); err == nil {
+		t.Fatal("expected a refusal: out/ lands on remoteRoot, which contains the compose dir")
+	}
+}
+
+// The positive control. Without it a checker that refuses everything would pass the two above and
+// make every release impossible.
+func TestAnOrdinarySyncIsAllowed(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/opt/app", Sync: []string{"api", "web"}}
+
+	if err := m.CheckComposeDir("/opt/app/deploy"); err != nil {
+		t.Fatalf("syncing siblings of the compose dir must be allowed, got %v", err)
+	}
+}
+
+// A path that merely shares a prefix is not inside it. Refusing this would be a false positive that
+// blocks a legitimate layout.
+func TestASimilarlyNamedSiblingIsNotTreatedAsTheComposeDir(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/opt/app", Sync: []string{"deploy-assets"}}
+
+	if err := m.CheckComposeDir("/opt/app/deploy"); err != nil {
+		t.Fatalf("deploy-assets does not contain deploy, got %v", err)
+	}
+}
+
+func TestNoComposeDirSkipsTheCheck(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/var/www/site", Sync: []string{"out/"}}
+
+	if err := m.CheckComposeDir(""); err != nil {
+		t.Fatalf("a stack with no compose dir has nothing to protect, got %v", err)
+	}
+}
+
+func TestSyncDestFollowsRsyncsTrailingSlashRule(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/opt/app"}
+
+	if got := m.SyncDest("api"); got != "/opt/app/api" {
+		t.Fatalf(`"api" should land at /opt/app/api, got %q`, got)
+	}
+	if got := m.SyncDest("out/"); got != "/opt/app" {
+		t.Fatalf(`"out/" copies contents to the root, got %q`, got)
+	}
+}
