@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
@@ -49,6 +50,20 @@ type Manifest struct {
 	// restores its SELinux context and reloads the web server. Commands run in order and the
 	// release stops at the first failure.
 	PostDeploy []string `json:"postDeploy,omitempty"`
+
+	// Verify runs on the VM after PostDeploy and decides whether the release worked. Every command
+	// must exit zero.
+	//
+	// Without this, and without a healthUrl on the stack, a release reports success having asked
+	// the running site nothing. That is how a deploy can serve the wrong page and still be called
+	// done: the sync landed, compose came up, and no one looked. A repository that already has a
+	// check script should point at it here rather than have this reimplement one.
+	Verify []string `json:"verify,omitempty"`
+
+	// VerifyAttempts and VerifyDelaySeconds bound how long to wait for a stack to come back before
+	// calling the release failed. A service that restarts is normal; one that never answers is not.
+	VerifyAttempts     int `json:"verifyAttempts,omitempty"`
+	VerifyDelaySeconds int `json:"verifyDelaySeconds,omitempty"`
 }
 
 // Load reads and validates a manifest file.
@@ -143,4 +158,88 @@ func sortedKeys(m map[string]string) []string {
 		}
 	}
 	return ks
+}
+
+// VerifyPlan is what a release should run to satisfy itself that the deploy worked, and how long to
+// keep trying.
+type VerifyPlan struct {
+	// Commands run on the VM, in order. Empty means nothing was configured.
+	Commands []string
+	// Attempts is how many times the whole plan may be retried before the release is failed.
+	Attempts int
+	// Delay is how long to wait between attempts.
+	Delay time.Duration
+}
+
+// Verification builds the plan for a release. The manifest's own verify commands win; otherwise a
+// stack healthUrl becomes a probe.
+//
+// The probe runs on the VM rather than locally on purpose. A healthUrl is usually loopback
+// (http://127.0.0.1:5005/health), which resolves to the wrong machine from a laptop: the request
+// would either fail or, worse, reach something local and pass. Curl is asked for the status code
+// only, with --fail so a 500 is an error rather than a body.
+func (m *Manifest) Verification(healthURL string) VerifyPlan {
+	p := VerifyPlan{
+		Attempts: m.VerifyAttempts,
+		Delay:    time.Duration(m.VerifyDelaySeconds) * time.Second,
+	}
+	if p.Attempts <= 0 {
+		p.Attempts = 5
+	}
+	if p.Delay <= 0 {
+		p.Delay = 3 * time.Second
+	}
+
+	if len(m.Verify) > 0 {
+		p.Commands = append(p.Commands, m.Verify...)
+		return p
+	}
+
+	if strings.TrimSpace(healthURL) != "" {
+		p.Commands = append(p.Commands,
+			fmt.Sprintf("curl --fail --silent --show-error --max-time 10 -o /dev/null %s",
+				sshx.Quote(healthURL)))
+	}
+	return p
+}
+
+// SyncDest is where one sync entry lands on the VM.
+//
+// rsync's trailing-slash rule decides this: "out" copies the directory, giving remoteRoot/out,
+// while "out/" copies its contents to remoteRoot itself.
+func (m *Manifest) SyncDest(sub string) string {
+	if strings.HasSuffix(sub, "/") {
+		return strings.TrimSuffix(m.RemoteRoot, "/")
+	}
+	return strings.TrimSuffix(m.RemoteRoot, "/") + "/" + strings.Trim(sub, "/")
+}
+
+// CheckComposeDir refuses a manifest whose sync would let --delete reach the stack's compose
+// directory, which is where a root-owned .env lives.
+//
+// The README has described this as a guarantee for a long time and it was only ever a convention:
+// nothing stopped a manifest listing the compose dir, and rsync --delete would then remove any file
+// on the VM that is not in the local source. A .env holding a database password is exactly such a
+// file. Documenting a safety property without enforcing it is worse than not claiming it, because
+// people stop checking.
+//
+// An empty composeDir disables the check rather than failing, since a stack may legitimately have
+// no compose directory at all (a static site).
+func (m *Manifest) CheckComposeDir(composeDir string) error {
+	composeDir = strings.TrimSuffix(strings.TrimSpace(composeDir), "/")
+	if composeDir == "" {
+		return nil
+	}
+
+	for _, sub := range m.Sync {
+		dest := m.SyncDest(sub)
+		if dest == composeDir || strings.HasPrefix(composeDir, dest+"/") {
+			return fmt.Errorf(
+				"sync entry %q lands on %s, which contains the compose directory %s: "+
+					"rsync --delete would remove its .env. Sync the application directories "+
+					"individually instead of the root that holds them",
+				sub, dest, composeDir)
+		}
+	}
+	return nil
 }

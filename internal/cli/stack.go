@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
@@ -136,6 +137,13 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
+			// The compose dir holds a root-owned .env. Refuse before anything is transferred, rather
+			// than documenting the exclusion and hoping: rsync --delete removes whatever is on the
+			// VM and not in the local source, and a database password is exactly such a file.
+			if err := m.CheckComposeDir(st.Dir); err != nil {
+				return fail(err)
+			}
+
 			// 1. Sync each source subdir (local rsync). The compose dir (with .env) is never synced.
 			for _, sub := range m.Sync {
 				sub := sub
@@ -198,6 +206,40 @@ func newStackReleaseCmd() *cobra.Command {
 					return nil
 				}); err != nil {
 					return fail(err)
+				}
+			}
+
+			// Ask the running site whether the deploy worked, rather than inferring it from the
+			// fact that nothing errored on the way here. A sync can land, compose can come up, and
+			// the site can still serve the wrong thing: that is how the umbraco-pwa demo served
+			// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
+			// every listing pointed at.
+			plan := m.Verification(st.HealthURL)
+			if len(plan.Commands) == 0 {
+				ui.Warnf("nothing to verify: set verify in the manifest or healthUrl on the stack")
+			} else {
+				if err := ui.Step("verify", func() error {
+					var last error
+					for attempt := 1; attempt <= plan.Attempts; attempt++ {
+						last = nil
+						for _, cmdStr := range plan.Commands {
+							out, e := c.Run(cmdStr)
+							if e != nil {
+								last = fmt.Errorf("%w: %s", e, lastLines(out, 8))
+								break
+							}
+						}
+						if last == nil {
+							return nil
+						}
+						// A service that restarts is normal; one that never answers is not.
+						if attempt < plan.Attempts {
+							time.Sleep(plan.Delay)
+						}
+					}
+					return last
+				}); err != nil {
+					return fail(fmt.Errorf("released but failed verification, the stack may need attention: %w", err))
 				}
 			}
 

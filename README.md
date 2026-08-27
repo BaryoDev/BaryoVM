@@ -20,6 +20,46 @@ UI, MCP server, or agent can drive the exact same surface.
 > and ships behind `--dry-run`, so treat it as experimental. Not affiliated with any
 > cloud provider.
 
+## How it works
+
+Everything runs from your machine over SSH. There is no agent on the VM, no
+control plane, and nothing extra listening that you have to secure.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You as your machine<br/>(baryovm)
+    participant VM as your VM<br/>(sshd, docker)
+    participant Site as the running site
+
+    You->>VM: pg_dump, before anything changes
+    You->>VM: rsync the source (never the compose dir)
+    You->>VM: docker build
+    You->>VM: docker compose up
+    You->>VM: post-deploy: reload nginx, restore SELinux context
+
+    You->>VM: verify: run the check on the VM
+    VM->>Site: curl healthUrl, or your own check script
+    alt serving
+        Site-->>VM: 200
+        VM-->>You: release done
+    else not serving
+        Site-->>VM: error, or no answer
+        VM-->>You: release fails, the stack needs attention
+    end
+
+    Note over You,VM: agentless. no daemon on the VM,<br/>no control plane, SSH key paths only
+```
+
+The backup comes first on purpose: one taken afterwards would already contain
+whatever a start-time migration did. The verify step is the one that turns
+"every command succeeded" into "the site is serving", and those are not the
+same thing.
+
+The tool stores SSH key **paths**, never key material, and never reads your
+application secrets. A stack's compose directory is never in a release
+manifest's sync list, so `--delete` cannot wipe a `.env`.
+
 ## Install
 
 ```sh
@@ -74,6 +114,10 @@ A JSON manifest in your repo describes what to sync + build + deploy. The CLI ha
 no app-specific logic. The compose dir (with its `.env`) is deliberately **never**
 in the sync list, so `--delete` can't wipe your secrets.
 
+`verify` is what stops a release calling itself done without asking the running
+site anything. Point it at a check script the repo already has, or leave it out
+and set `healthUrl` on the stack and a `curl --fail` probe is used instead.
+
 ```json
 {
   "localRoot": "~/repos/app",
@@ -87,6 +131,49 @@ in the sync list, so `--delete` can't wipe your secrets.
   ]
 }
 ```
+
+## Why not just ask a coding agent to deploy it
+
+An agent can absolutely `ssh` in, `rsync` a directory and run `docker compose up`.
+It will usually work. The problem is what "usually" costs.
+
+**It reconstructs the deploy every time.** Nothing is written down, so each run
+re-derives the host, the paths, the build order and the restart command from
+whatever it can infer that day. A deploy is a thing you want to be identical on
+the fortieth run and the first. `baryovm stack release app` is one command that
+does the same thing every time, and the manifest is in your repository where a
+reviewer can see it.
+
+**The dangerous commands are the ones easiest to get subtly wrong.** This tool
+carries a comment about rsync's trailing-slash rule because getting it wrong,
+combined with `--delete`, empties a webroot and puts the site one directory
+down. That is a live outage produced by a single character. An agent writing
+rsync from scratch is one plausible-looking flag away from it, and the output
+looks like success.
+
+**Safety defaults do not survive improvisation.** A release here backs the
+database up before it touches anything, because a backup taken afterwards
+already contains whatever a start-time migration did. The compose directory is
+never in the sync list, so `--delete` cannot reach a `.env`. An unattended
+update refuses to run on a stack with no health check, because an update that
+cannot tell a healthy start from a crash loop is worse than no update. Each of
+those is a rule someone learned the hard way; none of them are things an agent
+reliably reinvents under time pressure.
+
+**Credentials stay out of the conversation.** BaryoVM stores SSH key *paths*,
+never key material, and never reads your application secrets. An agent driving
+`ssh` directly needs the connection details in its context to work at all.
+
+**And yes, the tokens.** A deploy driven conversationally means reading the
+repository, inferring the topology, composing the commands, reading the output
+and iterating when something fails. That is a meaningful slice of a context
+window every single time, and you pay it again on the next deploy. One command
+costs none of it.
+
+The honest version of this argument is not that agents cannot deploy. It is
+that a deploy should be a *decision you already made*, encoded once, rather
+than a thing re-reasoned from first principles while you watch. Use the agent
+to change the code. Let the tool ship it.
 
 ## Automation-friendly
 

@@ -107,6 +107,32 @@ Manifest options:
 | `sudo` | `false` | run the **remote** rsync as root |
 | `noCompose` | `false` | skip `docker compose up` at the end |
 | `postDeploy` | none | commands to run on the VM after syncing and building |
+| `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
+| `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
+| `verifyDelaySeconds` | `3` | wait between attempts |
+
+#### Verifying a release
+
+A release that reports success without asking the running site anything cannot tell a working
+deploy from one that landed and serves the wrong thing. That is not hypothetical: a demo site
+served its framework's "welcome, now install me" screen through two releases, a perfectly valid
+200 at the exact URL every listing pointed at, and every command in the deploy had succeeded.
+
+So after `postDeploy`, `stack release` runs a verification plan and **fails the release if it does
+not pass**:
+
+- If the manifest sets `verify`, those commands run. Point this at a check script the repository
+  already has rather than reimplementing one here.
+- Otherwise, if the stack has a `healthUrl`, it becomes a `curl --fail` probe.
+- If neither is set, the release warns that it verified nothing and still succeeds. An interactive
+  release is not an unattended update, so this is a warning rather than a refusal.
+
+The probe runs **on the VM**, not locally. A `healthUrl` is usually loopback, which from your
+laptop either fails or, worse, reaches something local and passes.
+
+One rule worth carrying into any check script: a "must not contain" assertion only means something
+after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
+grep, so assert the status and a minimum size first.
 
 #### The trailing slash on `sync` entries
 
