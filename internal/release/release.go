@@ -223,9 +223,17 @@ func (m *Manifest) SyncDest(sub string) string {
 // file. Documenting a safety property without enforcing it is worse than not claiming it, because
 // people stop checking.
 //
-// An empty composeDir disables the check rather than failing, since a stack may legitimately have
-// no compose directory at all (a static site).
+// A NoCompose manifest is exempt, and that is the whole point rather than a special case: a static
+// site's stack directory IS its webroot, so remoteRoot and the stack dir are legitimately the same
+// path and there is no compose file, no .env and nothing to protect. Checking anyway refused every
+// static site, which is how this shipped broken in 0.2.0.
+//
+// An empty composeDir disables the check for the same reason.
 func (m *Manifest) CheckComposeDir(composeDir string) error {
+	if m.NoCompose {
+		return nil
+	}
+
 	composeDir = strings.TrimSuffix(strings.TrimSpace(composeDir), "/")
 	if composeDir == "" {
 		return nil
