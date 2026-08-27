@@ -8,6 +8,17 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-27
+
+### Fixed
+
+- **A static site can be released again.** 0.2.0's compose-directory guard refused every
+  `noCompose` stack: a static site's stack directory is its webroot, so `remoteRoot` and the stack
+  directory are legitimately the same path, and the guard read that as a manifest about to delete a
+  compose directory's `.env`. There is no compose file and no `.env` to protect. Found by releasing
+  a real static site with the new binary, which is the only way it could have been found: every
+  test written for the guard described a compose stack. ([#55])
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
@@ -56,7 +67,8 @@ previously accepted is called out here rather than left to be discovered.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/BaryoDev/BaryoVM/releases/tag/v0.1.0
 [#22]: https://github.com/BaryoDev/BaryoVM/pull/22
@@ -64,3 +76,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#30]: https://github.com/BaryoDev/BaryoVM/pull/30
 [#50]: https://github.com/BaryoDev/BaryoVM/issues/50
 [#53]: https://github.com/BaryoDev/BaryoVM/pull/53
+[#55]: https://github.com/BaryoDev/BaryoVM/pull/55

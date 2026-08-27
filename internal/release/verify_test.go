@@ -159,3 +159,24 @@ func TestSyncDestFollowsRsyncsTrailingSlashRule(t *testing.T) {
 		t.Fatalf(`"out/" copies contents to the root, got %q`, got)
 	}
 }
+
+// A static site's stack directory is its webroot, so remoteRoot and the stack dir are the same path
+// by design. Refusing that broke every noCompose stack in 0.2.0: barakocms-site, baryo-web and
+// rnxjs-samples all failed to release with a message about a compose directory none of them have.
+func TestAStaticSiteIsNotBlockedByTheComposeGuard(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/var/www/site", Sync: []string{"out/"}, NoCompose: true}
+
+	if err := m.CheckComposeDir("/var/www/site"); err != nil {
+		t.Fatalf("a noCompose stack has no .env to protect, got %v", err)
+	}
+}
+
+// The positive control for the exemption. A compose stack with the same shape must still be caught,
+// or the fix would have removed the protection rather than narrowed it.
+func TestAComposeStackWithTheSameShapeIsStillBlocked(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/opt/app", Sync: []string{"deploy/"}}
+
+	if err := m.CheckComposeDir("/opt/app"); err == nil {
+		t.Fatal("a compose stack syncing onto its own dir must still be refused")
+	}
+}
