@@ -180,3 +180,77 @@ func TestAComposeStackWithTheSameShapeIsStillBlocked(t *testing.T) {
 		t.Fatal("a compose stack syncing onto its own dir must still be refused")
 	}
 }
+
+// Verify and postDeploy commands are shell strings written against the repository, the way every
+// other path in the manifest is. They ran from the SSH login shell's home instead, so
+// "sh scripts/check-live-demo.sh" exited 127 and the release reported "released but failed
+// verification, the stack may need attention" for a stack that was perfectly healthy.
+func TestVerifyCommandsRunFromTheRemoteRoot(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/home/opc/app", Verify: []string{"sh scripts/check.sh"}}
+
+	p := m.Verification("")
+
+	want := "cd '/home/opc/app' && sh scripts/check.sh"
+	if len(p.Commands) != 1 || p.Commands[0] != want {
+		t.Fatalf("want %q, got %v", want, p.Commands)
+	}
+}
+
+func TestPostDeployCommandsRunFromTheRemoteRoot(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/home/opc/app", PostDeploy: []string{"nginx -t", "systemctl reload nginx"}}
+
+	got := m.PostDeployCmds()
+
+	want := []string{
+		"cd '/home/opc/app' && nginx -t",
+		"cd '/home/opc/app' && systemctl reload nginx",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("want %d commands, got %v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("command %d: want %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+// A remoteRoot carrying shell syntax must not escape into the command line, for the same reason the
+// healthUrl is quoted.
+func TestARemoteRootCarryingShellSyntaxIsQuoted(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/tmp/a b; rm -rf x", Verify: []string{"true"}}
+
+	got := m.Verification("").Commands[0]
+
+	if !strings.HasPrefix(got, "cd '/tmp/a b; rm -rf x' && ") {
+		t.Fatalf("remoteRoot must be single-quoted, got %q", got)
+	}
+	// The ; must not be able to end the cd and start a second command.
+	if strings.Contains(got, "; rm -rf x' &&") == false {
+		t.Fatalf("the semicolon escaped its quotes: %q", got)
+	}
+}
+
+// remoteRoot is written with or without a trailing slash depending on who wrote the manifest, and
+// SyncDest already trims it. The cd has to agree, or the same manifest means two directories.
+func TestATrailingSlashOnRemoteRootIsTrimmed(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/home/opc/app/", Verify: []string{"true"}}
+
+	want := "cd '/home/opc/app' && true"
+	if got := m.Verification("").Commands[0]; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// The control. A manifest with no remoteRoot has nowhere to cd to, and prefixing "cd '' &&" would
+// break every command rather than fix its working directory.
+func TestCommandsAreLeftAloneWithoutARemoteRoot(t *testing.T) {
+	m := &Manifest{Verify: []string{"sh scripts/check.sh"}}
+
+	if got := m.Verification("").Commands[0]; got != "sh scripts/check.sh" {
+		t.Fatalf("want the command unchanged, got %q", got)
+	}
+	if got := (&Manifest{PostDeploy: []string{"nginx -t"}}).PostDeployCmds(); got[0] != "nginx -t" {
+		t.Fatalf("want the command unchanged, got %q", got[0])
+	}
+}

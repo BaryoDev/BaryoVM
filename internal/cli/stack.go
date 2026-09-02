@@ -195,9 +195,10 @@ func newStackReleaseCmd() *cobra.Command {
 			// Whatever has to happen on the VM once the files are in place: restore an SELinux
 			// context, reload nginx, warm a cache. Ordered, and the first failure stops the release
 			// rather than reporting success over a half-applied deploy.
-			for i, cmdStr := range m.PostDeploy {
+			postCmds := m.PostDeployCmds()
+			for i, cmdStr := range postCmds {
 				cmdStr := cmdStr
-				label := fmt.Sprintf("post %d/%d", i+1, len(m.PostDeploy))
+				label := fmt.Sprintf("post %d/%d", i+1, len(postCmds))
 				if err := ui.Step(label, func() error {
 					out, e := c.Run(cmdStr)
 					if e != nil {
