@@ -8,6 +8,17 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`verify` and `postDeploy` commands run from `remoteRoot`.** They ran from the SSH login shell's
+  home, so a command written against the repository, such as `sh scripts/check-live-demo.sh`, exited
+  127 and the release reported `released but failed verification, the stack may need attention` for
+  a stack that was healthy. Every other path in a manifest is already relative to the repository:
+  `sync` entries, and a build's `dockerfile` and `context`. These two were the exceptions and nothing
+  said so. The workaround was to write the `cd` into the manifest, which duplicated `remoteRoot` and
+  gave no warning when the two disagreed. Found by adding a `verify` block to a stack that had none.
+  ([#56])
+
 ## [0.2.1] - 2026-08-27
 
 ### Fixed
@@ -77,3 +88,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#50]: https://github.com/BaryoDev/BaryoVM/issues/50
 [#53]: https://github.com/BaryoDev/BaryoVM/pull/53
 [#55]: https://github.com/BaryoDev/BaryoVM/pull/55
+[#56]: https://github.com/BaryoDev/BaryoVM/issues/56

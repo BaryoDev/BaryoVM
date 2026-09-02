@@ -178,6 +178,39 @@ type VerifyPlan struct {
 // (http://127.0.0.1:5005/health), which resolves to the wrong machine from a laptop: the request
 // would either fail or, worse, reach something local and pass. Curl is asked for the status code
 // only, with --fail so a 500 is an error rather than a body.
+// inRemoteRoot puts a manifest command in the directory the sync landed in.
+//
+// Every other path in a manifest is relative to the repository: sync entries, a build's dockerfile
+// and its context. verify and postDeploy are shell strings, so they carried whatever working
+// directory the SSH session opened in, which is the login shell's home. A command as ordinary as
+// "sh scripts/check.sh" then exits 127, and a release reports "failed verification" for a stack
+// that is healthy, pointing the reader at the deployment rather than at the command.
+//
+// A manifest with no remoteRoot has nowhere to go, and a cd to an empty path would break every
+// command rather than place it, so those are left alone.
+func (m *Manifest) inRemoteRoot(cmd string) string {
+	root := strings.TrimSpace(m.RemoteRoot)
+	if root == "" {
+		return cmd
+	}
+	// "/" is a legal root and trimming its slash leaves nothing, which would read as "no
+	// remoteRoot" and send the command back to the home directory it is being moved out of.
+	if trimmed := strings.TrimSuffix(root, "/"); trimmed != "" {
+		root = trimmed
+	}
+	return "cd " + sshx.Quote(root) + " && " + cmd
+}
+
+// PostDeployCmds returns the manifest's postDeploy commands ready to run on the VM, each in
+// remoteRoot.
+func (m *Manifest) PostDeployCmds() []string {
+	out := make([]string, 0, len(m.PostDeploy))
+	for _, c := range m.PostDeploy {
+		out = append(out, m.inRemoteRoot(c))
+	}
+	return out
+}
+
 func (m *Manifest) Verification(healthURL string) VerifyPlan {
 	p := VerifyPlan{
 		Attempts: m.VerifyAttempts,
@@ -191,7 +224,9 @@ func (m *Manifest) Verification(healthURL string) VerifyPlan {
 	}
 
 	if len(m.Verify) > 0 {
-		p.Commands = append(p.Commands, m.Verify...)
+		for _, c := range m.Verify {
+			p.Commands = append(p.Commands, m.inRemoteRoot(c))
+		}
 		return p
 	}
 
