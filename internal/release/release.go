@@ -46,6 +46,11 @@ type Manifest struct {
 	// would fail after the sync had already succeeded.
 	NoCompose bool `json:"noCompose,omitempty"`
 
+	// PreDeploy runs on the VM after syncing and building, and BEFORE compose up. This is where a
+	// guard belongs: a check in PostDeploy runs after the thing it guards has already taken
+	// effect, so a release can only report that the stack is now wrong, not prevent it.
+	PreDeploy []string `json:"preDeploy,omitempty"`
+
 	// PostDeploy runs on the VM after syncing and building. This is where a static site
 	// restores its SELinux context and reloads the web server. Commands run in order and the
 	// release stops at the first failure.
@@ -199,6 +204,16 @@ func (m *Manifest) inRemoteRoot(cmd string) string {
 		root = trimmed
 	}
 	return "cd " + sshx.Quote(root) + " && " + cmd
+}
+
+// PreDeployCmds returns the manifest's preDeploy commands ready to run on the VM, each in
+// remoteRoot.
+func (m *Manifest) PreDeployCmds() []string {
+	out := make([]string, 0, len(m.PreDeploy))
+	for _, c := range m.PreDeploy {
+		out = append(out, m.inRemoteRoot(c))
+	}
+	return out
 }
 
 // PostDeployCmds returns the manifest's postDeploy commands ready to run on the VM, each in
