@@ -242,8 +242,8 @@ func TestATrailingSlashOnRemoteRootIsTrimmed(t *testing.T) {
 	}
 }
 
-// The control. A manifest with no remoteRoot has nowhere to cd to, and prefixing "cd '' &&" would
-// break every command rather than fix its working directory.
+// The control. A manifest with no remoteRoot has nowhere to cd to, and prefixing a cd to an empty
+// path would break every command rather than fix its working directory.
 func TestCommandsAreLeftAloneWithoutARemoteRoot(t *testing.T) {
 	m := &Manifest{Verify: []string{"sh scripts/check.sh"}}
 

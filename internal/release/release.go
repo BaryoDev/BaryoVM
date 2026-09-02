@@ -186,8 +186,8 @@ type VerifyPlan struct {
 // "sh scripts/check.sh" then exits 127, and a release reports "failed verification" for a stack
 // that is healthy, pointing the reader at the deployment rather than at the command.
 //
-// A manifest with no remoteRoot has nowhere to go, and "cd '' &&" would break every command rather
-// than place it, so those are left alone.
+// A manifest with no remoteRoot has nowhere to go, and a cd to an empty path would break every
+// command rather than place it, so those are left alone.
 func (m *Manifest) inRemoteRoot(cmd string) string {
 	root := strings.TrimSuffix(strings.TrimSpace(m.RemoteRoot), "/")
 	if root == "" {
