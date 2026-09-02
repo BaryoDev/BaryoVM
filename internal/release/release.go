@@ -189,9 +189,14 @@ type VerifyPlan struct {
 // A manifest with no remoteRoot has nowhere to go, and a cd to an empty path would break every
 // command rather than place it, so those are left alone.
 func (m *Manifest) inRemoteRoot(cmd string) string {
-	root := strings.TrimSuffix(strings.TrimSpace(m.RemoteRoot), "/")
+	root := strings.TrimSpace(m.RemoteRoot)
 	if root == "" {
 		return cmd
+	}
+	// "/" is a legal root and trimming its slash leaves nothing, which would read as "no
+	// remoteRoot" and send the command back to the home directory it is being moved out of.
+	if trimmed := strings.TrimSuffix(root, "/"); trimmed != "" {
+		root = trimmed
 	}
 	return "cd " + sshx.Quote(root) + " && " + cmd
 }

@@ -254,3 +254,15 @@ func TestCommandsAreLeftAloneWithoutARemoteRoot(t *testing.T) {
 		t.Fatalf("want the command unchanged, got %q", got[0])
 	}
 }
+
+// "/" is a legal absolute path, and trimming its trailing slash leaves nothing. Treated as an empty
+// remoteRoot the command is left unwrapped, so it runs in the login shell's home: the exact bug this
+// change exists to fix, reappearing for the one root that is all slash.
+func TestASlashRemoteRootIsPreserved(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/", Verify: []string{"true"}}
+
+	want := "cd '/' && true"
+	if got := m.Verification("").Commands[0]; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
