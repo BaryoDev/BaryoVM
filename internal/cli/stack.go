@@ -180,6 +180,24 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
+			// Guards run before compose up, not after. A check that runs afterwards can only report
+			// that the stack is now running something it should have refused, which is a post-mortem
+			// wearing a gate's clothes.
+			preCmds := m.PreDeployCmds()
+			for i, cmdStr := range preCmds {
+				cmdStr := cmdStr
+				label := fmt.Sprintf("pre %d/%d", i+1, len(preCmds))
+				if err := ui.Step(label, func() error {
+					out, e := c.Run(cmdStr)
+					if e != nil {
+						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+					}
+					return nil
+				}); err != nil {
+					return fail(err)
+				}
+			}
+
 			// A static site has no compose file: it is files the host's own web server serves.
 			// Running compose up there fails after the sync has already landed, which is the
 			// worst place to fail, so the manifest says up front that there is nothing to bring up.

@@ -8,6 +8,15 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- **`preDeploy` commands, which run before `compose up`.** A guard in `postDeploy` runs after the
+  thing it guards has already taken effect: the umbraco-pwa stack compares its committed compose
+  file against the one the VM runs, and in `postDeploy` that comparison happens after the drifted
+  file has brought the stack up. The release goes red over a stack that is already running the
+  configuration the check exists to refuse, which is a post-mortem rather than a gate. Same
+  `remoteRoot` handling as `postDeploy`. ([#59])
+
 ### Fixed
 
 - **`verify` and `postDeploy` commands run from `remoteRoot`.** They ran from the SSH login shell's
@@ -89,3 +98,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#53]: https://github.com/BaryoDev/BaryoVM/pull/53
 [#55]: https://github.com/BaryoDev/BaryoVM/pull/55
 [#56]: https://github.com/BaryoDev/BaryoVM/issues/56
+[#59]: https://github.com/BaryoDev/BaryoVM/issues/59

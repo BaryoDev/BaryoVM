@@ -266,3 +266,33 @@ func TestASlashRemoteRootIsPreserved(t *testing.T) {
 		t.Fatalf("want %q, got %q", want, got)
 	}
 }
+
+// A guard that runs after compose up has already let the thing it guards take effect. The
+// umbraco-pwa stack compares its committed compose file against the one the VM runs, and in
+// postDeploy that comparison happens after the drifted file has brought the stack up: the release
+// goes red over a stack that is already running the configuration the check exists to refuse.
+func TestPreDeployCommandsRunFromTheRemoteRoot(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/home/opc/app", PreDeploy: []string{"cmp -s a b"}}
+
+	got := m.PreDeployCmds()
+
+	want := "cd '/home/opc/app' && cmp -s a b"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("want %q, got %v", want, got)
+	}
+}
+
+// The control, matching the one for postDeploy: no remoteRoot means nowhere to cd to.
+func TestPreDeployCommandsAreLeftAloneWithoutARemoteRoot(t *testing.T) {
+	got := (&Manifest{PreDeploy: []string{"cmp -s a b"}}).PreDeployCmds()
+
+	if len(got) != 1 || got[0] != "cmp -s a b" {
+		t.Fatalf("want the command unchanged, got %v", got)
+	}
+}
+
+func TestNoPreDeployMeansNoCommands(t *testing.T) {
+	if got := (&Manifest{RemoteRoot: "/x"}).PreDeployCmds(); len(got) != 0 {
+		t.Fatalf("expected none, got %v", got)
+	}
+}
