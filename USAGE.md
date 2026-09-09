@@ -38,6 +38,44 @@ baryovm vm bootstrap oracle      # install Docker if missing
 baryovm vm remove oracle         # forget it (does not destroy the machine)
 ```
 
+## Hardening, and seeing what hits the box
+
+A VM with a public SSH port is found within minutes and guessed at continuously.
+`vm harden` applies an opinionated, idempotent policy, and `vm threats` tells you
+what that policy is absorbing.
+
+```sh
+baryovm vm harden oracle --dry-run   # report what would change, write nothing
+baryovm vm harden oracle             # apply it
+baryovm vm harden oracle --ignore 10.0.0.0/24   # never ban this range
+
+baryovm vm threats oracle                    # the last 24 hours
+baryovm vm threats oracle --since "7 days ago"
+baryovm vm threats oracle -o json            # for a dashboard or an agent
+```
+
+The policy is:
+
+- **`PerSourcePenalties` in sshd**, where the daemon has them (OpenSSH 9.8 and up).
+  Each failed authentication costs the source real time, and the penalty accumulates
+  to an hour. This is in-daemon, with no log parsing and nothing to install.
+- **fail2ban**, with four failures in ten minutes earning an hour's ban, doubling for
+  repeat offenders up to a week. It bans at the firewall, so repeat traffic stops
+  reaching sshd and stops filling the journal, which is where a real login hides.
+- **The surface reductions that cost nothing**: GSSAPI and X11 forwarding off, a
+  30 second login grace, root login and password authentication off.
+
+What it deliberately does not do: change the SSH port, disable public key
+authentication, or touch `authorized_keys`. It validates the sshd configuration
+before reloading, reloads rather than restarts, and rolls the file back if sshd
+rejects it, so a mistake cannot lock you out of a machine you reach over SSH.
+
+`vm threats` leads with the successful logins, because those are the lines worth
+reading. It also flags two things that separate noise from something worse: a login
+that succeeded with a password on a host that should be key-only, and failed
+attempts that named an account which actually exists. Generic scanners guess
+`admin` and `ubuntu`; somebody guessing your real user has learned something.
+
 ## Stacks: docker compose over SSH (day-to-day deploys)
 
 Your real workloads (barakoCMS, BaryoClub) run as compose projects, so this is
