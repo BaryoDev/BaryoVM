@@ -60,6 +60,14 @@ DRY=` + dry + `
 IGNORE="` + ignore + `"
 say() { echo "CHANGE|$1|$2|$3"; }
 
+# Every privileged step below is sudo, and sudo that cannot run without a password
+# does not fail loudly here: it fails quietly inside a probe and the policy then
+# reports a machine as hardened having applied half of it. Refuse up front instead.
+if ! sudo -n true 2>/dev/null; then
+  echo "ERROR|non-interactive sudo is required on this host, and is not available for this user"
+  exit 1
+fi
+
 # --- facts the policy branches on -------------------------------------------------
 if [ -f /etc/os-release ]; then . /etc/os-release; OSID="${ID:-unknown}"; else OSID=unknown; fi
 echo "FACT|os|$OSID"
@@ -80,6 +88,13 @@ echo "FACT|penalties|$PENALTIES"
 # sshd takes the FIRST value it sees for a keyword, and the stock drop-ins on RHEL
 # (50-redhat.conf) set GSSAPIAuthentication and X11Forwarding. A file numbered above
 # those is read later and silently loses, which is why this one is 10-.
+# PermitRootLogin no would lock out the next login when root is the account BaryoVM
+# itself connects as. The session in flight survives a reload, so the damage only shows
+# up the next time somebody needs in, which is the worst time to find it. For a root
+# connection the policy still hardens, to key-only, rather than to nothing.
+WHOAMI=$(id -un)
+if [ "$WHOAMI" = "root" ]; then ROOTLOGIN="prohibit-password"; else ROOTLOGIN="no"; fi
+
 DROPIN=` + sshdDropIn + `
 NEW=$(mktemp)
 {
@@ -87,7 +102,7 @@ NEW=$(mktemp)
   echo "GSSAPIAuthentication no"
   echo "X11Forwarding no"
   echo "LoginGraceTime 30"
-  echo "PermitRootLogin no"
+  echo "PermitRootLogin $ROOTLOGIN"
   echo "PasswordAuthentication no"
   echo "PubkeyAuthentication yes"
   if [ "$PENALTIES" = "1" ]; then
@@ -110,13 +125,25 @@ else
     echo "ERROR|sshd_config has no Include for sshd_config.d, refusing to write a file nothing reads"
     exit 1
   fi
+  # Keep whatever was there. Deleting on failure would take the previous, working
+  # policy with the rejected one, so a bad run would leave the host less hardened
+  # than it was before it ran.
+  PREV=""
+  if sudo test -f "$DROPIN"; then PREV=$(mktemp); sudo cat "$DROPIN" > "$PREV"; fi
   sudo install -m 600 -o root -g root "$NEW" "$DROPIN"
   if sudo sshd -t 2>/dev/null; then
     sudo systemctl reload sshd 2>/dev/null || sudo systemctl reload ssh
     say sshd applied "wrote $DROPIN and reloaded"
+    [ -n "$PREV" ] && rm -f "$PREV"
   else
-    sudo rm -f "$DROPIN"
-    echo "ERROR|sshd rejected the config, drop-in removed and nothing reloaded"
+    if [ -n "$PREV" ]; then
+      sudo install -m 600 -o root -g root "$PREV" "$DROPIN"
+      rm -f "$PREV"
+      echo "ERROR|sshd rejected the new config, the previous drop-in was restored and nothing reloaded"
+    else
+      sudo rm -f "$DROPIN"
+      echo "ERROR|sshd rejected the config, drop-in removed and nothing reloaded"
+    fi
     exit 1
   fi
 fi
@@ -157,6 +184,11 @@ if command -v fail2ban-client >/dev/null 2>&1; then
   else
     BANACTION="# banaction left at the distribution default (no firewalld running)"
   fi
+  # port = ssh means 22. On a host that moved sshd, bans would be written for a port
+  # nothing is listening on, and the jail would look healthy while protecting nothing.
+  SSHPORT=$(sudo sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+  [ -z "$SSHPORT" ] && SSHPORT=ssh
+
   JAIL=$(mktemp)
   {
     echo "# Managed by baryovm vm harden. Edits here are overwritten on the next run."
@@ -176,7 +208,7 @@ if command -v fail2ban-client >/dev/null 2>&1; then
     # normal, not aggressive: aggressive counts a connection closed during auth, which
     # a client offering several keys before the right one also produces.
     echo "mode = normal"
-    echo "port = ssh"
+    echo "port = $SSHPORT"
   } > "$JAIL"
 
   if sudo test -f /etc/fail2ban/jail.local && sudo cmp -s "$JAIL" /etc/fail2ban/jail.local; then
@@ -184,14 +216,25 @@ if command -v fail2ban-client >/dev/null 2>&1; then
   elif [ "$DRY" = "1" ]; then
     say jail would-apply "/etc/fail2ban/jail.local would be written"
   else
+    PREVJAIL=""
+    if sudo test -f /etc/fail2ban/jail.local; then PREVJAIL=$(mktemp); sudo cat /etc/fail2ban/jail.local > "$PREVJAIL"; fi
     sudo install -m 644 -o root -g root "$JAIL" /etc/fail2ban/jail.local
     if sudo fail2ban-client -t >/dev/null 2>&1; then
       sudo systemctl enable --now fail2ban >/dev/null 2>&1
       sudo systemctl reload fail2ban >/dev/null 2>&1 || sudo systemctl restart fail2ban >/dev/null 2>&1
       say jail applied "wrote jail.local and started fail2ban"
+      [ -n "$PREVJAIL" ] && rm -f "$PREVJAIL"
     else
-      sudo rm -f /etc/fail2ban/jail.local
-      echo "ERROR|fail2ban rejected the jail, jail.local removed"
+      # Same reasoning as the sshd drop-in: a rejected jail must not cost the host the
+      # jail it already had.
+      if [ -n "$PREVJAIL" ]; then
+        sudo install -m 644 -o root -g root "$PREVJAIL" /etc/fail2ban/jail.local
+        rm -f "$PREVJAIL"
+        echo "ERROR|fail2ban rejected the new jail, the previous jail.local was restored"
+      else
+        sudo rm -f /etc/fail2ban/jail.local
+        echo "ERROR|fail2ban rejected the jail, jail.local removed"
+      fi
       exit 1
     fi
   fi

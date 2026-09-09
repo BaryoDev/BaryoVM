@@ -18,6 +18,15 @@ type Count struct {
 	Count int    `json:"count"`
 }
 
+// Attempt is one account name that was guessed, and whether that account actually
+// exists on the host. sshd is the authority on the second part, so this does not have
+// to be inferred from a list the caller supplies.
+type Attempt struct {
+	Name     string `json:"name"`
+	Count    int    `json:"count"`
+	Existing bool   `json:"existing"`
+}
+
 // Login is one successful authentication, which is the part of this report worth
 // reading closely: a stranger in this list matters more than any number below it.
 type Login struct {
@@ -34,52 +43,72 @@ type Threats struct {
 	// Window is what the journal could actually cover, which may be shorter than
 	// Since if the machine rebooted. Reporting a 7-day count from 3 hours of logs
 	// is the kind of quiet wrongness worth naming in the output.
-	Window          string   `json:"window"`
-	FailedTotal     int      `json:"failedTotal"`
-	InvalidUser     int      `json:"invalidUser"`
-	UniqueSources   int      `json:"uniqueSources"`
-	AcceptedTotal   int      `json:"acceptedTotal"`
-	PasswordAccepts int      `json:"passwordAccepts"`
-	TopSources      []Count  `json:"topSources"`
-	TopUsernames    []Count  `json:"topUsernames"`
-	Logins          []Login  `json:"logins"`
-	BannedNow       []string `json:"bannedNow"`
-	BannedTotal     int      `json:"bannedTotal"`
-	Fail2ban        string   `json:"fail2ban"`
+	Window          string    `json:"window"`
+	FailedTotal     int       `json:"failedTotal"`
+	InvalidUser     int       `json:"invalidUser"`
+	UniqueSources   int       `json:"uniqueSources"`
+	AcceptedTotal   int       `json:"acceptedTotal"`
+	PasswordAccepts int       `json:"passwordAccepts"`
+	TopSources      []Count   `json:"topSources"`
+	TopUsernames    []Attempt `json:"topUsernames"`
+	Logins          []Login   `json:"logins"`
+	BannedNow       []string  `json:"bannedNow"`
+	BannedTotal     int       `json:"bannedTotal"`
+	Fail2ban        string    `json:"fail2ban"`
 }
 
-// TargetedRealAccounts reports whether any failure named an account that actually
-// exists. Generic dictionary traffic never does, so this is the line between
-// background noise and someone who has learned something about the machine.
-func (t Threats) TargetedRealAccounts(real []string) []string {
+// TargetedRealAccounts returns the account names that were guessed and that exist on
+// the host. Generic dictionary traffic never hits one, so this is the line between
+// background noise and somebody who has learned something about the machine.
+//
+// It reads sshd's own verdict rather than comparing against a caller-supplied list:
+// the host knows which of its accounts exist and the caller only knows the one it
+// connects as.
+func (t Threats) TargetedRealAccounts() []string {
 	var hits []string
 	for _, u := range t.TopUsernames {
-		for _, r := range real {
-			if strings.EqualFold(u.Name, r) {
-				hits = append(hits, u.Name)
-			}
+		if u.Existing {
+			hits = append(hits, u.Name)
 		}
 	}
 	return hits
 }
 
+// userHarvest reads both kinds of failed attempt out of $LOG.
+//
+// sshd prints "invalid user" only when the account does not exist, so a failure
+// without that token names an account that does. Harvesting only the first kind, as
+// this did originally, means the report can never show somebody guessing a real
+// account, which is the one thing in it worth acting on.
+const userHarvest = `grep -oE 'Invalid user [^ ]+' "$LOG" | awk '{print $3}' | sort | uniq -c | sort -rn | head -10 \
+  | while read -r n u; do echo "USER|$u|$n|invalid"; done
+
+grep -E 'Failed (password|publickey) for |Connection closed by authenticating user ' "$LOG" \
+  | grep -v 'invalid user' \
+  | sed -E 's/.*Failed (password|publickey) for ([^ ]+) from.*/\2/; s/.*Connection closed by authenticating user ([^ ]+) .*/\1/' \
+  | grep -vE '^(Failed|Connection)' \
+  | sort | uniq -c | sort -rn | head -10 \
+  | while read -r n u; do echo "USER|$u|$n|existing"; done`
+
 func threatScript(since string) string {
 	return `set -u
 SINCE=` + sshx.Quote(since) + `
 LOG=$(mktemp)
-# -u sshd and the sshd-session comm, because OpenSSH 9.8+ splits per-connection work
-# into sshd-session processes and a plain unit filter misses most auth lines.
+# Unit filters only. OpenSSH 9.8+ does per-connection work in sshd-session processes,
+# and those inherit the unit's cgroup, so the unit filter still collects their lines;
+# -u ssh is there because Debian names the unit differently from RHEL.
 sudo journalctl -u sshd -u ssh --since "$SINCE" --no-pager 2>/dev/null > "$LOG" || true
 
-echo "WINDOW|$(head -1 "$LOG" | cut -c1-15)"
+# journalctl opens with "-- Journal begins at ... --", and prints "-- No entries --"
+# for an empty window. Either would be reported as the time the log starts.
+echo "WINDOW|$(grep -v '^--' "$LOG" | head -1 | cut -c1-15)"
 echo "FAILED|$(grep -cE 'Failed (password|publickey)|Invalid user|Connection closed by authenticating' "$LOG" || true)"
 echo "INVALID|$(grep -c 'Invalid user' "$LOG" || true)"
 echo "ACCEPTED|$(grep -c 'Accepted ' "$LOG" || true)"
 echo "PASSWORDACCEPT|$(grep -c 'Accepted password' "$LOG" || true)"
 echo "UNIQUE|$(grep -oE 'from [0-9a-fA-F:.]+' "$LOG" | sort -u | wc -l)"
 
-grep -oE 'Invalid user [^ ]+' "$LOG" | awk '{print $3}' | sort | uniq -c | sort -rn | head -10 \
-  | while read -r n u; do echo "USER|$u|$n"; done
+` + userHarvest + `
 
 # Accepted lines are excluded from the source ranking on purpose: the owner's own
 # address would otherwise sit at the top of a list of attackers.
@@ -147,7 +176,7 @@ func parseThreats(out string) Threats {
 			}
 		case "USER":
 			if len(p) >= 3 {
-				t.TopUsernames = append(t.TopUsernames, Count{Name: p[1], Count: atoi(p[2])})
+				t.TopUsernames = append(t.TopUsernames, Attempt{Name: p[1], Count: atoi(p[2]), Existing: len(p) >= 4 && p[3] == "existing"})
 			}
 		case "SRC":
 			if len(p) >= 3 {

@@ -109,8 +109,8 @@ func newVMThreatsCmd() *cobra.Command {
 			if t.PasswordAccepts > 0 {
 				ui.Errorf("%d login(s) succeeded with a password; this host should be key-only", t.PasswordAccepts)
 			}
-			if hits := t.TargetedRealAccounts([]string{vm.User, "root"}); len(hits) > 0 {
-				ui.Warnf("attempts named real accounts: %s (generic scanners do not know these)", strings.Join(hits, ", "))
+			if hits := t.TargetedRealAccounts(); len(hits) > 0 {
+				ui.Warnf("attempts named accounts that exist here: %s (generic scanners do not know these)", strings.Join(hits, ", "))
 			}
 
 			if len(t.Logins) > 0 {

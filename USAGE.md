@@ -72,9 +72,13 @@ rejects it, so a mistake cannot lock you out of a machine you reach over SSH.
 
 `vm threats` leads with the successful logins, because those are the lines worth
 reading. It also flags two things that separate noise from something worse: a login
-that succeeded with a password on a host that should be key-only, and failed
-attempts that named an account which actually exists. Generic scanners guess
-`admin` and `ubuntu`; somebody guessing your real user has learned something.
+that succeeded with a password on a host that should be key-only, and failed attempts
+against accounts that actually exist.
+
+That second one comes from sshd rather than from guesswork. sshd writes "invalid user"
+only when the account does not exist, so an attempt without that token names a real
+account, and the report marks it. Expect `root` to appear on any public host, since it
+is on every scanner's list; your own login name appearing is the interesting case.
 
 ## Stacks: docker compose over SSH (day-to-day deploys)
 
