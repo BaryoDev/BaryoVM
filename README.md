@@ -62,11 +62,42 @@ manifest's sync list, so `--delete` cannot wipe a `.env`.
 
 ## Install
 
+**Homebrew**, on macOS. Nothing else needed, no Go toolchain:
+
+```sh
+brew install arnelirobles/tap/baryovm
+```
+
+That works on a cold machine because the qualified name tells Homebrew where to look. If you
+would rather add the tap once and type less afterwards:
+
+```sh
+brew tap arnelirobles/tap
+brew install baryovm
+```
+
+**A release archive**, on Linux or if you do not use Homebrew. Every release carries linux and
+darwin builds for amd64 and arm64, plus `checksums.txt`:
+
+```sh
+VERSION=0.3.0; OS=$(uname -s | tr A-Z a-z); ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/baryovm_${VERSION}_${OS}_${ARCH}.tar.gz
+curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/checksums.txt
+shasum -a 256 -c checksums.txt --ignore-missing        # verify before you run it
+tar xzf baryovm_${VERSION}_${OS}_${ARCH}.tar.gz && sudo mv baryovm /usr/local/bin/
+```
+
+**From source**, which needs Go 1.25 or newer:
+
 ```sh
 go install github.com/BaryoDev/BaryoVM/cmd/baryovm@latest   # -> $(go env GOPATH)/bin
-# or build locally:
-go build -o /usr/local/bin/baryovm ./cmd/baryovm
+```
+
+Then, however you got it:
+
+```sh
 baryovm version
+baryovm doctor          # what is missing before your first release
 ```
 
 State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written

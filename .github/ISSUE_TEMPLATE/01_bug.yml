@@ -1,0 +1,44 @@
+name: Bug report
+description: Something BaryoVM did that it should not have
+labels: ["type/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues do not go here. See SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran, and what happened
+      description: The exact command, and the output. If it failed on a VM, the error from the host.
+      placeholder: |
+        $ baryovm stack release app
+        x stack release: remote `cd '/opt/app' && docker compose up -d`: ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: json
+    attributes:
+      label: The JSON envelope, if you have it
+      description: >
+        Re-run with `-o json`. Most failure envelopes carry the generated remote command, which is
+        usually the whole answer.
+      render: json
+  - type: input
+    id: version
+    attributes:
+      label: baryovm version
+      placeholder: "0.3.0 (baryovm version)"
+    validations:
+      required: true
+  - type: input
+    id: hosts
+    attributes:
+      label: Your machine and the VM
+      placeholder: "macOS 15 arm64 -> Oracle Linux 9 aarch64"

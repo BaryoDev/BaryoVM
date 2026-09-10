@@ -8,7 +8,33 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-10
+
+Two new commands, an install that does not assume a Go toolchain, and the class of bug where a
+setting was honoured in some code paths and ignored in others.
+
+`vm harden` and `vm threats` came out of a real incident rather than a plan: the box this is
+developed on was taking 494 invalid-user attempts from 46 sources in fourteen hours.
+
+Three of the fixes below are the same shape. A field existed, some call sites read it and others
+did not, and each gap was reported separately as its own bug. They are one fix now, with the
+decision made in one place so a new call site cannot quietly skip it.
+
 ### Added
+
+- **Homebrew on macOS.** `brew install arnelirobles/tap/baryovm`, or `brew tap arnelirobles/tap`
+  once and then `brew install baryovm`. It ships as a cask, since GoReleaser deprecated the older
+  formula block, which means Linux Homebrew is not covered and the release archive is the Linux
+  path. The unprefixed `brew install baryovm` needs homebrew-core, which asks a self-submitting
+  owner for 90 forks, 90 watchers or 225 stars, so it is not the target yet. The README now leads
+  with brew, then the archive with checksum verification, then `go install` last, because needing
+  a Go toolchain to try a deployment tool rules out most of the people it is for. ([#5], [#32])
+- **`CONTRIBUTING.md`, a code of conduct, and issue templates.** The contributing guide leads with
+  the rule that matters most here: a change to command construction needs a test that reads the
+  generated string, because every remote operation ends as text sent to a shell on someone's
+  server, and the failure mode is a command that looks right and means something else. ([#2])
+
+
 
 - **`stack set-update --no-database`, so a stack with no database can still update unattended.** It
   pairs with the refusal below: a stack that genuinely has nothing to back up records that once,
@@ -74,11 +100,14 @@ previously accepted is called out here rather than left to be discovered.
   a per-user tool needs its absolute path. A manifest saying `"sudo": false` cannot turn the
   registration back off.
 
+[#2]: https://github.com/BaryoDev/BaryoVM/issues/2
+[#5]: https://github.com/BaryoDev/BaryoVM/issues/5
 [#8]: https://github.com/BaryoDev/BaryoVM/issues/8
 [#9]: https://github.com/BaryoDev/BaryoVM/issues/9
 [#13]: https://github.com/BaryoDev/BaryoVM/issues/13
 [#17]: https://github.com/BaryoDev/BaryoVM/issues/17
 [#19]: https://github.com/BaryoDev/BaryoVM/issues/19
+[#32]: https://github.com/BaryoDev/BaryoVM/issues/32
 [#36]: https://github.com/BaryoDev/BaryoVM/issues/36
 [#42]: https://github.com/BaryoDev/BaryoVM/issues/42
 [#48]: https://github.com/BaryoDev/BaryoVM/issues/48
@@ -152,7 +181,8 @@ previously accepted is called out here rather than left to be discovered.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/BaryoDev/BaryoVM/releases/tag/v0.1.0
