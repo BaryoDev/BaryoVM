@@ -59,6 +59,13 @@ func Dial(t Target) (*Client, error) {
 	return &Client{c: c}, nil
 }
 
+// Runner runs one command on a VM. *Client is the real one; an engine package takes this rather
+// than the struct so its logic can be driven without a host, the same reason update.Runner exists a
+// layer up. It is the whole of the connection an engine needs: dialling stays at the cli edge.
+type Runner interface {
+	Run(cmd string) (string, error)
+}
+
 // Run executes a command and returns its stdout, or an error carrying stderr.
 func (c *Client) Run(cmd string) (string, error) {
 	sess, err := c.c.NewSession()

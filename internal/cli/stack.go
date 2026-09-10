@@ -292,7 +292,7 @@ func backupConfig(st *fleet.Stack) backup.Config {
 
 // runStackBackup resolves a stack (which must have backup config), dials its VM,
 // and runs a backup op with a spinner.
-func runStackBackup(name, action, step string, fn func(c *sshx.Client, st *fleet.Stack) (string, error)) error {
+func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.Stack) (opOutput, error)) error {
 	store, err := fleet.Load()
 	if err != nil {
 		return err
@@ -308,28 +308,17 @@ func runStackBackup(name, action, step string, fn func(c *sshx.Client, st *fleet
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
 	}
-	var out string
+	var o opOutput
 	err = ui.Step(step, func() error {
-		c, err := sshx.Dial(vm.Target())
-		if err != nil {
-			return err
-		}
-		defer c.Close()
-		out, err = fn(c, st)
+		var err error
+		o, err = runOnVM(vm, func(c sshx.Runner) (opOutput, error) { return fn(c, st) })
 		return err
 	})
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	if ui.JSON() {
-		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: map[string]string{"output": out}})
-		return nil
-	}
-	if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
-		fmt.Println(trimmed)
-	}
-	ui.Successf("%s: %s done", name, action)
+	emitOp(name, action, o)
 	return nil
 }
 
@@ -340,7 +329,9 @@ func newStackBackupCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackBackup(args[0], "stack backup", fmt.Sprintf("backing up %s", args[0]),
-				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.Backup(c, backupConfig(st)) })
+				func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
+					return bareOutput(backup.Backup(c, backupConfig(st)))
+				})
 		},
 	}
 }
@@ -352,7 +343,16 @@ func newStackBackupsCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackBackup(args[0], "stack backups", fmt.Sprintf("listing backups for %s", args[0]),
-				func(c *sshx.Client, st *fleet.Stack) (string, error) { return backup.List(c, backupConfig(st)) })
+				func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
+					out, err := backup.List(c, backupConfig(st))
+					if err != nil {
+						return opOutput{}, err
+					}
+					// A listing is the one backup op where an empty answer is ordinary, so it says how
+					// many it found rather than leaving the count to be read out of the text.
+					r := backup.DescribeList(out)
+					return opOutput{text: out, data: r, note: r.Note}, nil
+				})
 		},
 	}
 }
@@ -371,8 +371,8 @@ func newStackRestoreCmd() *cobra.Command {
 				return fmt.Errorf("restore REPLACES the %q database: re-run with --yes to confirm", args[0])
 			}
 			return runStackBackup(args[0], "stack restore", fmt.Sprintf("restoring %s", args[0]),
-				func(c *sshx.Client, st *fleet.Stack) (string, error) {
-					return backup.Restore(c, backupConfig(st), file)
+				func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
+					return bareOutput(backup.Restore(c, backupConfig(st), file))
 				})
 		},
 	}
@@ -440,7 +440,7 @@ func newStackDeployCmd() *cobra.Command {
 			"  baryovm stack deploy barako --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),
-				func(c *sshx.Client, cs compose.Stack) (string, error) {
+				func(c sshx.Runner, cs compose.Stack) (string, error) {
 					return compose.Up(c, cs, compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
 				})
 		},
@@ -459,7 +459,7 @@ func newStackPsCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack ps", fmt.Sprintf("querying stack %s", args[0]),
-				func(c *sshx.Client, cs compose.Stack) (string, error) { return compose.Ps(c, cs) })
+				func(c sshx.Runner, cs compose.Stack) (string, error) { return compose.Ps(c, cs) })
 		},
 	}
 }
@@ -472,7 +472,7 @@ func newStackPullCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack pull", fmt.Sprintf("pulling images for %s", args[0]),
-				func(c *sshx.Client, cs compose.Stack) (string, error) { return compose.Pull(c, cs, svcs) })
+				func(c sshx.Runner, cs compose.Stack) (string, error) { return compose.Pull(c, cs, svcs) })
 		},
 	}
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit to these services (comma-separated)")
@@ -488,8 +488,13 @@ func newStackLogsCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOpDescribed(args[0], "stack logs", fmt.Sprintf("fetching logs for %s", args[0]),
-				func(c *sshx.Client, cs compose.Stack) (string, error) { return compose.Logs(c, cs, svcs, tail) },
-				describeLogs)
+				func(c sshx.Runner, cs compose.Stack) (opOutput, error) {
+					r, err := compose.ReadLogs(c, cs, svcs, tail)
+					if err != nil {
+						return opOutput{}, err
+					}
+					return opOutput{text: r.Output, data: r, note: r.Note}, nil
+				})
 		},
 	}
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit to these services (comma-separated)")
@@ -497,23 +502,46 @@ func newStackLogsCmd() *cobra.Command {
 	return cmd
 }
 
-// describeLogs is the reporting shape for `stack logs`: the output, its line count, and a note
-// when there were no lines, so an empty log does not serialize the same as a read that failed.
-func describeLogs(out string) (any, string) {
-	r := compose.DescribeLogs(out)
-	return r, r.Note
+// opOutput is what a stack op hands back: the text a human reads, the data the JSON envelope
+// carries, and a note to print when there is no text to print.
+type opOutput struct {
+	text string
+	data any
+	note string
+}
+
+// bareOutput is the shape an op that says nothing about its own output emits, and the shape every
+// one of them emitted before `stack logs` had more to say. Keep it byte-for-byte: it is the
+// published envelope for ps, pull, deploy, backup and restore.
+func bareOutput(out string, err error) (opOutput, error) {
+	return opOutput{text: out, data: map[string]string{"output": out}}, err
+}
+
+// runOnVM dials a stack's VM and runs fn against it.
+//
+// A variable, not a plain function, because the envelope a command emits is the contract the MAUI
+// app and the MCP server read, and pinning that in a test means running the command with no host to
+// dial. Tests replace this; nothing else should.
+var runOnVM = func(vm *fleet.VM, fn func(c sshx.Runner) (opOutput, error)) (opOutput, error) {
+	c, err := sshx.Dial(vm.Target())
+	if err != nil {
+		return opOutput{}, err
+	}
+	defer c.Close()
+	return fn(c)
 }
 
 // runStackOp resolves a stack, dials its VM, runs the op with a spinner, and
 // prints the compose output (human) or wraps it in the result (JSON).
-func runStackOp(name, action, step string, fn func(c *sshx.Client, cs compose.Stack) (string, error)) error {
-	return runStackOpDescribed(name, action, step, fn, nil)
+func runStackOp(name, action, step string, fn func(c sshx.Runner, cs compose.Stack) (string, error)) error {
+	return runStackOpDescribed(name, action, step, func(c sshx.Runner, cs compose.Stack) (opOutput, error) {
+		return bareOutput(fn(c, cs))
+	})
 }
 
-// runStackOpDescribed is runStackOp with the op saying more about its own output than the raw
-// string: describe returns the JSON data and a line to print when there is nothing to print.
-func runStackOpDescribed(name, action, step string, fn func(c *sshx.Client, cs compose.Stack) (string, error),
-	describe func(out string) (any, string)) error {
+// runStackOpDescribed is runStackOp for an op that describes its own output instead of handing back
+// a bare string.
+func runStackOpDescribed(name, action, step string, fn func(c sshx.Runner, cs compose.Stack) (opOutput, error)) error {
 	store, err := fleet.Load()
 	if err != nil {
 		return err
@@ -527,34 +555,33 @@ func runStackOpDescribed(name, action, step string, fn func(c *sshx.Client, cs c
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
 	}
 
-	var out string
+	var o opOutput
 	err = ui.Step(step, func() error {
-		c, err := sshx.Dial(vm.Target())
-		if err != nil {
-			return err
-		}
-		defer c.Close()
-		out, err = fn(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo})
+		var err error
+		o, err = runOnVM(vm, func(c sshx.Runner) (opOutput, error) {
+			return fn(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo})
+		})
 		return err
 	})
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	var data any = map[string]string{"output": out}
-	note := ""
-	if describe != nil {
-		data, note = describe(out)
-	}
+	emitOp(name, action, o)
+	return nil
+}
+
+// emitOp renders one op's result: the envelope in JSON mode, the output otherwise, with the note
+// standing in when there is no output to show.
+func emitOp(name, action string, o opOutput) {
 	if ui.JSON() {
-		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: data})
-		return nil
+		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: o.data})
+		return
 	}
-	if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
+	if trimmed := strings.TrimRight(o.text, "\n"); trimmed != "" {
 		fmt.Println(trimmed)
-	} else if note != "" {
-		fmt.Println(ui.DimStyle.Render(note))
+	} else if o.note != "" {
+		ui.Notef("%s", o.note)
 	}
 	ui.Successf("%s: %s done", name, action)
-	return nil
 }

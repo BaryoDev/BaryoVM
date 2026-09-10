@@ -62,7 +62,7 @@ func (c Config) bkVar() string {
 }
 
 // Backup dumps the DB (custom format) + copies the config, then prunes old ones.
-func Backup(c *sshx.Client, cfg Config) (string, error) {
+func Backup(c sshx.Runner, cfg Config) (string, error) {
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
@@ -92,17 +92,54 @@ func Backup(c *sshx.Client, cfg Config) (string, error) {
 	return c.Run(b.String())
 }
 
+// NoBackupsMarker is what the remote script prints when the glob matches nothing. It is a line for
+// a human to read; DescribeList is what a machine reads.
+const NoBackupsMarker = "(no backups yet)"
+
 // List shows the available DB backups, newest first.
-func List(c *sshx.Client, cfg Config) (string, error) {
+func List(c sshx.Runner, cfg Config) (string, error) {
 	var b strings.Builder
 	b.WriteString(cfg.bkVar())
-	b.WriteString("ls -1t \"$BK\"/db-*.dump 2>/dev/null || echo '(no backups yet)'\n")
+	b.WriteString("ls -1t \"$BK\"/db-*.dump 2>/dev/null || echo " + sshx.Quote(NoBackupsMarker) + "\n")
 	return c.Run(b.String())
+}
+
+// ListResult is a backup listing with the names pulled out of it.
+//
+// Same reason as compose.LogsResult: an empty listing is a real and frequent answer, and reporting
+// it as {"output": "(no backups yet)"} leaves a machine consumer pattern-matching English prose
+// inside a blob to learn that there is nothing to restore from.
+type ListResult struct {
+	Output  string   `json:"output"`
+	Backups []string `json:"backups"`
+	Count   int      `json:"count"`
+	Note    string   `json:"note,omitempty"`
+}
+
+// NoBackupsNote is what an empty listing says for itself.
+const NoBackupsNote = "no database backups found for this stack: take one with `baryovm stack backup`"
+
+// DescribeList turns List's output into the backup names and a count. The marker line is not a
+// backup, and neither is a blank line.
+func DescribeList(out string) ListResult {
+	r := ListResult{Output: out, Backups: []string{}}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == NoBackupsMarker {
+			continue
+		}
+		r.Backups = append(r.Backups, line)
+	}
+	r.Count = len(r.Backups)
+	if r.Count == 0 {
+		r.Note = NoBackupsNote
+	}
+	return r
 }
 
 // Restore replaces the database from a backup (newest if file is empty). The
 // Postgres container must be running; the caller should restart app services after.
-func Restore(c *sshx.Client, cfg Config, file string) (string, error) {
+func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
