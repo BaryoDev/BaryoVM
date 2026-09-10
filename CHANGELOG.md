@@ -10,6 +10,14 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Added
 
+- **`vm harden` and `vm threats`.** A VM with a public SSH port is found within minutes: the box
+  this was written on took 494 invalid-user attempts from 46 sources in 14 hours. `vm harden`
+  applies an idempotent policy, sshd `PerSourcePenalties` where the daemon supports them plus
+  fail2ban with escalating bans, and `vm threats` reports what is arriving and, first, what
+  actually got in. The policy will not change the port, disable public key authentication or touch
+  `authorized_keys`, validates the config before reloading and rolls back if sshd rejects it, so it
+  cannot lock you out of a machine you only reach over SSH. `-o json` on both, as everywhere else.
+
 - **`preDeploy` commands, which run before `compose up`.** A guard in `postDeploy` runs after the
   thing it guards has already taken effect: the umbraco-pwa stack compares its committed compose
   file against the one the VM runs, and in `postDeploy` that comparison happens after the drifted

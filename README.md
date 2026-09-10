@@ -80,6 +80,8 @@ contents or secrets**. See [SECURITY.md](SECURITY.md).
 baryovm vm add oracle --host <your-vm-ip> --user opc --key ~/.ssh/id_ed25519
 baryovm vm ping oracle          # SSH in, report host + Docker version
 baryovm vm bootstrap oracle     # install Docker if missing
+baryovm vm harden oracle        # SSH hardening: per-source penalties + fail2ban
+baryovm vm threats oracle       # who is attacking it, and what got in
 
 # 2) Register a compose stack (a project dir on that VM), with backup + release config
 baryovm stack add app --vm oracle --path /home/deploy/app/deploy \
