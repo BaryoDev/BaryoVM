@@ -44,3 +44,28 @@ func TestParseConfigImagesRejectsGarbage(t *testing.T) {
 		t.Fatal("expected an error for unparseable output")
 	}
 }
+
+// Output that is only newlines is nothing read. Counting it as a line would report lines:1 with no
+// note, which is the ambiguity this is meant to remove wearing a different hat.
+func TestDescribeLogsTreatsBlankOutputAsNothingRead(t *testing.T) {
+	for _, in := range []string{"", "\n", "  \n\t\n"} {
+		r := DescribeLogs(in)
+		if r.Lines != 0 {
+			t.Errorf("%q: expected 0 lines, got %d", in, r.Lines)
+		}
+		if r.Note == "" {
+			t.Errorf("%q: expected a note saying the read found nothing", in)
+		}
+		if r.Output != in {
+			t.Errorf("%q: output was not preserved, got %q", in, r.Output)
+		}
+	}
+
+	r := DescribeLogs("one\n\nthree\n")
+	if r.Lines != 2 {
+		t.Errorf("blank lines should not count, got %d", r.Lines)
+	}
+	if r.Note != "" {
+		t.Errorf("a non-empty read must not carry a note: %q", r.Note)
+	}
+}

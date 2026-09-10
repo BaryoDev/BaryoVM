@@ -94,8 +94,17 @@ func Load(path string) (*Manifest, error) {
 // localRoot/<sub> → user@host:remoteRoot/ (so it lands at remoteRoot/<sub>),
 // with --delete scoped to that subdir, so the compose dir (with its .env) is never
 // in the sync list, so secrets can't be wiped.
-func (m *Manifest) RsyncCmd(sub, user, host, key string) *exec.Cmd {
-	ssh := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=accept-new -o BatchMode=yes", key)
+func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.Cmd {
+	// The VM's port, not rsync's default of 22. Every other path to the VM goes through
+	// VM.Target() and sshx.Dial, which honour it, so a VM on 2222 used to have its commands go to
+	// 2222 and its file transfer go to 22: a failure at best, and the wrong machine at worst.
+	if port <= 0 {
+		port = 22
+	}
+	// Quoted and ~-expanded. rsync hands this string to a shell, so an unquoted path with a space
+	// in it becomes two arguments, and once quoted the shell no longer expands a leading ~.
+	ssh := fmt.Sprintf("ssh -i %s -p %d -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+		quotePath(expand(key)), port)
 	args := []string{"-az", "--delete", "-e", ssh}
 	if m.Sudo {
 		// The remote end, not the local one. rsync runs a copy of itself on the far side and
@@ -141,6 +150,10 @@ func (m *Manifest) BuildCmd(b Build) string {
 	cmd += " -t " + q(b.Image) + " " + q(m.RemoteRoot+"/"+b.Context)
 	return cmd
 }
+
+// quotePath single-quotes a path for the shell rsync runs the -e command in. sshx.Quote is for
+// building a whole remote command and is deliberately not reused here.
+func quotePath(p string) string { return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'" }
 
 func expand(p string) string {
 	if strings.HasPrefix(p, "~/") {

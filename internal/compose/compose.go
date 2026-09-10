@@ -254,6 +254,40 @@ func Logs(c *sshx.Client, s Stack, svcs []string, tail int) (string, error) {
 	return c.Run(cmd + services(svcs))
 }
 
+// LogsResult is a logs read, described well enough that an empty one cannot be mistaken for a
+// failed one.
+//
+// An empty log is a real answer: a container whose app logs to a file inside it writes nothing to
+// stdout, which is the default for most .NET templates. Reporting that as {"output": ""} made it
+// byte-for-byte identical to looking at the wrong container, the wrong host, or never reaching
+// Docker at all, and the reader has no way to tell which they got.
+type LogsResult struct {
+	Output string `json:"output"`
+	Lines  int    `json:"lines"`
+	Note   string `json:"note,omitempty"`
+}
+
+// EmptyLogsNote is what a zero-line read says for itself.
+const EmptyLogsNote = "the stack produced no stdout or stderr: check `baryovm stack ps` that the " +
+	"containers are running, since an app that logs to a file inside the container also shows nothing here"
+
+// DescribeLogs counts what compose returned and, when that is nothing, says so explicitly.
+//
+// Blank lines do not count. Output that is only newlines is nothing read, and treating it as a
+// line would put the ambiguity straight back.
+func DescribeLogs(out string) LogsResult {
+	r := LogsResult{Output: out}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			r.Lines++
+		}
+	}
+	if r.Lines == 0 {
+		r.Note = EmptyLogsNote
+	}
+	return r
+}
+
 func services(svcs []string) string {
 	var b strings.Builder
 	for _, s := range svcs {

@@ -13,13 +13,13 @@ import (
 func TestRsyncCmdUsesRemoteSudoOnlyWhenAsked(t *testing.T) {
 	m := &Manifest{LocalRoot: "/tmp/src", RemoteRoot: "/var/www/site", Sync: []string{"out"}}
 
-	plain := strings.Join(m.RsyncCmd("out", "opc", "h", "/k").Args, " ")
+	plain := strings.Join(m.RsyncCmd("out", "opc", "h", 22, "/k").Args, " ")
 	if strings.Contains(plain, "rsync-path") {
 		t.Fatalf("sudo not requested, but the command asks for it: %s", plain)
 	}
 
 	m.Sudo = true
-	withSudo := strings.Join(m.RsyncCmd("out", "opc", "h", "/k").Args, " ")
+	withSudo := strings.Join(m.RsyncCmd("out", "opc", "h", 22, "/k").Args, " ")
 	if !strings.Contains(withSudo, "--rsync-path=sudo -n rsync") {
 		t.Fatalf("sudo requested, but the remote rsync is not elevated: %s", withSudo)
 	}
@@ -86,13 +86,13 @@ func TestStaticManifestRoundTrips(t *testing.T) {
 func TestSyncTrailingSlashSelectsContentsNotDirectory(t *testing.T) {
 	m := &Manifest{LocalRoot: "/tmp/site", RemoteRoot: "/var/www/site"}
 
-	dir := m.RsyncCmd("out", "opc", "h", "/k").Args
+	dir := m.RsyncCmd("out", "opc", "h", 22, "/k").Args
 	src := dir[len(dir)-2]
 	if src != "/tmp/site/out" {
 		t.Fatalf(`"out" should copy the directory itself, got %q`, src)
 	}
 
-	contents := m.RsyncCmd("out/", "opc", "h", "/k").Args
+	contents := m.RsyncCmd("out/", "opc", "h", 22, "/k").Args
 	csrc := contents[len(contents)-2]
 	if csrc != "/tmp/site/out/" {
 		t.Fatalf(`"out/" should copy the contents, got %q`, csrc)

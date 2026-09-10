@@ -148,7 +148,7 @@ func newStackReleaseCmd() *cobra.Command {
 			for _, sub := range m.Sync {
 				sub := sub
 				if err := ui.Step("sync "+sub, func() error {
-					out, e := runLocal(m.RsyncCmd(sub, vm.User, vm.Host, vm.KeyPath))
+					out, e := runLocal(m.RsyncCmd(sub, vm.User, vm.Host, vm.Port, vm.KeyPath))
 					if e != nil {
 						return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
 					}
@@ -487,8 +487,9 @@ func newStackLogsCmd() *cobra.Command {
 		Short: "Show recent logs for the stack",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStackOp(args[0], "stack logs", fmt.Sprintf("fetching logs for %s", args[0]),
-				func(c *sshx.Client, cs compose.Stack) (string, error) { return compose.Logs(c, cs, svcs, tail) })
+			return runStackOpDescribed(args[0], "stack logs", fmt.Sprintf("fetching logs for %s", args[0]),
+				func(c *sshx.Client, cs compose.Stack) (string, error) { return compose.Logs(c, cs, svcs, tail) },
+				describeLogs)
 		},
 	}
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit to these services (comma-separated)")
@@ -496,9 +497,23 @@ func newStackLogsCmd() *cobra.Command {
 	return cmd
 }
 
+// describeLogs is the reporting shape for `stack logs`: the output, its line count, and a note
+// when there were no lines, so an empty log does not serialize the same as a read that failed.
+func describeLogs(out string) (any, string) {
+	r := compose.DescribeLogs(out)
+	return r, r.Note
+}
+
 // runStackOp resolves a stack, dials its VM, runs the op with a spinner, and
 // prints the compose output (human) or wraps it in the result (JSON).
 func runStackOp(name, action, step string, fn func(c *sshx.Client, cs compose.Stack) (string, error)) error {
+	return runStackOpDescribed(name, action, step, fn, nil)
+}
+
+// runStackOpDescribed is runStackOp with the op saying more about its own output than the raw
+// string: describe returns the JSON data and a line to print when there is nothing to print.
+func runStackOpDescribed(name, action, step string, fn func(c *sshx.Client, cs compose.Stack) (string, error),
+	describe func(out string) (any, string)) error {
 	store, err := fleet.Load()
 	if err != nil {
 		return err
@@ -526,12 +541,19 @@ func runStackOp(name, action, step string, fn func(c *sshx.Client, cs compose.St
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
+	var data any = map[string]string{"output": out}
+	note := ""
+	if describe != nil {
+		data, note = describe(out)
+	}
 	if ui.JSON() {
-		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: map[string]string{"output": out}})
+		ui.Emit(ui.Result{OK: true, Action: action, Message: name, Data: data})
 		return nil
 	}
 	if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
 		fmt.Println(trimmed)
+	} else if note != "" {
+		fmt.Println(ui.DimStyle.Render(note))
 	}
 	ui.Successf("%s: %s done", name, action)
 	return nil

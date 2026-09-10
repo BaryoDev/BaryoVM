@@ -69,18 +69,59 @@ func TestRsyncCmd(t *testing.T) {
 		LocalRoot: "/local/src", RemoteRoot: "/srv/app",
 		Exclude: []string{"bin", ".git"},
 	}
-	c := m.RsyncCmd("api", "opc", "1.2.3.4", "/keys/id")
+	c := m.RsyncCmd("api", "opc", "1.2.3.4", 22, "/keys/id")
 	args := strings.Join(c.Args, " ")
 	for _, want := range []string{
 		"--delete",
 		"--exclude bin",
 		"--exclude .git",
-		"ssh -i /keys/id",
+		"ssh -i '/keys/id' -p 22",
 		"/local/src/api",
 		"opc@1.2.3.4:/srv/app/",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("RsyncCmd missing %q in: %s", want, args)
 		}
+	}
+}
+
+// The VM's port has to reach rsync. Without it a VM registered on 2222 runs its SSH commands on
+// 2222 and its file transfer on 22, so the release either fails or lands on whatever answers 22.
+func TestRsyncCmdUsesTheVMPort(t *testing.T) {
+	m := &Manifest{LocalRoot: "/local/src", RemoteRoot: "/srv/app"}
+
+	args := strings.Join(m.RsyncCmd("api", "opc", "1.2.3.4", 2222, "/keys/id").Args, " ")
+	if !strings.Contains(args, "-p 2222") {
+		t.Fatalf("port 2222 not passed to ssh: %s", args)
+	}
+	if strings.Contains(args, "-p 22 ") {
+		t.Fatalf("port 22 used for a VM on 2222: %s", args)
+	}
+
+	// An unset port is the same default sshx.Dial uses, not a missing -p.
+	zero := strings.Join(m.RsyncCmd("api", "opc", "1.2.3.4", 0, "/keys/id").Args, " ")
+	if !strings.Contains(zero, "-p 22") {
+		t.Fatalf("unset port should default to 22: %s", zero)
+	}
+}
+
+// rsync hands the -e string to a shell, so a key path with a space in it has to be quoted or the
+// shell reads it as two arguments and the remote shell command is broken.
+func TestRsyncCmdQuotesAndExpandsTheKeyPath(t *testing.T) {
+	m := &Manifest{LocalRoot: "/local/src", RemoteRoot: "/srv/app"}
+
+	args := strings.Join(m.RsyncCmd("api", "opc", "h", 22, "/keys/my key").Args, " ")
+	if !strings.Contains(args, `ssh -i '/keys/my key'`) {
+		t.Fatalf("key path with a space is not quoted: %s", args)
+	}
+
+	// ~ was left for the shell to expand, which quoting stops, so it has to be expanded here.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+	tilde := strings.Join(m.RsyncCmd("api", "opc", "h", 22, "~/.ssh/id").Args, " ")
+	if !strings.Contains(tilde, "'"+home+"/.ssh/id'") {
+		t.Fatalf("~ in the key path was not expanded: %s", tilde)
 	}
 }
