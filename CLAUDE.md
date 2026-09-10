@@ -142,8 +142,10 @@ Do not weaken these without a very good reason:
   anything (a backup taken after a start-time migration already contains it).
 - `stack restore` refuses without `--yes`.
 - `stack update --auto` refuses a stack without `autoUpdate`, without a
-  `healthUrl`, or combined with `--no-backup`. An unattended update that cannot
-  tell a healthy start from a crash loop is worse than no update.
+  `healthUrl`, combined with `--no-backup`, or with no database backup
+  configured at all. An unattended update that cannot tell a healthy start from
+  a crash loop is worse than no update. A stack with genuinely no database
+  records that once with `stack set-update --no-database` and keeps updating.
 - `autoUpdate` defaults to false, and `stack set-update --auto` is a separate,
   deliberate command rather than a flag on `stack add`.
 - An unchanged stack is never recreated, so a nightly job is not a nightly

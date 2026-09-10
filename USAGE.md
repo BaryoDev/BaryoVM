@@ -18,7 +18,7 @@ owner-only (0600) and references SSH key paths, not key contents.
 - Register existing VMs and drive them over SSH (agentless, no daemon to install).
 - Install Docker on a VM (idempotent).
 - Deploy single containers, and manage docker compose stacks (the day-to-day path).
-- `doctor` checks local prerequisites and auto-installs missing tools with `--fix`.
+- `doctor` checks the local tools a release actually runs, and installs what it can with `--fix`.
 - Every command supports `-o json` for machine consumers (MAUI/MCP/agents).
 
 ## What is built but untested
@@ -292,10 +292,22 @@ When something is stale it backs up the database, recreates only the affected se
 health URL from the VM. If health does not come back, it points the references at the images that were
 running before and brings those back up, then checks again and says which of the two states it ended in.
 
-`--auto` refuses any stack without `autoUpdate`, and any stack without a `healthUrl`: an unattended
-update that cannot tell a healthy start from a crash loop is worse than no update at all. `--auto`
-also refuses `--no-backup`. Set `autoUpdate` on the tiers you are willing to have change unattended:
-playground, not production.
+`--auto` refuses four things, all for the same reason: an unattended update has to be able to tell a
+healthy start from a crash loop, and to go back when it cannot. It refuses a stack without
+`autoUpdate`, a stack without a `healthUrl`, the flag combination `--auto --no-backup`, and a stack
+with no database backup configured at all. Set `autoUpdate` on the tiers you are willing to have
+change unattended: playground, not production.
+
+A stack that genuinely has no database says so once, and keeps updating:
+
+```sh
+baryovm stack set-update barako --no-database
+```
+
+That is a recorded decision rather than a silent gap. The refusal exists because a stack with no
+`dbContainer` and no `dbName` used to skip the backup entirely and run unattended anyway, which is
+what the other three refusals exist to prevent. A `--dry-run` is exempt from both backup refusals,
+since it recreates nothing and so has nothing to go back from.
 
 Run it from cron on the VM, or from anywhere with SSH access:
 
@@ -332,8 +344,8 @@ baryovm up oracle --image app:latest --container app -p 80:8080
 ## Prerequisites
 
 ```sh
-baryovm doctor          # report local tools + cloud creds
-baryovm doctor --fix    # download and install anything missing
+baryovm doctor          # report the local tools a release runs, plus cloud creds
+baryovm doctor --fix    # install the ones BaryoVM knows how to install
 ```
 
 Cloud APIs use the in-process Go SDKs, which read `~/.aws` and `~/.oci`
