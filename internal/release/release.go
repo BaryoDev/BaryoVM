@@ -36,9 +36,41 @@ type Manifest struct {
 	Exclude    []string `json:"exclude,omitempty"` // rsync excludes (bin, obj, node_modules, .next, .git…)
 	Builds     []Build  `json:"builds"`            // images to build after syncing
 
-	// Sudo runs the REMOTE rsync as root. Needed when remoteRoot is a root-owned path such as
-	// a webroot; without it rsync fails on the first write and the deploy looks like an SSH
-	// problem rather than a permissions one.
+	// Sudo runs this release's remote steps as root: the rsync on the far side, the image builds,
+	// the preDeploy and postDeploy hooks, and the compose up. Needed when remoteRoot is a
+	// root-owned path such as a webroot; without it rsync fails on the first write and the deploy
+	// looks like an SSH problem rather than a permissions one.
+	//
+	// It covers the hooks because that is what the hooks are for. A manifest that needs root to
+	// write the destination needs root to act on it afterwards: restorecon, nginx -t and
+	// systemctl reload nginx all failed as the SSH user, and they failed after the rsync had
+	// already landed, which is the expensive place to fail.
+	//
+	// A stack registered with `stack add --sudo` turns this on for its own release, via Load, and
+	// that fold is one way: a manifest saying "sudo": false cannot hand the release back to the SSH
+	// user. The stack's registration is a statement about the host, and a file in the repository
+	// does not get to overrule it. Release without root by registering the stack without --sudo.
+	//
+	// Two consequences are worth knowing before turning this on.
+	//
+	// The receiving rsync is root, so -a (-rlptgoD) starts honouring -o and -g, which it cannot do
+	// as an ordinary user: synced files arrive with the local source's ownership instead of owned by
+	// the SSH user. That follows from asking for root on the far side, and it is the point for a
+	// root-owned webroot, but a tree that used to come out owned by the SSH user no longer does.
+	//
+	// Hooks run under `sudo -n "${SHELL:-/bin/sh}" -c`, so sudo's env_reset and secure_path apply: $PATH is root's
+	// secure_path and $HOME is /root. A hook calling a tool from the SSH user's own PATH (a per-user
+	// dotnet, nvm's node) exits 127 where it used to work, and a hook writing to $HOME writes into
+	//
+	// One requirement this places on the host: the SSH user needs sudo rights to run a shell, not
+	// only the individual programs. A sudoers line granting `NOPASSWD: /usr/bin/systemctl` alone
+	// refuses `sudo -n "$SHELL" -c ...` with "a password is required", which reads as a password
+	// problem and is a permissions one. That is the host posture the per-command `sudo ` workaround
+	// in a manifest used to match, so it is the one that changes here.
+	// /root. Call such a tool by absolute path.
+	//
+	// Verify is deliberately left alone: it probes the running site rather than acting on the
+	// host, and a health check has nothing to gain from root.
 	Sudo bool `json:"sudo,omitempty"`
 
 	// NoCompose skips `docker compose up` at the end. A static site is files served by the
@@ -71,8 +103,14 @@ type Manifest struct {
 	VerifyDelaySeconds int `json:"verifyDelaySeconds,omitempty"`
 }
 
-// Load reads and validates a manifest file.
-func Load(path string) (*Manifest, error) {
+// Load reads and validates a manifest file for the stack that is about to be released.
+//
+// stackSudo is that stack's own `--sudo` registration, and it is a parameter rather than something
+// a caller applies afterwards: the decision to run this release as root is made once, here, where
+// the manifest enters the program, and every step below reads the one field. That is what went
+// wrong before. The stack's setting reached the compose up and not the image build, and not the
+// hooks, so one missing thread was reported three times from three commands.
+func Load(path string, stackSudo bool) (*Manifest, error) {
 	b, err := os.ReadFile(expand(path))
 	if err != nil {
 		return nil, err
@@ -80,6 +118,9 @@ func Load(path string) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if stackSudo {
+		m.Sudo = true
 	}
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
@@ -116,7 +157,7 @@ func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.
 		// password prompt into rsync's data channel, which corrupts the protocol stream: the
 		// transfer hangs or dies with an opaque protocol error instead of saying what is wrong.
 		// With -n it fails immediately and legibly.
-		args = append(args, "--rsync-path=sudo -n rsync")
+		args = append(args, "--rsync-path="+sshx.Sudo(m.Sudo, "rsync"))
 	}
 	for _, e := range m.Exclude {
 		args = append(args, "--exclude", e)
@@ -140,7 +181,7 @@ func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.
 // BuildCmd is the remote `docker build` command for one image.
 func (m *Manifest) BuildCmd(b Build) string {
 	q := sshx.Quote
-	cmd := "docker build"
+	cmd := sshx.Sudo(m.Sudo, "docker build")
 	if b.NoCache {
 		cmd += " --no-cache"
 	}
@@ -228,23 +269,33 @@ func (m *Manifest) inRemoteRoot(cmd string) string {
 }
 
 // PreDeployCmds returns the manifest's preDeploy commands ready to run on the VM, each in
-// remoteRoot.
+// remoteRoot and as root if the release is.
 func (m *Manifest) PreDeployCmds() []string {
 	out := make([]string, 0, len(m.PreDeploy))
 	for _, c := range m.PreDeploy {
-		out = append(out, m.inRemoteRoot(c))
+		out = append(out, m.hook(c))
 	}
 	return out
 }
 
 // PostDeployCmds returns the manifest's postDeploy commands ready to run on the VM, each in
-// remoteRoot.
+// remoteRoot and as root if the release is.
 func (m *Manifest) PostDeployCmds() []string {
 	out := make([]string, 0, len(m.PostDeploy))
 	for _, c := range m.PostDeploy {
-		out = append(out, m.inRemoteRoot(c))
+		out = append(out, m.hook(c))
 	}
 	return out
+}
+
+// hook places one manifest command in remoteRoot and runs it as root if the release runs as root.
+// Both hooks go through here so they cannot drift apart: same kind of step, same host, same reason.
+//
+// The cd goes inside the root shell, not in front of it. A remoteRoot the SSH user cannot enter is
+// the posture sudo is for here (root-owned, mode 700), and `cd <root> && sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'`
+// fails at the cd before sudo is ever reached, with the sync already landed.
+func (m *Manifest) hook(cmd string) string {
+	return sshx.SudoShell(m.Sudo, m.inRemoteRoot(cmd))
 }
 
 func (m *Manifest) Verification(healthURL string) VerifyPlan {

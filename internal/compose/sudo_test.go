@@ -14,15 +14,25 @@ func TestSudoAppliesToComposeCommands(t *testing.T) {
 	plain := Stack{Dir: "/opt/app"}
 	elevated := Stack{Dir: "/opt/app", Sudo: true}
 
-	if strings.Contains(plain.base(), "sudo") {
-		t.Errorf("a stack without Sudo must not elevate: %q", plain.base())
+	// Assert on a whole command rather than on base(), which is only the prefix. An earlier
+	// version of this elevated the prefix and left the subcommand outside the quoted shell,
+	// producing `sudo -n sh -c '... docker compose' ps -q 'api'`, and a test reading base()
+	// could not see it.
+	if got := plain.PsQuietCmd(nil); strings.Contains(got, "sudo") {
+		t.Errorf("a stack without Sudo must not elevate: %q", got)
 	}
-	if !strings.Contains(elevated.base(), "sudo -n docker compose") {
-		t.Errorf("expected an elevated compose invocation, got %q", elevated.base())
+	got := elevated.PsQuietCmd(nil)
+	if !strings.Contains(got, "docker compose ps -q") {
+		t.Errorf("the subcommand must be inside the elevated command, got %q", got)
 	}
 	// -n so a host that would prompt fails loudly rather than hanging a non-interactive session.
-	if !strings.Contains(elevated.base(), "sudo -n") {
-		t.Errorf("sudo must be non-interactive: %q", elevated.base())
+	if !strings.HasPrefix(got, "sudo -n ") {
+		t.Errorf("sudo must be non-interactive and wrap the whole command: %q", got)
+	}
+	// The cd is inside the elevation: the directory is usually the root-owned one that made
+	// Sudo necessary, so an unelevated cd fails before sudo is reached.
+	if strings.HasPrefix(got, "cd ") {
+		t.Errorf("the cd must run as root too: %q", got)
 	}
 }
 
@@ -40,12 +50,12 @@ func TestSudoAppliesToPlainDockerCommands(t *testing.T) {
 func TestSudoStillHonoursAnExplicitComposeFile(t *testing.T) {
 	s := Stack{Dir: "/opt/app", File: "docker-compose.prod.yml", Sudo: true}
 
-	base := s.base()
-	if !strings.Contains(base, "sudo -n docker compose -f") {
-		t.Errorf("expected sudo before compose and the file flag after it, got %q", base)
+	got := s.PsQuietCmd(nil)
+	if !strings.Contains(got, "docker compose -f ") {
+		t.Errorf("the file flag must follow compose, got %q", got)
 	}
-	if strings.Index(base, "sudo") > strings.Index(base, "docker compose") {
-		t.Errorf("sudo must precede the command it elevates: %q", base)
+	if strings.Index(got, "sudo") > strings.Index(got, "docker compose") {
+		t.Errorf("sudo must precede the command it elevates: %q", got)
 	}
 }
 

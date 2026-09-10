@@ -16,9 +16,17 @@ import (
 
 // Config describes what to back up for a stack.
 type Config struct {
-	// Sudo elevates the docker and file operations. A stack whose .env is root-owned (which is the
-	// right thing for a file holding a database password) cannot be read, dumped or copied by an
-	// ordinary SSH user at all.
+	// Sudo elevates the docker commands and the config copy: the pg_dump, dropdb, createdb and
+	// pg_restore `docker exec`s, and the `cp` and `chown` of the env file. A stack whose .env is
+	// root-owned (which is the right thing for a file holding a database password) cannot be read or
+	// copied by an ordinary SSH user at all.
+	//
+	// It does not elevate the script's own file handling. `mkdir -p "$BK"`, the redirect the dump is
+	// written through, the retention `rm -f`, the `du` and List's `ls` all run as the SSH user. That
+	// is right for the default backup dir under $HOME and wrong for a BackupDir the SSH user cannot
+	// write: the dump then fails at the redirect, having already run pg_dump. Point BackupDir
+	// somewhere the SSH user owns, or elevate those too in a change that can be tested against a
+	// real directory.
 	Sudo        bool
 	Name        string // stack name (used for the default backup dir)
 	Dir         string // project dir (holds the env/config files)
@@ -31,12 +39,7 @@ type Config struct {
 }
 
 // dockerCmd is `docker`, elevated when the stack needs it.
-func (c Config) dockerCmd() string {
-	if c.Sudo {
-		return "sudo -n docker"
-	}
-	return "docker"
-}
+func (c Config) dockerCmd() string { return sshx.Sudo(c.Sudo, "docker") }
 
 func (c Config) user() string {
 	if c.DBUser != "" {
@@ -78,8 +81,8 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 		// again. chmod stays 600; a readable backup of a secrets file is still a secrets file.
 		cp, chown := "cp", ""
 		if cfg.Sudo {
-			cp = "sudo -n cp"
-			chown = " && sudo -n chown \"$(id -u):$(id -g)\" \"$BK/env-$ts\""
+			cp = sshx.Sudo(cfg.Sudo, "cp")
+			chown = " && " + sshx.Sudo(cfg.Sudo, `chown "$(id -u):$(id -g)" "$BK/env-$ts"`)
 		}
 		b.WriteString(fmt.Sprintf("if [ -f %s/%s ]; then %s %s/%s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
 			q(cfg.Dir), cfg.EnvFile, cp, q(cfg.Dir), cfg.EnvFile, chown))

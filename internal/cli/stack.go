@@ -71,7 +71,9 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
-	cmd.Flags().BoolVar(&useSudo, "sudo", false, "run this stack's docker commands via sudo -n (needed when its .env is root-owned)")
+	cmd.Flags().BoolVar(&useSudo, "sudo", false,
+		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
+			"root-owned. See USAGE.md for what it covers and the three things that change with it")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
@@ -112,7 +114,7 @@ func newStackReleaseCmd() *cobra.Command {
 			if manifestPath == "" {
 				return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
 			}
-			m, err := release.Load(manifestPath)
+			m, err := release.Load(manifestPath, st.Sudo)
 			if err != nil {
 				return err
 			}
@@ -130,7 +132,7 @@ func newStackReleaseCmd() *cobra.Command {
 						return err
 					}
 					defer c.Close()
-					_, err = backup.Backup(c, backupConfig(st))
+					_, err = backup.Backup(c, releaseBackupConfig(st, m))
 					return err
 				}); err != nil {
 					return fail(fmt.Errorf("pre-release backup failed: %w", err))
@@ -203,7 +205,7 @@ func newStackReleaseCmd() *cobra.Command {
 			// worst place to fail, so the manifest says up front that there is nothing to bring up.
 			if !m.NoCompose {
 				if err := ui.Step("deploy", func() error {
-					_, e := compose.Up(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}, compose.UpOptions{})
+					_, e := compose.Up(c, releaseComposeStack(st, m), compose.UpOptions{})
 					return e
 				}); err != nil {
 					return fail(err)
@@ -279,6 +281,33 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// composeStack is the compose target for a registered stack. Every command that drives compose for
+// a stack goes through here, so Sudo cannot be dropped by a call site assembling the struct by hand,
+// which is how `stack deploy`, `stack release` and the release hooks each lost it in turn.
+func composeStack(st *fleet.Stack) compose.Stack {
+	return compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}
+}
+
+// releaseComposeStack is the compose target for a release's `compose up`. The release made one
+// decision about root, in release.Load, which folds the stack's --sudo into the manifest; this reads
+// that decision rather than asking the stack a second time and answering differently from the build
+// and the hooks beside it.
+func releaseComposeStack(st *fleet.Stack, m *release.Manifest) compose.Stack {
+	cs := composeStack(st)
+	cs.Sudo = m.Sudo
+	return cs
+}
+
+// releaseBackupConfig is the pre-release backup of the stack being released, for the same reason:
+// one command asks for root once. The dump and the .env copy are the steps that most need the
+// answer to be the same as the release's, since the .env is the file the flag exists for and a copy
+// of it attempted as the SSH user can leave the release running with no backup of the secret.
+func releaseBackupConfig(st *fleet.Stack, m *release.Manifest) backup.Config {
+	cfg := backupConfig(st)
+	cfg.Sudo = m.Sudo
+	return cfg
 }
 
 func backupConfig(st *fleet.Stack) backup.Config {
@@ -559,7 +588,7 @@ func runStackOpDescribed(name, action, step string, fn func(c sshx.Runner, cs co
 	err = ui.Step(step, func() error {
 		var err error
 		o, err = runOnVM(vm, func(c sshx.Runner) (opOutput, error) {
-			return fn(c, compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo})
+			return fn(c, composeStack(st))
 		})
 		return err
 	})

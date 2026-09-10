@@ -57,12 +57,31 @@ previously accepted is called out here rather than left to be discovered.
   was skipped and the update ran anyway. It is refused, `--no-database` is the deliberate way out,
   and the flag refusal is reported before the configuration one so following the advice does not lead
   to a second refusal. ([#13])
+- **A stack's `--sudo` registration reaches every remote command its release runs.** The prefix was
+  written at each call site by hand, so `stack release` built its images as the SSH user while the
+  `compose up` beside it ran as root ([#8]), and `preDeploy` and `postDeploy` ran unprivileged, which
+  is where `restorecon`, `nginx -t` and `systemctl reload` live ([#36]). One helper writes the prefix
+  now and one field decides: `release.Load` folds the stack's registration into the manifest, and the
+  rsync, the image builds, both hook lists, the pre-release backup and the closing `compose up` all
+  read it. Hooks run as `sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'`, so a compound command is elevated whole instead of
+  up to its first `&&`. `stack deploy` has passed the setting through since 0.2.x, so the behaviour
+  ([#48]) reports is already correct on this branch's base; it is pinned by a test now rather than
+  left to regress.
 
+  Two consequences for a stack registered `--sudo`. The receiving rsync is root, so `-a` starts
+  honouring `-o` and `-g`, and synced files can arrive with the local source's ownership rather than
+  the SSH user's. And hooks run in root's environment (`env_reset`, `secure_path`), so a hook calling
+  a per-user tool needs its absolute path. A manifest saying `"sudo": false` cannot turn the
+  registration back off.
+
+[#8]: https://github.com/BaryoDev/BaryoVM/issues/8
 [#9]: https://github.com/BaryoDev/BaryoVM/issues/9
 [#13]: https://github.com/BaryoDev/BaryoVM/issues/13
 [#17]: https://github.com/BaryoDev/BaryoVM/issues/17
 [#19]: https://github.com/BaryoDev/BaryoVM/issues/19
+[#36]: https://github.com/BaryoDev/BaryoVM/issues/36
 [#42]: https://github.com/BaryoDev/BaryoVM/issues/42
+[#48]: https://github.com/BaryoDev/BaryoVM/issues/48
 
 
 - **`verify` and `postDeploy` commands run from `remoteRoot`.** They ran from the SSH login shell's

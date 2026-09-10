@@ -144,3 +144,28 @@ func TestTheListingScriptTellsEmptyFromUnreadable(t *testing.T) {
 type scriptOnly struct{}
 
 func (scriptOnly) Run(cmd string) (string, error) { return cmd, nil }
+
+// Backup's elevation was pinned by nothing: dropping the sudo from the docker exec, or from the
+// .env copy, left the whole suite green on this branch and on the one before it. It matters more
+// now, because `stack release` derives this config from the release's own decision, so a break
+// here is silent in the one command that runs a backup without being asked to.
+func TestASudoBackupElevatesTheDockerExecAndTheEnvCopy(t *testing.T) {
+	cfg := Config{Name: "app", DBContainer: "pg", DBName: "appdb", DBUser: "postgres", EnvFile: ".env", Dir: "/opt/app", Sudo: true}
+	script, err := Backup(scriptOnly{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"sudo -n docker exec", "sudo -n cp", "sudo -n chown"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("a sudo backup must run %q, got:\n%s", want, script)
+		}
+	}
+
+	plain, err := Backup(scriptOnly{}, Config{Name: "app", DBContainer: "pg", DBName: "appdb", DBUser: "postgres", EnvFile: ".env", Dir: "/opt/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "sudo") {
+		t.Errorf("a stack that did not ask for root must not get it:\n%s", plain)
+	}
+}

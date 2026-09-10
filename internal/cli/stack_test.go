@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -257,5 +258,110 @@ func TestStackBackupsCountsWhatItListed(t *testing.T) {
 	}
 	if twoData == noneData {
 		t.Fatalf("two backups and none serialize the same: %s", twoData)
+	}
+}
+
+// sudoStackFixture registers one stack whose compose dir and .env are root-owned, the case
+// `stack add --sudo` exists for.
+func sudoStackFixture(t *testing.T) {
+	t.Helper()
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	store := &fleet.Store{
+		VMs:    []fleet.VM{{Name: "vm1", Host: "10.0.0.1", User: "opc", KeyPath: "/keys/id"}},
+		Stacks: []fleet.Stack{{Name: "app", VM: "vm1", Dir: "/opt/baryo-cms", Sudo: true}},
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("seed fleet: %v", err)
+	}
+}
+
+// The reported failure: `cd '/opt/baryo-cms' && docker compose up -d` on a stack registered
+// sudo: true, which exits 1 with "open /opt/baryo-cms/.env: permission denied" because the .env is
+// rw------- root root, the right mode for a file holding a database password.
+func TestStackDeployRunsAsRootForASudoStack(t *testing.T) {
+	sudoStackFixture(t)
+	f := &fakeRunner{answers: map[string]string{"up -d": "recreated app\n"}}
+
+	runCmd(t, newStackDeployCmd(), f, false, "app")
+
+	if len(f.seen) != 1 {
+		t.Fatalf("expected one remote command, got %v", f.seen)
+	}
+	want := "sudo -n \"${SHELL:-/bin/sh}\" -c 'cd '\\''/opt/baryo-cms'\\'' && docker compose up -d'"
+	if f.seen[0] != want {
+		t.Fatalf("want %q, got %q", want, f.seen[0])
+	}
+}
+
+// The other half: a stack nobody marked --sudo must reach Docker exactly as it always did.
+func TestAnOrdinaryStackIsNeverRunAsRoot(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  *cobra.Command
+		ans  map[string]string
+	}{
+		{"deploy", newStackDeployCmd(), map[string]string{"up -d": "ok\n"}},
+		{"ps", newStackPsCmd(), map[string]string{" ps": "app running\n"}},
+		{"pull", newStackPullCmd(), map[string]string{" pull": "pulled\n"}},
+		{"logs", newStackLogsCmd(), map[string]string{" logs": "a line\n"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stackFixture(t)
+			f := &fakeRunner{answers: c.ans}
+
+			runCmd(t, c.cmd, f, false, "app")
+
+			if len(f.seen) == 0 {
+				t.Fatal("no remote command ran, so this proves nothing")
+			}
+			for _, cmd := range f.seen {
+				if strings.Contains(cmd, "sudo") {
+					t.Fatalf("the stack is not registered --sudo, but %s asks for root: %s", c.name, cmd)
+				}
+			}
+		})
+	}
+}
+
+// The release's own two reads of the sudo decision. Both were untested, and `stack release` dials
+// sshx.Dial directly rather than going through the runOnVM seam the other stack commands use, so
+// they are pinned where the decision is made instead of through a fake VM.
+
+// The compose up that ends a release. Before this test a constant in either direction passed the
+// whole suite: `true` elevates a stack nobody registered --sudo, `false` puts back the gap #8
+// reported, where the build beside it ran as root and this did not.
+func TestAReleasesComposeUpReadsTheReleasesSudoDecision(t *testing.T) {
+	plain := &fleet.Stack{Name: "app", VM: "vm1", Dir: "/opt/app", File: "docker-compose.yml"}
+
+	// The manifest is where the decision ends up: release.Load folds the stack's --sudo into it, so
+	// reading st.Sudo here is how the release came to answer one question two ways.
+	if cs := releaseComposeStack(plain, &release.Manifest{Sudo: true}); !cs.Sudo {
+		t.Error("the release runs as root, so the compose up that ends it must too")
+	}
+	if cs := releaseComposeStack(plain, &release.Manifest{}); cs.Sudo {
+		t.Error("nothing asked for root, so the compose up must not ask either")
+	}
+	cs := releaseComposeStack(plain, &release.Manifest{})
+	if cs.Dir != "/opt/app" || cs.File != "docker-compose.yml" {
+		t.Errorf("the compose target lost the stack's own fields: %+v", cs)
+	}
+}
+
+// The pre-release backup, which ran from the stack's registration while the build, the rsync, the
+// hooks and the compose up in the same command ran from the manifest. The step that loses is the
+// copy of the .env, which is the file --sudo exists for.
+func TestThePreReleaseBackupReadsTheReleasesSudoDecision(t *testing.T) {
+	plain := &fleet.Stack{Name: "app", VM: "vm1", Dir: "/opt/app", EnvFile: ".env",
+		DBContainer: "pg", DBName: "appdb"}
+
+	if cfg := releaseBackupConfig(plain, &release.Manifest{Sudo: true}); !cfg.Sudo {
+		t.Error("the release runs as root, so the dump and the .env copy before it must too")
+	}
+	if cfg := releaseBackupConfig(plain, &release.Manifest{}); cfg.Sudo {
+		t.Error("nothing asked for root, so the backup must not ask either")
+	}
+	cfg := releaseBackupConfig(plain, &release.Manifest{})
+	if cfg.DBContainer != "pg" || cfg.DBName != "appdb" || cfg.EnvFile != ".env" {
+		t.Errorf("the backup config lost the stack's own fields: %+v", cfg)
 	}
 }

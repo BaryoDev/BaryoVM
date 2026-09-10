@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
-	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -116,7 +115,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 
 		runner := update.SSHRunner{
 			Client:    c,
-			Stack:     compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo},
+			Stack:     composeStack(st),
 			HealthURL: st.HealthURL,
 		}
 		if hasBackup {

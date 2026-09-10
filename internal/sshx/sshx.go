@@ -88,6 +88,46 @@ func (c *Client) Close() error { return c.c.Close() }
 // Quote single-quotes an argument so it is safe to embed in a remote shell command.
 func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// Sudo prefixes a remote command this code built itself with non-interactive sudo, and returns it
+// untouched when the caller did not ask for root.
+//
+// One function writes the prefix. Compose, backup and release each used to write "sudo -n " for
+// themselves, and a stack's Sudo setting reached some of those call sites and not others: an image
+// build ran as the SSH user while the compose up next to it ran as root, and the release hooks had
+// the same gap. One helper is not tidiness here, it is what stops a fifth remote command being
+// built without one.
+//
+// The -n is not optional. Under -o json there is no terminal to answer a password prompt, so a bare
+// sudo hangs until the session times out; -n fails immediately and says why.
+func Sudo(sudo bool, cmd string) string {
+	if !sudo {
+		return cmd
+	}
+	return "sudo -n " + cmd
+}
+
+// SudoShell is Sudo for a command that came from a manifest rather than from this code.
+//
+// It runs the whole string under one root shell, the same shell an unelevated hook would have got. A bare prefix would cover only the first command
+// of "nginx -t && systemctl reload nginx" and leave the reload to fail on its own, which is the
+// half-applied failure these hooks keep producing.
+//
+// A command that already says sudo is wrapped too, and that is deliberate. Sudo inside sudo is
+// harmless: the inner one is already root, so it authorises and execs. Skipping such a string is
+// not harmless, because "sudo -n nginx -t && systemctl reload nginx" starts with sudo and is still
+// half unprivileged, and a hook written with the prefix by hand is the most likely one to be
+// compound, since writing it that way was the workaround for this bug.
+func SudoShell(sudo bool, cmd string) string {
+	if !sudo {
+		return cmd
+	}
+	// $SHELL, not sh. An unelevated hook runs in the SSH login shell, which on these hosts is
+	// bash; `sudo -n "${SHELL:-/bin/sh}" -c` is dash on Debian and Ubuntu, so a hook using [[ ]], source, arrays
+	// or pipefail exits 127 where it worked before. Elevating a command should change who runs
+	// it, not what language it is written in. The fallback covers a session with no SHELL set.
+	return Sudo(true, `"${SHELL:-/bin/sh}" -c `+Quote(cmd))
+}
+
 // PublicKeyFromPrivate reads a private key and returns its OpenSSH public key
 // line (authorized_keys form), so a provisioner can authorize the same key it
 // will later connect with.
