@@ -125,5 +125,7 @@ func rootRun(name string, args ...string) error {
 	if os.Geteuid() == 0 {
 		return run(name, args...)
 	}
-	return run("sudo", append([]string{name}, args...)...)
+	// sudo -n, per CLAUDE.md: under -o json there is no TTY to answer a password
+	// prompt, so a bare sudo hangs where -n fails immediately and legibly.
+	return run("sudo", append([]string{"-n", name}, args...)...)
 }

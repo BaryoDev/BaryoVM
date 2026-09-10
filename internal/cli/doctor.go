@@ -30,14 +30,30 @@ type doctorCheck struct {
 	Optional bool `json:"optional,omitempty"`
 }
 
-// checkedCLIs are the binaries BaryoVM shells out to locally.
+// checkedCLIs are the binaries BaryoVM shells out to locally, and whether a
+// machine without one is actually broken.
 //
-// rsync and ssh are what `stack release` runs to sync source: release.RsyncCmd
-// builds an rsync command and passes ssh as its transport with -e. The Go SSH
-// client covers the command sessions, not that transfer. Missing either one
-// fails the release after the pre-release backup has already run, which is the
-// worst moment to learn a tool is absent, so doctor has to name them.
-var checkedCLIs = []string{"docker", "rsync", "ssh"}
+// rsync and ssh are required: `stack release` runs them to sync source, since
+// release.RsyncCmd builds an rsync command and passes ssh as its transport with
+// -e, and the Go SSH client covers the command sessions rather than that
+// transfer. Missing either fails the release after the pre-release backup has
+// already run, which is the worst moment to learn a tool is absent.
+//
+// docker is not required, and saying otherwise was wrong in a way that mattered:
+// every docker call this tool makes is remote, over the SSH client, on the VM.
+// Nothing runs docker on the operator's machine. A deploy container carrying
+// only rsync and ssh can do everything BaryoVM does, and marking docker required
+// made `baryovm doctor && baryovm stack release app` exit 1 there. It stays on
+// the list because a missing local docker is worth seeing, and --fix still knows
+// how to install it.
+var checkedCLIs = []struct {
+	name     string
+	optional bool
+}{
+	{"docker", true},
+	{"rsync", false},
+	{"ssh", false},
+}
 
 func newDoctorCmd() *cobra.Command {
 	var fix bool
@@ -114,7 +130,8 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 	}
 
 	// Local CLIs BaryoVM may shell out to. --fix auto-installs missing ones.
-	for _, tool := range checkedCLIs {
+	for _, c := range checkedCLIs {
+		tool := c.name
 		var path string
 		var err error
 		if fix {
@@ -122,7 +139,7 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 		} else {
 			path, err = exec.LookPath(tool)
 		}
-		r := doctorCheck{Name: tool, Present: err == nil, Detail: path}
+		r := doctorCheck{Name: tool, Present: err == nil, Detail: path, Optional: c.optional}
 		if err != nil {
 			// Plain lookup only knows it is absent; EnsureCLI knows why it could
 			// not fix that, which is the part the user can act on.

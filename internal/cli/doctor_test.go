@@ -182,7 +182,10 @@ func TestTheJSONEnvelopeCarriesTheHint(t *testing.T) {
 func TestFixSaysWhyItCannotInstallSsh(t *testing.T) {
 	emptyEnv(t)
 	restore := checkedCLIs
-	checkedCLIs = []string{"ssh"}
+	checkedCLIs = []struct {
+		name     string
+		optional bool
+	}{{"ssh", false}}
 	t.Cleanup(func() { checkedCLIs = restore })
 
 	checks := doctorChecks(true, "linux")
