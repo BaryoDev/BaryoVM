@@ -72,12 +72,8 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
 	cmd.Flags().BoolVar(&useSudo, "sudo", false,
-		"run this stack's remote commands via sudo -n: compose, docker, the backup's dump and .env copy, "+
-			"and a release's image builds, hooks and remote rsync (needed when its .env or deploy root is "+
-			"root-owned). Two things change with it: the receiving rsync is root, so -a honours -o and -g and "+
-			"synced files can arrive with the local source's ownership rather than the SSH user's; and hooks "+
-			"run under `sudo -n sh -c`, so sudo's env_reset and secure_path apply, $PATH is root's and $HOME "+
-			"is /root. A release manifest saying \"sudo\": false cannot turn it back off")
+		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
+			"root-owned. See USAGE.md for what it covers and the three things that change with it")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd

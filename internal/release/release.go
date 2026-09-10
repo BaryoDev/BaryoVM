@@ -58,9 +58,15 @@ type Manifest struct {
 	// the SSH user. That follows from asking for root on the far side, and it is the point for a
 	// root-owned webroot, but a tree that used to come out owned by the SSH user no longer does.
 	//
-	// Hooks run under `sudo -n sh -c`, so sudo's env_reset and secure_path apply: $PATH is root's
+	// Hooks run under `sudo -n "${SHELL:-/bin/sh}" -c`, so sudo's env_reset and secure_path apply: $PATH is root's
 	// secure_path and $HOME is /root. A hook calling a tool from the SSH user's own PATH (a per-user
 	// dotnet, nvm's node) exits 127 where it used to work, and a hook writing to $HOME writes into
+	//
+	// One requirement this places on the host: the SSH user needs sudo rights to run a shell, not
+	// only the individual programs. A sudoers line granting `NOPASSWD: /usr/bin/systemctl` alone
+	// refuses `sudo -n "$SHELL" -c ...` with "a password is required", which reads as a password
+	// problem and is a permissions one. That is the host posture the per-command `sudo ` workaround
+	// in a manifest used to match, so it is the one that changes here.
 	// /root. Call such a tool by absolute path.
 	//
 	// Verify is deliberately left alone: it probes the running site rather than acting on the
@@ -286,7 +292,7 @@ func (m *Manifest) PostDeployCmds() []string {
 // Both hooks go through here so they cannot drift apart: same kind of step, same host, same reason.
 //
 // The cd goes inside the root shell, not in front of it. A remoteRoot the SSH user cannot enter is
-// the posture sudo is for here (root-owned, mode 700), and `cd <root> && sudo -n sh -c '<cmd>'`
+// the posture sudo is for here (root-owned, mode 700), and `cd <root> && sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'`
 // fails at the cd before sudo is ever reached, with the sync already landed.
 func (m *Manifest) hook(cmd string) string {
 	return sshx.SudoShell(m.Sudo, m.inRemoteRoot(cmd))

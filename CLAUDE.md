@@ -131,7 +131,7 @@ the closing compose up), and `release.Load` folds the stack's registration into
 it so one release makes one decision.
 
 Nothing writes the prefix by hand. `sshx.Sudo` builds a command this code owns,
-`sshx.SudoShell` wraps a string from a manifest as `sudo -n sh -c '<cmd>'` so a
+`sshx.SudoShell` wraps a string from a manifest as `sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'` so a
 compound command is elevated whole rather than up to its first `&&`. Wrapping is
 unconditional: a string that already says sudo gets wrapped too, because sudo
 inside sudo is harmless and skipping it leaves the second half of the command

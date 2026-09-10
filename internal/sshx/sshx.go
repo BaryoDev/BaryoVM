@@ -108,7 +108,7 @@ func Sudo(sudo bool, cmd string) string {
 
 // SudoShell is Sudo for a command that came from a manifest rather than from this code.
 //
-// It runs the whole string under one root shell. A bare prefix would cover only the first command
+// It runs the whole string under one root shell, the same shell an unelevated hook would have got. A bare prefix would cover only the first command
 // of "nginx -t && systemctl reload nginx" and leave the reload to fail on its own, which is the
 // half-applied failure these hooks keep producing.
 //
@@ -121,7 +121,11 @@ func SudoShell(sudo bool, cmd string) string {
 	if !sudo {
 		return cmd
 	}
-	return Sudo(true, "sh -c "+Quote(cmd))
+	// $SHELL, not sh. An unelevated hook runs in the SSH login shell, which on these hosts is
+	// bash; `sudo -n "${SHELL:-/bin/sh}" -c` is dash on Debian and Ubuntu, so a hook using [[ ]], source, arrays
+	// or pipefail exits 127 where it worked before. Elevating a command should change who runs
+	// it, not what language it is written in. The fallback covers a session with no SHELL set.
+	return Sudo(true, `"${SHELL:-/bin/sh}" -c `+Quote(cmd))
 }
 
 // PublicKeyFromPrivate reads a private key and returns its OpenSSH public key

@@ -50,15 +50,15 @@ func TestSudoShellCoversTheWholeCommand(t *testing.T) {
 	}{
 		{"left alone without sudo", false, "nginx -t && systemctl reload nginx", "nginx -t && systemctl reload nginx"},
 		// A prefix would run only nginx -t as root and leave the reload to fail on its own.
-		{"both halves of a compound command", true, "nginx -t && systemctl reload nginx", `sudo -n sh -c 'nginx -t && systemctl reload nginx'`},
+		{"both halves of a compound command", true, "nginx -t && systemctl reload nginx", `sudo -n "${SHELL:-/bin/sh}" -c 'nginx -t && systemctl reload nginx'`},
 		// A hook already saying sudo is wrapped as well. Sudo inside sudo authorises and execs; the
 		// alternative, returning the string untouched, leaves `systemctl reload nginx` below running
 		// as the SSH user, which is the bug the wrapping exists to stop.
 		{"a command that already says sudo", true, "sudo systemctl reload nginx",
-			`sudo -n sh -c 'sudo systemctl reload nginx'`},
+			`sudo -n "${SHELL:-/bin/sh}" -c 'sudo systemctl reload nginx'`},
 		{"a compound command whose first half says sudo", true, "sudo -n nginx -t && systemctl reload nginx",
-			`sudo -n sh -c 'sudo -n nginx -t && systemctl reload nginx'`},
-		{"a quote survives the wrapping", true, `echo 'hi'`, `sudo -n sh -c 'echo '\''hi'\'''`},
+			`sudo -n "${SHELL:-/bin/sh}" -c 'sudo -n nginx -t && systemctl reload nginx'`},
+		{"a quote survives the wrapping", true, `echo 'hi'`, `sudo -n "${SHELL:-/bin/sh}" -c 'echo '\''hi'\'''`},
 	}
 	for _, c := range cases {
 		if got := SudoShell(c.sudo, c.in); got != c.want {

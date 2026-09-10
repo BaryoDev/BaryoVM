@@ -257,8 +257,8 @@ func TestPostDeployRunsAsRootWhenTheReleaseDoes(t *testing.T) {
 	got := m.PostDeployCmds()
 
 	want := []string{
-		`sudo -n sh -c 'cd '\''/var/www/site'\'' && restorecon -R /var/www/site'`,
-		`sudo -n sh -c 'cd '\''/var/www/site'\'' && systemctl reload nginx'`,
+		`sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/var/www/site'\'' && restorecon -R /var/www/site'`,
+		`sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/var/www/site'\'' && systemctl reload nginx'`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("want %d commands, got %v", len(want), got)
@@ -275,7 +275,7 @@ func TestPreDeployRunsAsRootWhenTheReleaseDoes(t *testing.T) {
 
 	got := m.PreDeployCmds()
 
-	want := `sudo -n sh -c 'cd '\''/opt/app'\'' && grep -q MODE=prod .env'`
+	want := `sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/opt/app'\'' && grep -q MODE=prod .env'`
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("want %q, got %v", want, got)
 	}
@@ -290,7 +290,7 @@ func TestACompoundHookRunsEntirelyAsRoot(t *testing.T) {
 
 	got := m.PostDeployCmds()[0]
 
-	want := `sudo -n sh -c 'cd '\''/var/www/site'\'' && nginx -t && systemctl reload nginx'`
+	want := `sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/var/www/site'\'' && nginx -t && systemctl reload nginx'`
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
@@ -307,13 +307,13 @@ func TestAHookThatAlreadySaysSudoIsStillWrappedWhole(t *testing.T) {
 
 	got := m.PostDeployCmds()[0]
 
-	want := `sudo -n sh -c 'cd '\''/var/www/site'\'' && sudo -n nginx -t && systemctl reload nginx'`
+	want := `sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/var/www/site'\'' && sudo -n nginx -t && systemctl reload nginx'`
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
 }
 
-// The cd belongs inside the root shell. `cd <root> && sudo -n sh -c '<cmd>'` runs the cd as the SSH
+// The cd belongs inside the root shell. `cd <root> && sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'` runs the cd as the SSH
 // user, so a root-owned mode 700 remoteRoot, the posture this flag exists for, fails at the cd with
 // Permission denied and the elevated hook never runs, with the sync already landed.
 func TestAnElevatedHookEntersRemoteRootAsRoot(t *testing.T) {
@@ -324,13 +324,13 @@ func TestAnElevatedHookEntersRemoteRootAsRoot(t *testing.T) {
 	if strings.HasPrefix(got, "cd ") {
 		t.Fatalf("the cd runs as the SSH user, which is the half that cannot enter the root: %s", got)
 	}
-	want := `sudo -n sh -c 'cd '\''/var/www/site'\'' && nginx -t'`
+	want := `sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/var/www/site'\'' && nginx -t'`
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
 }
 
-// The wrapper shape decides a hook's environment as much as its privilege: under `sudo -n sh -c`,
+// The wrapper shape decides a hook's environment as much as its privilege: under `sudo -n "${SHELL:-/bin/sh}" -c`,
 // sudo's env_reset and secure_path apply, so $PATH is root's secure_path and $HOME is /root, and a
 // hook calling a per-user tool exits 127 where it used to work. That is written down on
 // Manifest.Sudo, and pinned here so the shape cannot change back without a test saying so.
@@ -340,11 +340,17 @@ func TestAnElevatedHookRunsUnderOneRootShell(t *testing.T) {
 
 	got := m.PostDeployCmds()[0]
 
-	if !strings.HasPrefix(got, "sudo -n sh -c '") || !strings.HasSuffix(got, "'") {
+	if !strings.HasPrefix(got, "sudo -n \"${SHELL:-/bin/sh}\" -c '") || !strings.HasSuffix(got, "'") {
 		t.Fatalf("a hook must arrive as one quoted argument to one root shell: %s", got)
 	}
-	if n := strings.Count(got, "sh -c"); n != 1 {
+	// One shell, not one per && , which is the failure this wrapper exists to prevent.
+	if n := strings.Count(got, " -c '"); n != 1 {
 		t.Fatalf("one shell for the whole hook, got %d in %s", n, got)
+	}
+	// The login shell, not dash. `sudo -n sh -c` is dash on Debian and Ubuntu, so a hook using
+	// [[ ]], source or pipefail would exit 127 after this change and not before it.
+	if strings.Contains(got, "sudo -n sh -c") {
+		t.Fatalf("an elevated hook must keep the shell an unelevated one would have got: %s", got)
 	}
 }
 
@@ -355,7 +361,7 @@ func TestAHookCarryingAQuoteIsQuotedForTheRootShell(t *testing.T) {
 
 	got := m.PostDeployCmds()[0]
 
-	want := `sudo -n sh -c 'cd '\''/opt/app'\'' && sh -c '\''echo hi'\'''`
+	want := `sudo -n "${SHELL:-/bin/sh}" -c 'cd '\''/opt/app'\'' && sh -c '\''echo hi'\'''`
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
@@ -404,5 +410,36 @@ func TestAReleaseWithoutSudoIsUnchangedEverywhere(t *testing.T) {
 	}
 	if cmds[2] != "cd '/opt/app' && nginx -t" {
 		t.Fatalf("postDeploy changed shape: %q", cmds[2])
+	}
+}
+
+// The fold is one way, and that is a promise made in three doc comments and the flag help: a stack
+// registered --sudo elevates its release even if the manifest says otherwise. The test that covered
+// this used a manifest with no sudo key at all, which does not pin the claim as written.
+func TestAManifestCannotTurnOffAStackRegisteredSudo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "release.json")
+	if err := os.WriteFile(path, []byte(`{"localRoot":".","remoteRoot":"/opt/app","sudo":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Sudo {
+		t.Fatal(`a stack registered --sudo releases as root, even when its manifest says "sudo": false`)
+	}
+
+	// And the other direction still holds: the manifest can ask for root on its own.
+	if err := os.WriteFile(path, []byte(`{"localRoot":".","remoteRoot":"/opt/app","sudo":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err = Load(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Sudo {
+		t.Fatal("a manifest asking for root gets it without the stack being registered --sudo")
 	}
 }

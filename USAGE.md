@@ -234,12 +234,21 @@ The `-n` matters. Without it, a host that does want a password writes the prompt
 channel, which corrupts the protocol stream, so the transfer hangs or dies with something opaque
 instead of telling you sudo needs a password. With `-n` it fails at once and says so.
 
-Two things change when you turn it on. The receiving rsync is root, so `-a` starts honouring `-o`
-and `-g`, which it cannot do as an ordinary user: files arrive with the local source's ownership
-rather than owned by the account you SSH as. And hooks run under `sudo -n sh -c`, so sudo's
-`env_reset` and `secure_path` apply: `$PATH` is root's `secure_path` and `$HOME` is `/root`, so a
-hook calling a per-user tool (a dotnet under your home directory, nvm's node) needs its absolute
-path.
+Three things change when you turn it on.
+
+The receiving rsync is root, so `-a` starts honouring `-o` and `-g`, which it cannot do as an
+ordinary user: files arrive with the local source's ownership rather than owned by the account you
+SSH as.
+
+Hooks run under `sudo -n "${SHELL:-/bin/sh}" -c`, so sudo's `env_reset` and `secure_path` apply:
+`$PATH` is root's `secure_path` and `$HOME` is `/root`, so a hook calling a per-user tool (a dotnet
+under your home directory, nvm's node) needs its absolute path. The shell is the one your login
+shell would have been, not `sh`, so a hook written in bash keeps working.
+
+And the SSH user needs sudo rights to run a *shell*, not only the individual programs. A sudoers
+line granting `NOPASSWD: /usr/bin/systemctl` on its own refuses the whole hook with "a password is
+required", which reads like a password problem and is a permissions one. If that is your host, grant
+the shell or drop `--sudo` and keep the elevation inside each command.
 
 **`postDeploy` runs in order and stops at the first failure.** Putting `nginx -t` before the reload
 means a broken config fails the release loudly instead of reloading nothing and reporting success.

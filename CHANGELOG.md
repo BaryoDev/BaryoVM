@@ -63,7 +63,7 @@ previously accepted is called out here rather than left to be discovered.
   is where `restorecon`, `nginx -t` and `systemctl reload` live ([#36]). One helper writes the prefix
   now and one field decides: `release.Load` folds the stack's registration into the manifest, and the
   rsync, the image builds, both hook lists, the pre-release backup and the closing `compose up` all
-  read it. Hooks run as `sudo -n sh -c '<cmd>'`, so a compound command is elevated whole instead of
+  read it. Hooks run as `sudo -n "${SHELL:-/bin/sh}" -c '<cmd>'`, so a compound command is elevated whole instead of
   up to its first `&&`. `stack deploy` has passed the setting through since 0.2.x, so the behaviour
   ([#48]) reports is already correct on this branch's base; it is pinned by a test now rather than
   left to regress.
