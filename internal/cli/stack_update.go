@@ -81,14 +81,20 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	// A dry run is exempt: it recreates nothing, so it has nothing to go back from.
-	if auto && !dryRun && !hasBackup && !st.NoDatabase {
-		err := fmt.Errorf("%w: %s has no dbContainer or dbName: register them, or record that it has no database with `baryovm stack set-update %s --no-database`", update.ErrNoBackup, name, name)
+	// Before the configuration checks below, because this one is about the flags just
+	// typed. Reported second, it sent an operator off to register a database or record
+	// that there is none, and --no-backup was still refused when they came back.
+	//
+	// A dry run is exempt for the same reason as the configuration check: it recreates
+	// nothing, so there is nothing to go back from.
+	if auto && !dryRun && noBackup {
+		err := fmt.Errorf("--no-backup cannot be combined with --auto: an unattended update keeps a way back")
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	if auto && noBackup {
-		err := fmt.Errorf("--no-backup cannot be combined with --auto: an unattended update keeps a way back")
+	// A dry run is exempt: it recreates nothing, so it has nothing to go back from.
+	if auto && !dryRun && !hasBackup && !st.NoDatabase {
+		err := fmt.Errorf("%w: %s has no dbContainer or dbName: register them, or record that it has no database with `baryovm stack set-update %s --no-database`", update.ErrNoBackup, name, name)
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
