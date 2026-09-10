@@ -73,6 +73,14 @@ State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written
 owner-only (`0600`). It stores hostnames, users and **SSH key paths, never key
 contents or secrets**. See [SECURITY.md](SECURITY.md).
 
+`stack release` needs local **`rsync`** on your PATH, with **`ssh`** as its
+transport: it syncs your source to the VM by running them, and the built-in Go
+SSH client does not cover that transfer. macOS and Linux ship both. Windows does
+not ship rsync, so run BaryoVM inside WSL, or install the rsync package in Git
+Bash. Everything else (`vm add`, `vm ping`, `stack add`,
+`stack deploy`, `stack backup`) needs neither. Run
+`baryovm doctor` to see what is missing before your first release.
+
 ## Quickstart
 
 ```sh
