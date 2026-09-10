@@ -23,6 +23,7 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		Sudo:           true,
 		AutoUpdate:     true,
 		HealthURL:      "http://127.0.0.1:8080/health",
+		NoDatabase:     true,
 		UpdateServices: []string{"app", "admin"},
 	}
 
@@ -49,6 +50,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	}
 	if got.HealthURL != want.HealthURL {
 		t.Errorf("HealthURL: got %q", got.HealthURL)
+	}
+	if !got.NoDatabase {
+		t.Error("NoDatabase was lost: --auto would refuse a stack that has already said it has no database")
 	}
 	if got.DBContainer != want.DBContainer || got.DBName != want.DBName || got.EnvFile != want.EnvFile {
 		t.Errorf("backup settings lost: %+v", got)
@@ -89,6 +93,9 @@ func TestANewStackIsNotAutoUpdatable(t *testing.T) {
 	}
 	if st.HealthURL != "" {
 		t.Error("a new stack has no health URL until one is set")
+	}
+	if st.NoDatabase {
+		t.Error("a new stack must not claim it has no database: that has to be said deliberately")
 	}
 }
 

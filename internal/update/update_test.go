@@ -224,6 +224,82 @@ func TestAutoRefusesAStackItCannotVerify(t *testing.T) {
 	}
 }
 
+func TestAutoRefusesAStackWithNoBackupConfigured(t *testing.T) {
+	f := &fakeRunner{
+		before: []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		after:  []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		// Healthy throughout, so nothing but the refusal itself can stop this update.
+		healthy: []bool{true},
+	}
+	o := opts()
+	o.Auto, o.AutoUpdate, o.HasBackup = true, true, false
+
+	_, err := Run(f, o)
+
+	if !errors.Is(err, ErrNoBackup) {
+		t.Fatalf("expected a refusal without a backup, got %v", err)
+	}
+	// Skipping the backup and skipping the refusal both leave the stack recreated with no way back,
+	// which is what the --no-backup refusal already exists to prevent.
+	if len(f.calls) != 0 {
+		t.Fatalf("must not touch a stack it cannot restore: %v", f.calls)
+	}
+}
+
+// The other half of the refusal: a stack that has no database to register says so once, and keeps
+// being updated unattended. Without this a static site marked autoUpdate has no way back in the
+// literal sense that there is nothing to go back to, and a nightly job would just fail forever.
+func TestAutoUpdatesAStackThatRecordsItHasNoDatabase(t *testing.T) {
+	f := &fakeRunner{
+		before:  []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		after:   []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		healthy: []bool{true},
+	}
+	o := opts()
+	o.Auto, o.AutoUpdate, o.HasBackup, o.NoDatabase = true, true, false, true
+
+	res, err := Run(f, o)
+
+	if err != nil {
+		t.Fatalf("a stack that records it has no database must still update: %v", err)
+	}
+	if !res.Updated {
+		t.Fatalf("expected the update to be applied, got %+v", res)
+	}
+	joined := strings.Join(f.calls, " ")
+	if !strings.Contains(joined, "up:app") {
+		t.Fatalf("expected the service to be recreated: %v", f.calls)
+	}
+	// There is no database, so there must be no backup attempt either.
+	if strings.Contains(joined, "backup") {
+		t.Fatalf("backed up a stack with no database: %v", f.calls)
+	}
+}
+
+// A dry run recreates nothing, so the missing backup is not a reason to refuse it. Reporting that an
+// update is available is exactly how an operator finds out the stack needs a database registered.
+func TestAutoDryRunIsNotRefusedWithoutABackup(t *testing.T) {
+	f := &fakeRunner{
+		before: []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		after:  []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+	}
+	o := opts()
+	o.Auto, o.AutoUpdate, o.HasBackup, o.DryRun = true, true, false, true
+
+	res, err := Run(f, o)
+
+	if err != nil {
+		t.Fatalf("a dry run changes nothing, so it must not be refused: %v", err)
+	}
+	if res.Skipped != "dry run" || len(res.Services) != 1 || res.Services[0] != "app" {
+		t.Fatalf("expected the pending service reported as a dry run, got %+v", res)
+	}
+	joined := strings.Join(f.calls, " ")
+	if strings.Contains(joined, "up:") || strings.Contains(joined, "backup") {
+		t.Fatalf("dry run changed something: %v", f.calls)
+	}
+}
+
 func TestFailedBackupStopsTheUpdate(t *testing.T) {
 	f := &fakeRunner{
 		before:    []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
