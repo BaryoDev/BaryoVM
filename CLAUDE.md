@@ -123,10 +123,19 @@ with `fakeRunner`, asserting on the *order* of calls.
 ### Sudo is `sudo -n`, always
 
 Several stacks keep a root-owned `.env` (correct, it holds a DB password), so
-compose, docker and rsync may all need elevation. Three separate places carry a
-`Sudo` flag: `fleet.Stack.Sudo` (persisted), `compose.Stack.Sudo` /
-`backup.Config.Sudo` (per-operation), and `release.Manifest.Sudo` (the *remote*
-rsync, via `--rsync-path=sudo -n rsync`).
+compose, docker and rsync may all need elevation. `fleet.Stack.Sudo` is the
+persisted answer; `compose.Stack.Sudo` and `backup.Config.Sudo` carry it per
+operation; `release.Manifest.Sudo` carries it for a whole release (the remote
+rsync via `--rsync-path=sudo -n rsync`, the image builds, both hook lists and
+the closing compose up), and `release.Load` folds the stack's registration into
+it so one release makes one decision.
+
+Nothing writes the prefix by hand. `sshx.Sudo` builds a command this code owns,
+`sshx.SudoShell` wraps a string from a manifest as `sudo -n sh -c '<cmd>'` so a
+compound command is elevated whole rather than up to its first `&&`. Wrapping is
+unconditional: a string that already says sudo gets wrapped too, because sudo
+inside sudo is harmless and skipping it leaves the second half of the command
+unprivileged.
 
 The `-n` is not optional. Without it a host that wants a password writes the
 prompt into rsync's data channel and corrupts the protocol stream, so the

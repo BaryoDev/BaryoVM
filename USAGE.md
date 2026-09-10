@@ -146,7 +146,7 @@ Manifest options:
 | `sync` | required | paths under `localRoot` to rsync. **A trailing slash follows rsync's own rule** |
 | `exclude` | none | rsync excludes |
 | `builds` | none | images to build on the VM after syncing |
-| `sudo` | `false` | run the **remote** rsync as root |
+| `sudo` | `false` | run the release's remote steps as root: the far side of the rsync, the image builds, `preDeploy`, `postDeploy` and the closing `compose up`. A stack registered `--sudo` turns this on for its own release and a manifest cannot turn it back off |
 | `noCompose` | `false` | skip `docker compose up` at the end |
 | `postDeploy` | none | commands to run on the VM after syncing and building |
 | `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
@@ -206,9 +206,9 @@ serves, and it needs three things a compose stack does not: a root-owned destina
   "sudo": true,
   "noCompose": true,
   "postDeploy": [
-    "sudo restorecon -R /var/www/baryo-web || true",
-    "sudo nginx -t",
-    "sudo systemctl reload nginx"
+    "restorecon -R /var/www/baryo-web || true",
+    "nginx -t",
+    "systemctl reload nginx"
   ]
 }
 ```
@@ -223,13 +223,23 @@ baryovm stack release baryo-web
 
 Three notes worth having before you run it:
 
-**`sudo` elevates the remote rsync, not the local one.** It becomes `--rsync-path="sudo -n rsync"`,
-because it is the copy of rsync running on the VM that needs to write into a root-owned path. The
-account you SSH as needs passwordless sudo for it.
+**`sudo` elevates the remote side, not the local one.** The rsync becomes
+`--rsync-path="sudo -n rsync"`, because it is the copy of rsync running on the VM that needs to
+write into a root-owned path, and the image builds, both hook lists and the closing `compose up`
+run as root on the VM for the same reason. The account you SSH as needs passwordless sudo for it.
+A stack registered with `stack add --sudo` gets all of this for its release even if the manifest
+says nothing, and the fold is one way: `"sudo": false` in the manifest cannot turn it off again.
 
 The `-n` matters. Without it, a host that does want a password writes the prompt into rsync's data
 channel, which corrupts the protocol stream, so the transfer hangs or dies with something opaque
 instead of telling you sudo needs a password. With `-n` it fails at once and says so.
+
+Two things change when you turn it on. The receiving rsync is root, so `-a` starts honouring `-o`
+and `-g`, which it cannot do as an ordinary user: files arrive with the local source's ownership
+rather than owned by the account you SSH as. And hooks run under `sudo -n sh -c`, so sudo's
+`env_reset` and `secure_path` apply: `$PATH` is root's `secure_path` and `$HOME` is `/root`, so a
+hook calling a per-user tool (a dotnet under your home directory, nvm's node) needs its absolute
+path.
 
 **`postDeploy` runs in order and stops at the first failure.** Putting `nginx -t` before the reload
 means a broken config fails the release loudly instead of reloading nothing and reporting success.
@@ -253,9 +263,12 @@ baryovm stack restore baryoclub --file db-YYYY….dump --yes
 ```
 
 If the project's `.env` is root-owned, the right posture for a file holding the database password,
-add `--sudo`, and every docker and file operation for that stack runs through `sudo -n`. Without it
-compose fails with "permission denied" reading the file, even though Docker itself is reachable.
-Loosening the file to suit the tool would be the wrong trade.
+add `--sudo`, and that stack's docker and compose commands, its backup's dump and `.env` copy, and
+its release's builds, hooks and remote rsync all run through `sudo -n`. Without it compose fails
+with "permission denied" reading the file, even though Docker itself is reachable. Loosening the
+file to suit the tool would be the wrong trade. The backup script's own file handling (creating the
+backup directory, writing the dump, pruning) stays as the SSH user, so `--backup-dir` has to be a
+directory that user can write.
 
 ```sh
 baryovm stack add baryodev --vm oracle --path /opt/baryo-cms --sudo \

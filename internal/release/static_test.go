@@ -43,7 +43,7 @@ func TestStaticFieldsDefaultToComposeBehaviour(t *testing.T) {
 	}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m, err := Load(path)
+	m, err := Load(path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestStaticManifestRoundTrips(t *testing.T) {
 	}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m, err := Load(path)
+	m, err := Load(path, false)
 	if err != nil {
 		t.Fatal(err)
 	}

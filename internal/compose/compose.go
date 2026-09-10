@@ -31,26 +31,15 @@ type Stack struct {
 }
 
 func (s Stack) base() string {
-	b := "cd " + sshx.Quote(s.Dir) + " && "
-	if s.Sudo {
-		// -n so a host that would prompt for a password fails loudly instead of hanging a
-		// non-interactive session until it times out.
-		b += "sudo -n "
-	}
-	b += "docker compose"
+	cmd := "docker compose"
 	if s.File != "" {
-		b += " -f " + sshx.Quote(s.File)
+		cmd += " -f " + sshx.Quote(s.File)
 	}
-	return b
+	return "cd " + sshx.Quote(s.Dir) + " && " + sshx.Sudo(s.Sudo, cmd)
 }
 
 // docker returns a plain `docker` invocation (not compose), honouring the same sudo choice.
-func (s Stack) docker() string {
-	if s.Sudo {
-		return "sudo -n docker"
-	}
-	return "docker"
-}
+func (s Stack) docker() string { return sshx.Sudo(s.Sudo, "docker") }
 
 // UpOptions controls a deploy.
 type UpOptions struct {
