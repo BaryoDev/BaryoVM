@@ -10,10 +10,12 @@
 package toolchain
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 )
@@ -80,7 +82,16 @@ func installDocker() error {
 			return err
 		}
 		defer os.Remove(f.Name())
-		out, err := exec.Command("curl", "-fsSL", "https://get.docker.com").Output()
+
+		// Bounded, because the point of routing this through rootRun was to stop
+		// doctor --fix hanging on a sudo prompt it cannot answer, and an unbounded
+		// download is the same hang wearing a different hat. Belt and braces: curl's
+		// own timeouts, and a context in case curl ignores them.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx,
+			"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "120",
+			"https://get.docker.com").Output()
 		if err != nil {
 			f.Close()
 			return fmt.Errorf("fetching the docker install script: %w", err)
@@ -89,7 +100,11 @@ func installDocker() error {
 			f.Close()
 			return err
 		}
-		f.Close()
+		// Checked, not deferred: a write that only fails at close leaves a truncated
+		// script, and running half an installer as root is worse than not running it.
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("writing the docker install script: %w", err)
+		}
 		return rootRun("/bin/sh", f.Name())
 	default:
 		return fmt.Errorf("automatic docker install is not supported on %s", runtime.GOOS)
