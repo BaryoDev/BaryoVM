@@ -68,6 +68,13 @@ type Stack struct {
 	// crash loop is worse than no update at all.
 	HealthURL string `json:"healthUrl,omitempty"`
 
+	// NoDatabase records that this stack has no database, as a static site does. An unattended
+	// update otherwise refuses a stack with no dbContainer or dbName, since recreating containers
+	// with nothing to restore from is the case rollback exists for. An empty dbContainer cannot tell
+	// "there is no database" from "nobody registered it yet", so the first is said out loud here and
+	// a cron job can keep updating a stack that genuinely has none.
+	NoDatabase bool `json:"noDatabase,omitempty"`
+
 	// UpdateServices limits which services an update touches. Empty means all of them.
 	UpdateServices []string `json:"updateServices,omitempty"`
 }

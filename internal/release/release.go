@@ -94,8 +94,19 @@ func Load(path string) (*Manifest, error) {
 // localRoot/<sub> → user@host:remoteRoot/ (so it lands at remoteRoot/<sub>),
 // with --delete scoped to that subdir, so the compose dir (with its .env) is never
 // in the sync list, so secrets can't be wiped.
-func (m *Manifest) RsyncCmd(sub, user, host, key string) *exec.Cmd {
-	ssh := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=accept-new -o BatchMode=yes", key)
+func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.Cmd {
+	// The VM's port, not rsync's default of 22. Every other path to the VM goes through
+	// VM.Target() and sshx.Dial, which honour it, so a VM on 2222 used to have its commands go to
+	// 2222 and its file transfer go to 22: a failure at best, and the wrong machine at worst.
+	if port <= 0 {
+		port = 22
+	}
+	// Quoted for rsync's own parser, not for a shell: rsync splits this string itself and execs ssh
+	// directly, with no shell anywhere in the chain. Unquoted, a key path with a space in it becomes
+	// two arguments. expand() resolves a leading ~ here so the path that gets quoted is the path that
+	// gets opened, rather than depending on ssh's own tilde handling for -i.
+	ssh := fmt.Sprintf("ssh -i %s -p %d -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+		quoteRsync(expand(key)), port)
 	args := []string{"-az", "--delete", "-e", ssh}
 	if m.Sudo {
 		// The remote end, not the local one. rsync runs a copy of itself on the far side and
@@ -141,6 +152,16 @@ func (m *Manifest) BuildCmd(b Build) string {
 	cmd += " -t " + q(b.Image) + " " + q(m.RemoteRoot+"/"+b.Context)
 	return cmd
 }
+
+// quoteRsync single-quotes one argument of the -e remote-shell string, using rsync's convention
+// rather than the shell's.
+//
+// rsync parses that string with its own tokenizer, where one literal quote inside a quoted run is
+// written by doubling it. sshx.Quote writes the shell's form instead: close the run, escape the
+// quote with a backslash, reopen. rsync reads that reopening quote as the start of a new run and
+// dies with "Missing trailing-' in remote-shell command" before ssh is ever reached. Same job,
+// different parser, so not the same function.
+func quoteRsync(p string) string { return "'" + strings.ReplaceAll(p, "'", "''") + "'" }
 
 func expand(p string) string {
 	if strings.HasPrefix(p, "~/") {

@@ -62,7 +62,7 @@ type UpOptions struct {
 
 // Up brings the stack (or selected services) up in the background, optionally
 // pulling first. Mirrors the manual `compose up -d --force-recreate` flow.
-func Up(c *sshx.Client, s Stack, o UpOptions) (string, error) {
+func Up(c sshx.Runner, s Stack, o UpOptions) (string, error) {
 	var out strings.Builder
 	if o.Pull {
 		p, err := Pull(c, s, o.Services)
@@ -85,7 +85,7 @@ func Up(c *sshx.Client, s Stack, o UpOptions) (string, error) {
 }
 
 // Pull fetches the latest images for the stack (or selected services).
-func Pull(c *sshx.Client, s Stack, svcs []string) (string, error) {
+func Pull(c sshx.Runner, s Stack, svcs []string) (string, error) {
 	return c.Run(s.PullCmd(svcs))
 }
 
@@ -98,7 +98,7 @@ func (s Stack) PullCmd(svcs []string) string { return s.base() + " pull" + servi
 // Hub alongside a locally built api and web. A plain pull fails the whole command on the first
 // local-only image, which would make those stacks permanently un-updatable. Skipping them is right:
 // an image with no registry to check cannot have a newer version to find.
-func PullUpdatable(c *sshx.Client, s Stack, svcs []string) (string, error) {
+func PullUpdatable(c sshx.Runner, s Stack, svcs []string) (string, error) {
 	return c.Run(s.PullUpdatableCmd(svcs))
 }
 
@@ -108,7 +108,7 @@ func (s Stack) PullUpdatableCmd(svcs []string) string {
 }
 
 // Ps lists the stack's containers.
-func Ps(c *sshx.Client, s Stack) (string, error) {
+func Ps(c sshx.Runner, s Stack) (string, error) {
 	return c.Run(s.base() + " ps")
 }
 
@@ -136,7 +136,7 @@ func (i Image) Stale() bool {
 // sha256 with a Repository of "sha256", which is useless as a rollback target, since `docker tag` needs a
 // name. The id is what makes rollback possible at all: once a pull moves the tag, the previous image
 // survives on the host as an untagged id and nothing else points at it.
-func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
+func Images(c sshx.Runner, s Stack, svcs []string) ([]Image, error) {
 	// The Go template over `config` avoids depending on a JSON shape that differs between compose
 	// versions, and skips build-only services, which have no image to pull or roll back.
 	out, err := c.Run(s.ConfigCmd())
@@ -182,7 +182,7 @@ func Images(c *sshx.Client, s Stack, svcs []string) ([]Image, error) {
 func (s Stack) ConfigCmd() string { return s.base() + " config --format json" }
 
 // runningImages maps service -> the image id its container is actually running.
-func runningImages(c *sshx.Client, s Stack, svcs []string) (map[string]string, error) {
+func runningImages(c sshx.Runner, s Stack, svcs []string) (map[string]string, error) {
 	out, err := c.Run(s.base() + ` ps -a --format '{{.Service}}\t{{.Image}}'` + services(svcs))
 	if err != nil {
 		return nil, err
@@ -241,17 +241,112 @@ func sortedKeys(m map[string]string) []string {
 // Retag points a reference back at a specific image id, so `up -d` recreates from it. This is how an
 // update is undone: the tag has already moved to the new image, and the old one survives only as an
 // id until the next prune.
-func Retag(c *sshx.Client, s Stack, id, ref string) (string, error) {
+func Retag(c sshx.Runner, s Stack, id, ref string) (string, error) {
 	return c.Run(s.docker() + " tag " + sshx.Quote(id) + " " + sshx.Quote(ref))
 }
 
 // Logs returns recent logs for the stack (or selected services).
-func Logs(c *sshx.Client, s Stack, svcs []string, tail int) (string, error) {
+func Logs(c sshx.Runner, s Stack, svcs []string, tail int) (string, error) {
 	cmd := s.base() + " logs --no-color"
 	if tail > 0 {
 		cmd += " --tail " + strconv.Itoa(tail)
 	}
 	return c.Run(cmd + services(svcs))
+}
+
+// LogsResult is a logs read, described well enough that an empty one cannot be mistaken for a
+// failed one, or for a stack that is not running.
+//
+// An empty log is a real answer: a container whose app logs to a file inside it writes nothing to
+// stdout, which is the default for most .NET templates. Reporting that as {"output": ""} made it
+// byte-for-byte identical to looking at the wrong container, the wrong host, or never reaching
+// Docker at all, and the reader has no way to tell which they got.
+type LogsResult struct {
+	Output string `json:"output"`
+	Lines  int    `json:"lines"`
+	State  string `json:"state"`
+	Note   string `json:"note,omitempty"`
+}
+
+// The states a read can be in. They exist because `docker compose logs` answers exit 0 with zero
+// bytes for two different situations, and a machine consumer has to act on them differently: a
+// silent container wants its logging config looked at, a stack with no containers wants deploying.
+const (
+	LogsRead       = "read"        // lines came back
+	LogsSilent     = "silent"      // no lines, but the stack has containers
+	LogsNotRunning = "not-running" // no lines, because the stack has no containers
+	LogsUnknown    = "unknown"     // no lines, and asking for the containers failed
+)
+
+// Notes for the states a human needs explaining. A read with lines in it explains itself.
+const (
+	SilentLogsNote = "the stack's containers are running and wrote nothing to stdout or stderr: " +
+		"an app that logs to a file inside the container shows nothing here"
+	// Deliberately "nothing running" rather than "no containers": compose ps -q
+	// lists running containers, so a container that exited, or one stopped service
+	// in an otherwise running stack, reaches this note too. Saying the stack has no
+	// containers would be wrong in both those cases.
+	NotRunningLogsNote = "nothing is running for this stack, so there is nothing to log: " +
+		"start it with `baryovm stack deploy`, or check `baryovm stack ps`"
+	UnknownLogsNote = "no logs came back and the container check did not answer either: " +
+		"check `baryovm stack ps`"
+)
+
+// PsQuietCmd lists the ids of the stack's containers, one per line, and prints nothing at all when
+// the project has none. It is how a silent container is told from an absent one.
+func (s Stack) PsQuietCmd(svcs []string) string { return s.base() + " ps -q" + services(svcs) }
+
+// ReadLogs fetches the stack's recent logs and says which of the three zero-exit outcomes it got.
+//
+// A read with lines in it costs one round trip, as before. A read with none costs a second, for
+// `compose ps -q`, because that is the only thing that separates "running and silent" from "not
+// running", and the two must not serialize the same.
+func ReadLogs(c sshx.Runner, s Stack, svcs []string, tail int) (LogsResult, error) {
+	out, err := Logs(c, s, svcs, tail)
+	if err != nil {
+		return LogsResult{}, err
+	}
+	r := describeLogs(out)
+	if r.Lines > 0 {
+		return r, nil
+	}
+	ids, err := c.Run(s.PsQuietCmd(svcs))
+	if err != nil {
+		return r, nil
+	}
+	return r.withContainers(ids), nil
+}
+
+// describeLogs counts what compose returned.
+//
+// Blank lines do not count. Output that is only newlines is nothing read, and treating it as a
+// line would put the ambiguity straight back. A read with no lines is left LogsUnknown, because
+// the output on its own cannot say why there were none: that is withContainers' job.
+func describeLogs(out string) LogsResult {
+	r := LogsResult{Output: out, State: LogsRead}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			r.Lines++
+		}
+	}
+	if r.Lines == 0 {
+		r.State, r.Note = LogsUnknown, UnknownLogsNote
+	}
+	return r
+}
+
+// withContainers resolves a zero-line read with the answer to PsQuietCmd: ids mean the containers
+// are running and silent, no ids mean there is nothing running to log.
+func (r LogsResult) withContainers(ids string) LogsResult {
+	if r.Lines > 0 {
+		return r
+	}
+	if strings.TrimSpace(ids) == "" {
+		r.State, r.Note = LogsNotRunning, NotRunningLogsNote
+		return r
+	}
+	r.State, r.Note = LogsSilent, SilentLogsNote
+	return r
 }
 
 func services(svcs []string) string {

@@ -75,6 +75,16 @@ func Warnf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", WarnStyle.Render("!"), fmt.Sprintf(format, a...))
 }
 
+// Notef prints a dim line about something worth saying that is not an outcome, usually the absence
+// of data. Chrome, so stderr like the rest of it, and gone entirely in JSON mode where the envelope
+// carries the same fact as a field.
+func Notef(format string, a ...any) {
+	if jsonMode {
+		return
+	}
+	fmt.Fprintln(os.Stderr, DimStyle.Render(fmt.Sprintf(format, a...)))
+}
+
 // Errorf prints a red error line.
 func Errorf(format string, a ...any) {
 	if jsonMode {

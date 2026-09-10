@@ -47,6 +47,9 @@ type Options struct {
 	HasHealthCheck bool
 	// HasBackup is false when the stack has no database configured.
 	HasBackup bool
+	// NoDatabase is the stack's recorded statement that it has no database at all, which is what
+	// separates a static site from one whose database was never registered.
+	NoDatabase bool
 	// SkipBackup bypasses the pre-update backup. Never set this for an unattended run.
 	SkipBackup bool
 	// DryRun reports whether an update is available and changes nothing.
@@ -76,17 +79,27 @@ var ErrNotAutoUpdatable = errors.New("stack is not marked autoUpdate")
 // ErrNoHealthCheck is returned when an unattended update has no way to verify itself.
 var ErrNoHealthCheck = errors.New("stack has no healthUrl, so an update cannot be verified or rolled back")
 
+// ErrNoBackup is returned when an unattended update has no backup to go back to. It is the same rule
+// that refuses --auto with --no-backup: a stack with no database configured has no way back either,
+// and the outcome of never configuring one is identical to asking to skip it. A stack that has no
+// database to register says so with NoDatabase and is not refused.
+var ErrNoBackup = errors.New("stack has no database configured, so an unattended update has no way back")
+
 // Run performs the update. It returns a Result describing what happened; an error means the stack
 // may need attention, and Result.RolledBack says whether it was put back first.
 func Run(r Runner, o Options) (Result, error) {
 	if o.Auto {
-		// Both of these are refusals on purpose: an unattended run must be opted into, and must be
-		// able to tell a healthy start from a crash loop.
+		// These are refusals on purpose: an unattended run must be opted into, must be able to tell a
+		// healthy start from a crash loop, and must have a backup configured to go back to.
 		if !o.AutoUpdate {
 			return Result{Skipped: "not marked autoUpdate"}, ErrNotAutoUpdatable
 		}
 		if !o.HasHealthCheck {
 			return Result{Skipped: "no healthUrl"}, ErrNoHealthCheck
+		}
+		// A dry run is exempt because it recreates nothing, so it has nothing to go back from.
+		if !o.HasBackup && !o.NoDatabase && !o.DryRun {
+			return Result{Skipped: "no backup configured"}, ErrNoBackup
 		}
 	}
 

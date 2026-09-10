@@ -10,6 +10,11 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Added
 
+- **`stack set-update --no-database`, so a stack with no database can still update unattended.** It
+  pairs with the refusal below: a stack that genuinely has nothing to back up records that once,
+  deliberately, instead of being silently exempt from a safety rule.
+
+
 - **`vm harden` and `vm threats`.** A VM with a public SSH port is found within minutes: the box
   this was written on took 494 invalid-user attempts from 46 sources in 14 hours. `vm harden`
   applies an idempotent policy, sshd `PerSourcePenalties` where the daemon supports them plus
@@ -26,6 +31,39 @@ previously accepted is called out here rather than left to be discovered.
   `remoteRoot` handling as `postDeploy`. ([#59])
 
 ### Fixed
+
+- **`stack release` sent rsync to port 22 no matter what port the VM was registered on.** `RsyncCmd`
+  never received the `Port` field that `vm add` sets and that `VM.Target()` and `sshx.Dial` honour
+  everywhere else, so a VM on `--port 2222` had its command sessions on 2222 and its file sync on 22.
+  The key path is quoted now as well, using rsync's own convention. rsync parses the `-e` value
+  itself rather than handing it to a shell, which was checked by pointing `-e` at a program that
+  printed its argv, so the shell escape a first attempt used made rsync exit with
+  `Missing trailing-'` instead of fixing anything. ([#9])
+- **`stack logs` answered an empty log and a failed look with the same bytes.** `{"output": ""}` was
+  what you got for a healthy container whose app writes to a file, for a stack that was not running,
+  and for a read that did not reach Docker. The result now carries a state (`read`, `silent`,
+  `not-running`, `unknown`), a line count and a note, so a machine consumer can tell them apart
+  rather than a human inferring it. `stack backups` had the same shape and gets the same treatment.
+  The other commands' envelopes are unchanged, and a test pins them byte for byte. ([#19])
+- **`doctor` did not check the tools a release actually runs.** It checked the docker binary, which
+  nothing local uses, since every docker call BaryoVM makes is remote over SSH, and it missed `rsync`
+  and `ssh`, which `stack release` shells out to on the operator's own machine. A release without
+  them failed after the pre-release backup had already run. rsync and ssh are required now, docker is
+  reported without failing the machine, and `--fix` installs rsync where it can and says why when it
+  cannot. The dead AWS installer is gone. ([#17], [#42])
+- **`stack update --auto` ran unattended on a stack with no way back.** It already refused a stack
+  without `autoUpdate`, without a `healthUrl`, and `--auto --no-backup`, all so an unattended update
+  keeps a way back. A stack with no `dbContainer` and no `dbName` fell through all three: the backup
+  was skipped and the update ran anyway. It is refused, `--no-database` is the deliberate way out,
+  and the flag refusal is reported before the configuration one so following the advice does not lead
+  to a second refusal. ([#13])
+
+[#9]: https://github.com/BaryoDev/BaryoVM/issues/9
+[#13]: https://github.com/BaryoDev/BaryoVM/issues/13
+[#17]: https://github.com/BaryoDev/BaryoVM/issues/17
+[#19]: https://github.com/BaryoDev/BaryoVM/issues/19
+[#42]: https://github.com/BaryoDev/BaryoVM/issues/42
+
 
 - **`verify` and `postDeploy` commands run from `remoteRoot`.** They ran from the SSH login shell's
   home, so a command written against the repository, such as `sh scripts/check-live-demo.sh`, exited
