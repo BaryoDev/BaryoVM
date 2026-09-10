@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/BaryoDev/BaryoVM/security/advisories/new
+    about: Report privately. Please do not open a public issue for anything exploitable.
+  - name: How to contribute
+    url: https://github.com/BaryoDev/BaryoVM/blob/main/CONTRIBUTING.md
+    about: Build and test, branch naming, and the one rule that matters most here.

@@ -1,0 +1,30 @@
+name: Feature or change
+description: Something BaryoVM should do, or should do differently
+labels: ["type/feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem, from a real situation
+      description: >
+        What were you doing when you wanted this? A concrete case is worth more than a general
+        principle, and it is what decides the shape of the answer.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think it should do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you considered instead, and why it is worse
+  - type: checkboxes
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - label: This adds or changes a command or flag, so USAGE.md needs updating
+        - label: This changes what `-o json` emits, which is a contract an app or MCP server drives

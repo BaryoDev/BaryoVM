@@ -26,3 +26,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Writes the formula into arnelirobles/homebrew-tap, which GITHUB_TOKEN cannot reach
+          # because it is scoped to this repository. Deliberately defaulted to empty rather than
+          # left unset: .goreleaser.yaml reads it in a template, and an unset variable would fail
+          # the template instead of skipping the step.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -43,3 +43,42 @@ changelog:
 release:
   draft: false
   prerelease: auto
+
+# A self-maintained tap, so installing needs no Go toolchain. The unprefixed
+# `brew install baryovm` lives in homebrew-core, which requires 90 forks, 90 watchers or
+# 225 stars for a self-submitting owner, so it is not the target yet. With a tap the same
+# thing costs one extra word, or one extra command:
+#
+#   brew install arnelirobles/tap/baryovm      # cold machine, no tap step
+#   brew tap arnelirobles/tap && brew install baryovm
+#
+# The tap is on a personal account rather than the org because a tap is a namespace, not a
+# product: the formula name is what people type, and it should not move if the org does.
+#
+# A cask, not the older `brews` block, which GoReleaser deprecated in v2.16. Casks are macOS
+# only, so Linux Homebrew is not covered here; the release archive is the Linux path and the
+# README says so rather than implying brew works everywhere.
+homebrew_casks:
+  - name: baryovm
+    repository:
+      owner: arnelirobles
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/BaryoDev/BaryoVM"
+    description: "PaaS-style deploys on your own cheap VMs: agentless, over SSH, from one CLI"
+    # The binary is not signed or notarised, so macOS quarantines anything downloaded and
+    # Gatekeeper refuses to run it with a message about an unidentified developer. Clearing the
+    # attribute on install is what makes `brew install` produce a working command rather than a
+    # file the user has to right-click past.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/baryovm"]
+          end
+    # The release must not fail because a token is absent. Publishing the formula is the last
+    # and least important step of a release, and everything before it is already irreversible
+    # by the time this runs, so a missing secret skips the tap rather than failing the tag.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_TOKEN "" }}true{{ else }}false{{ end }}'
