@@ -75,11 +75,13 @@ contents or secrets**. See [SECURITY.md](SECURITY.md).
 
 `stack release` needs local **`rsync`** on your PATH, with **`ssh`** as its
 transport: it syncs your source to the VM by running them, and the built-in Go
-SSH client does not cover that transfer. macOS and Linux ship both. Windows does
-not ship rsync, so run BaryoVM inside WSL, or install the rsync package in Git
-Bash. Everything else (`vm add`, `vm ping`, `stack add`,
-`stack deploy`, `stack backup`) needs neither. Run
-`baryovm doctor` to see what is missing before your first release.
+SSH client does not cover that transfer. macOS ships both, and every Linux
+package manager has rsync, though a minimal image may not have it installed
+(`baryovm doctor --fix` installs it). Windows does not ship rsync, so run
+BaryoVM inside WSL, or install the rsync package in Git Bash. Everything else
+(`vm add`, `vm ping`, `stack add`, `stack deploy`, `stack backup`) needs
+neither. Run `baryovm doctor` to see what is missing before your first
+release.
 
 ## Quickstart
 

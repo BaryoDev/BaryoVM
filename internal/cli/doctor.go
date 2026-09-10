@@ -5,10 +5,12 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/toolchain"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -21,6 +23,11 @@ type doctorCheck struct {
 	Present bool   `json:"present"`
 	Detail  string `json:"detail"`
 	Hint    string `json:"hint,omitempty"`
+	// Optional marks a check that a working machine may legitimately fail: the
+	// cloud credential files matter only if you provision through a provider.
+	// ok is computed over the required checks, so a box with every release tool
+	// and no cloud account is reported ready, which it is.
+	Optional bool `json:"optional,omitempty"`
 }
 
 // checkedCLIs are the binaries BaryoVM shells out to locally.
@@ -38,19 +45,28 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Check (and with --fix, auto-install) local prerequisites",
 		Long: "Reports the local tools and cloud credentials BaryoVM uses. With --fix,\n" +
-			"any missing command-line tool is downloaded and installed rather than erroring.",
+			"a missing tool BaryoVM knows how to install is installed; anything it cannot\n" +
+			"install is reported with what to do about it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			results := doctorChecks(fix, runtime.GOOS)
-			allOK := true
+			var missing []string
 			for _, r := range results {
-				if !r.Present {
-					allOK = false
+				if !r.Present && !r.Optional {
+					missing = append(missing, r.Name)
 				}
+			}
+			var err error
+			if len(missing) > 0 {
+				err = fmt.Errorf("missing: %s", strings.Join(missing, ", "))
 			}
 
 			if ui.JSON() {
-				ui.Emit(ui.Result{OK: allOK, Action: "doctor", Data: results})
-				return nil
+				res := ui.Result{OK: err == nil, Action: "doctor", Data: results}
+				if err != nil {
+					res.Error = err.Error()
+				}
+				ui.Emit(res)
+				return err
 			}
 			ui.Title("BaryoVM doctor")
 			for _, r := range results {
@@ -63,13 +79,17 @@ func newDoctorCmd() *cobra.Command {
 					ui.Detail("hint", r.Hint)
 				}
 			}
-			if !allOK && !fix {
-				ui.Detail("hint", "run `baryovm doctor --fix` to auto-install missing tools")
+			if err == nil {
+				return nil
 			}
-			return nil
+			if !fix {
+				ui.Detail("hint", "run `baryovm doctor --fix` to install what BaryoVM can install")
+			}
+			ui.Emit(ui.Result{OK: false, Action: "doctor", Error: err.Error()})
+			return err
 		},
 	}
-	cmd.Flags().BoolVar(&fix, "fix", false, "download and install anything missing")
+	cmd.Flags().BoolVar(&fix, "fix", false, "install the missing tools BaryoVM knows how to install")
 	return cmd
 }
 
@@ -90,7 +110,7 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 		if !present {
 			detail = "not found at " + c.path
 		}
-		results = append(results, doctorCheck{Name: c.name, Present: present, Detail: detail})
+		results = append(results, doctorCheck{Name: c.name, Present: present, Detail: detail, Optional: true})
 	}
 
 	// Local CLIs BaryoVM may shell out to. --fix auto-installs missing ones.
@@ -102,8 +122,14 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 		} else {
 			path, err = exec.LookPath(tool)
 		}
-		r := doctorCheck{Name: tool, Present: err == nil, Detail: valOrErr(path, err)}
-		if !r.Present {
+		r := doctorCheck{Name: tool, Present: err == nil, Detail: path}
+		if err != nil {
+			// Plain lookup only knows it is absent; EnsureCLI knows why it could
+			// not fix that, which is the part the user can act on.
+			r.Detail = "missing"
+			if fix {
+				r.Detail = err.Error()
+			}
 			r.Hint = missingToolHint(tool, goos)
 		}
 		results = append(results, r)
@@ -112,19 +138,23 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 }
 
 // missingToolHint answers "now what" where "missing" is not actionable on its
-// own. Windows ships no rsync, so a Windows user otherwise gets all the way to
-// the first `stack release` before anything says the platform is the problem.
+// own: the platform ships no such package, or BaryoVM has no installer for it
+// and --fix will not be the answer however many times you run it.
 func missingToolHint(tool, goos string) string {
-	if tool == "rsync" && goos == "windows" {
+	switch {
+	case tool == "rsync" && goos == "windows":
 		return "Windows does not ship rsync, and `stack release` needs it: run BaryoVM inside WSL, " +
 			"or install the rsync package in Git Bash, then check rsync is on PATH"
+	case tool == "rsync" && goos == "darwin":
+		return "install it with `brew install rsync`, or run `baryovm doctor --fix`"
+	case tool == "rsync":
+		return "install the rsync package with your distro's package manager, or run `baryovm doctor --fix`"
+	case tool == "ssh" && goos == "windows":
+		return "install the OpenSSH client (Settings, Optional features) or run BaryoVM inside WSL; " +
+			"--fix does not install ssh"
+	case tool == "ssh":
+		return "install your OpenSSH client package (openssh-client on Debian, openssh-clients on " +
+			"Fedora, already present on macOS so check PATH); --fix does not install ssh"
 	}
 	return ""
-}
-
-func valOrErr(v string, err error) string {
-	if err != nil {
-		return "missing"
-	}
-	return v
 }
