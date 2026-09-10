@@ -6,11 +6,14 @@ not fail a unit test, it runs on a live host. That shapes everything below.
 ## Build and test
 
 ```sh
-go build ./...          # everything compiles
-go vet ./...            # must be clean
-go test -race ./...     # what CI runs
-gofmt -l .              # must print nothing; CI fails on any output
+go build ./...                 # everything compiles
+go vet ./...                   # must be clean
+go test -race ./...            # what CI runs
+test -z "$(gofmt -l .)"        # must be silent; see below
 ```
+
+`gofmt -l` lists unformatted files and **exits zero anyway**, so `gofmt -l . && ...` passes on
+code it just told you is wrong. Test that its output is empty, or read the list yourself.
 
 All four, before you open a pull request. They are fast, and CI runs them in that order.
 
@@ -18,7 +21,7 @@ No Go toolchain to hand? The four gates run in a container against the checkout:
 
 ```sh
 docker run --rm -v "$PWD":/w -w /w golang:1.25 sh -c \
-  'gofmt -l . && go vet ./... && go build ./... && go test -race ./...'
+  'test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test -race ./...'
 ```
 
 ## The rule that matters most

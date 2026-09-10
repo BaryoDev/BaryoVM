@@ -181,7 +181,8 @@ decision made in one place so a new call site cannot quietly skip it.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/BaryoDev/BaryoVM/releases/tag/v0.1.0
