@@ -282,8 +282,12 @@ const (
 const (
 	SilentLogsNote = "the stack's containers are running and wrote nothing to stdout or stderr: " +
 		"an app that logs to a file inside the container shows nothing here"
-	NotRunningLogsNote = "the stack has no containers, so there is nothing to log: " +
-		"start it with `baryovm stack deploy`"
+	// Deliberately "nothing running" rather than "no containers": compose ps -q
+	// lists running containers, so a container that exited, or one stopped service
+	// in an otherwise running stack, reaches this note too. Saying the stack has no
+	// containers would be wrong in both those cases.
+	NotRunningLogsNote = "nothing is running for this stack, so there is nothing to log: " +
+		"start it with `baryovm stack deploy`, or check `baryovm stack ps`"
 	UnknownLogsNote = "no logs came back and the container check did not answer either: " +
 		"check `baryovm stack ps`"
 )
@@ -302,7 +306,7 @@ func ReadLogs(c sshx.Runner, s Stack, svcs []string, tail int) (LogsResult, erro
 	if err != nil {
 		return LogsResult{}, err
 	}
-	r := DescribeLogs(out)
+	r := describeLogs(out)
 	if r.Lines > 0 {
 		return r, nil
 	}
@@ -310,15 +314,15 @@ func ReadLogs(c sshx.Runner, s Stack, svcs []string, tail int) (LogsResult, erro
 	if err != nil {
 		return r, nil
 	}
-	return r.WithContainers(ids), nil
+	return r.withContainers(ids), nil
 }
 
-// DescribeLogs counts what compose returned.
+// describeLogs counts what compose returned.
 //
 // Blank lines do not count. Output that is only newlines is nothing read, and treating it as a
 // line would put the ambiguity straight back. A read with no lines is left LogsUnknown, because
-// the output on its own cannot say why there were none: that is WithContainers' job.
-func DescribeLogs(out string) LogsResult {
+// the output on its own cannot say why there were none: that is withContainers' job.
+func describeLogs(out string) LogsResult {
 	r := LogsResult{Output: out, State: LogsRead}
 	for _, line := range strings.Split(out, "\n") {
 		if strings.TrimSpace(line) != "" {
@@ -331,9 +335,9 @@ func DescribeLogs(out string) LogsResult {
 	return r
 }
 
-// WithContainers resolves a zero-line read with the answer to PsQuietCmd: ids mean the containers
+// withContainers resolves a zero-line read with the answer to PsQuietCmd: ids mean the containers
 // are running and silent, no ids mean there is nothing running to log.
-func (r LogsResult) WithContainers(ids string) LogsResult {
+func (r LogsResult) withContainers(ids string) LogsResult {
 	if r.Lines > 0 {
 		return r
 	}

@@ -54,7 +54,7 @@ func TestParseConfigImagesRejectsGarbage(t *testing.T) {
 // note, which is the ambiguity this is meant to remove wearing a different hat.
 func TestDescribeLogsTreatsBlankOutputAsNothingRead(t *testing.T) {
 	for _, in := range []string{"", "\n", "  \n\t\n"} {
-		r := DescribeLogs(in)
+		r := describeLogs(in)
 		if r.Lines != 0 {
 			t.Errorf("%q: expected 0 lines, got %d", in, r.Lines)
 		}
@@ -69,7 +69,7 @@ func TestDescribeLogsTreatsBlankOutputAsNothingRead(t *testing.T) {
 		}
 	}
 
-	r := DescribeLogs("one\n\nthree\n")
+	r := describeLogs("one\n\nthree\n")
 	if r.Lines != 2 {
 		t.Errorf("blank lines should not count, got %d", r.Lines)
 	}
