@@ -29,8 +29,8 @@ func newStackUpdateCmd() *cobra.Command {
 			"An unchanged stack is left alone: no recreate, no backup, no downtime.\n\n" +
 			"--auto is the form a scheduler runs. It refuses any stack not marked autoUpdate, any stack\n" +
 			"with no healthUrl, and any stack with no database backup configured, since an unattended\n" +
-			"update that cannot tell a healthy start from a crash loop, or cannot go back when it is a\n" +
-			"crash loop, is worse than no update at all.",
+			"update that cannot tell a healthy start from a crash loop is worse than no update at all.\n" +
+			"A stack that genuinely has no database says so with `stack set-update --no-database`.",
 		Args: cobra.ExactArgs(1),
 		Example: "  baryovm stack update playground --dry-run\n" +
 			"  baryovm stack update playground\n" +
@@ -81,8 +81,16 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
+	// A dry run is exempt: it recreates nothing, so it has nothing to go back from.
+	if auto && !dryRun && !hasBackup && !st.NoDatabase {
+		err := fmt.Errorf("%w: %s has no dbContainer or dbName: register them, or record that it has no database with `baryovm stack set-update %s --no-database`", update.ErrNoBackup, name, name)
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		return err
+	}
 	if auto && noBackup {
-		return fmt.Errorf("--no-backup cannot be combined with --auto: an unattended update keeps a way back")
+		err := fmt.Errorf("--no-backup cannot be combined with --auto: an unattended update keeps a way back")
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		return err
 	}
 
 	var res update.Result
@@ -113,6 +121,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 			AutoUpdate:     st.AutoUpdate,
 			HasHealthCheck: st.HealthURL != "",
 			HasBackup:      hasBackup,
+			NoDatabase:     st.NoDatabase,
 			SkipBackup:     noBackup,
 			DryRun:         dryRun,
 			HealthAttempts: attempts,
@@ -163,7 +172,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 // newStackSetUpdateCmd configures the update policy, so the risky bit (marking a stack as safe to
 // update unattended) is an explicit, separate act rather than a flag buried in `stack add`.
 func newStackSetUpdateCmd() *cobra.Command {
-	var auto, noAuto bool
+	var auto, noAuto, noDB bool
 	var healthURL string
 	var svcs []string
 
@@ -191,6 +200,9 @@ func newStackSetUpdateCmd() *cobra.Command {
 			if cmd.Flags().Changed("service") {
 				st.UpdateServices = svcs
 			}
+			if cmd.Flags().Changed("no-database") {
+				st.NoDatabase = noDB
+			}
 			if auto {
 				if st.HealthURL == "" {
 					return fmt.Errorf("set --health-url before --auto: an unattended update needs a way to tell success from a crash loop")
@@ -207,10 +219,11 @@ func newStackSetUpdateCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: true, Action: "stack set-update", Message: st.Name, Data: map[string]string{
 					"autoUpdate": fmt.Sprint(st.AutoUpdate),
 					"healthUrl":  st.HealthURL,
+					"noDatabase": fmt.Sprint(st.NoDatabase),
 				}})
 				return nil
 			}
-			ui.Successf("%s: autoUpdate=%v healthUrl=%s", st.Name, st.AutoUpdate, st.HealthURL)
+			ui.Successf("%s: autoUpdate=%v healthUrl=%s noDatabase=%v", st.Name, st.AutoUpdate, st.HealthURL, st.NoDatabase)
 			return nil
 		},
 	}
@@ -218,5 +231,6 @@ func newStackSetUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noAuto, "no-auto", false, "disallow unattended updates")
 	cmd.Flags().StringVar(&healthURL, "health-url", "", "URL probed from the VM after an update, e.g. http://127.0.0.1:8091/health")
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit updates to these services")
+	cmd.Flags().BoolVar(&noDB, "no-database", false, "this stack has no database, so --auto may update it with no backup (--no-database=false to undo)")
 	return cmd
 }
