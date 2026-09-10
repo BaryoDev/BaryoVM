@@ -30,12 +30,29 @@ type Stack struct {
 	Sudo bool
 }
 
+// base is the unelevated `cd <dir> && docker compose [-f <file>]` prefix. It is not a command on
+// its own: everything goes through cmd, which appends the subcommand and elevates the result.
 func (s Stack) base() string {
 	cmd := "docker compose"
 	if s.File != "" {
 		cmd += " -f " + sshx.Quote(s.File)
 	}
-	return "cd " + sshx.Quote(s.Dir) + " && " + sshx.Sudo(s.Sudo, cmd)
+	return "cd " + sshx.Quote(s.Dir) + " && " + cmd
+}
+
+// cmd builds one complete compose invocation and elevates the whole of it.
+//
+// The elevation has to wrap the finished command, not the prefix. Wrapping the prefix leaves the
+// subcommand outside the quoted shell (`sudo -n sh -c '... docker compose' ps -q 'api'`), which is
+// a different command that happens to look right in a diff.
+//
+// And the cd belongs inside the elevation rather than in front of it: the directory it enters is
+// frequently the root-owned one that made Sudo necessary, so `cd <dir> && sudo -n docker compose`
+// fails at the cd, as the SSH user, before sudo is reached. Same reasoning as the release hooks.
+//
+// A stack that did not ask for root is byte-for-byte unchanged: SudoShell returns its argument.
+func (s Stack) cmd(args string) string {
+	return sshx.SudoShell(s.Sudo, s.base()+args)
 }
 
 // docker returns a plain `docker` invocation (not compose), honouring the same sudo choice.
@@ -60,15 +77,15 @@ func Up(c sshx.Runner, s Stack, o UpOptions) (string, error) {
 			return out.String(), err
 		}
 	}
-	cmd := s.base() + " up -d"
+	args := " up -d"
 	if o.ForceRecreate {
-		cmd += " --force-recreate"
+		args += " --force-recreate"
 	}
 	if o.NoDeps {
-		cmd += " --no-deps"
+		args += " --no-deps"
 	}
-	cmd += services(o.Services)
-	r, err := c.Run(cmd)
+	args += services(o.Services)
+	r, err := c.Run(s.cmd(args))
 	out.WriteString(r)
 	return out.String(), err
 }
@@ -79,7 +96,7 @@ func Pull(c sshx.Runner, s Stack, svcs []string) (string, error) {
 }
 
 // PullCmd is the command Pull runs. Exposed so it can be asserted without a host.
-func (s Stack) PullCmd(svcs []string) string { return s.base() + " pull" + services(svcs) }
+func (s Stack) PullCmd(svcs []string) string { return s.cmd(" pull" + services(svcs)) }
 
 // PullUpdatable is Pull for the update path, tolerating images that cannot be pulled.
 //
@@ -93,12 +110,12 @@ func PullUpdatable(c sshx.Runner, s Stack, svcs []string) (string, error) {
 
 // PullUpdatableCmd is the command PullUpdatable runs.
 func (s Stack) PullUpdatableCmd(svcs []string) string {
-	return s.base() + " pull --ignore-pull-failures" + services(svcs)
+	return s.cmd(" pull --ignore-pull-failures" + services(svcs))
 }
 
 // Ps lists the stack's containers.
 func Ps(c sshx.Runner, s Stack) (string, error) {
-	return c.Run(s.base() + " ps")
+	return c.Run(s.cmd(" ps"))
 }
 
 // Image describes one service's deployed-versus-declared state.
@@ -168,11 +185,11 @@ func Images(c sshx.Runner, s Stack, svcs []string) ([]Image, error) {
 
 // ConfigCmd asks compose for the resolved project. This, not `ps`, is where an image *reference*
 // comes from. See Images.
-func (s Stack) ConfigCmd() string { return s.base() + " config --format json" }
+func (s Stack) ConfigCmd() string { return s.cmd(" config --format json") }
 
 // runningImages maps service -> the image id its container is actually running.
 func runningImages(c sshx.Runner, s Stack, svcs []string) (map[string]string, error) {
-	out, err := c.Run(s.base() + ` ps -a --format '{{.Service}}\t{{.Image}}'` + services(svcs))
+	out, err := c.Run(s.cmd(` ps -a --format '{{.Service}}\t{{.Image}}'` + services(svcs)))
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +253,11 @@ func Retag(c sshx.Runner, s Stack, id, ref string) (string, error) {
 
 // Logs returns recent logs for the stack (or selected services).
 func Logs(c sshx.Runner, s Stack, svcs []string, tail int) (string, error) {
-	cmd := s.base() + " logs --no-color"
+	args := " logs --no-color"
 	if tail > 0 {
-		cmd += " --tail " + strconv.Itoa(tail)
+		args += " --tail " + strconv.Itoa(tail)
 	}
-	return c.Run(cmd + services(svcs))
+	return c.Run(s.cmd(args + services(svcs)))
 }
 
 // LogsResult is a logs read, described well enough that an empty one cannot be mistaken for a
@@ -283,7 +300,7 @@ const (
 
 // PsQuietCmd lists the ids of the stack's containers, one per line, and prints nothing at all when
 // the project has none. It is how a silent container is told from an absent one.
-func (s Stack) PsQuietCmd(svcs []string) string { return s.base() + " ps -q" + services(svcs) }
+func (s Stack) PsQuietCmd(svcs []string) string { return s.cmd(" ps -q" + services(svcs)) }
 
 // ReadLogs fetches the stack's recent logs and says which of the three zero-exit outcomes it got.
 //

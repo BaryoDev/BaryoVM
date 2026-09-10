@@ -166,7 +166,9 @@ func TestAFailedContainerCheckIsNotReportedAsNothingRunning(t *testing.T) {
 
 func TestPsQuietCmd(t *testing.T) {
 	got := Stack{Dir: "/opt/app", Sudo: true}.PsQuietCmd([]string{"api"})
-	for _, want := range []string{"cd '/opt/app'", "sudo -n docker compose", " ps -q", " 'api'"} {
+	// The whole thing is one elevated shell, so the cd and the subcommand are both inside it and
+	// the inner quotes are escaped for that shell. Assert on the parts that survive quoting.
+	for _, want := range []string{"sudo -n ", "cd ", "/opt/app", "docker compose ps -q", "api"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PsQuietCmd missing %q in: %s", want, got)
 		}

@@ -287,7 +287,7 @@ func TestStackDeployRunsAsRootForASudoStack(t *testing.T) {
 	if len(f.seen) != 1 {
 		t.Fatalf("expected one remote command, got %v", f.seen)
 	}
-	want := "cd '/opt/baryo-cms' && sudo -n docker compose up -d"
+	want := "sudo -n \"${SHELL:-/bin/sh}\" -c 'cd '\\''/opt/baryo-cms'\\'' && docker compose up -d'"
 	if f.seen[0] != want {
 		t.Fatalf("want %q, got %q", want, f.seen[0])
 	}
