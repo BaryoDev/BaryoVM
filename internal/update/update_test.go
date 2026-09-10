@@ -224,6 +224,28 @@ func TestAutoRefusesAStackItCannotVerify(t *testing.T) {
 	}
 }
 
+func TestAutoRefusesAStackWithNoBackupConfigured(t *testing.T) {
+	f := &fakeRunner{
+		before: []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		after:  []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},
+		// Healthy throughout, so nothing but the refusal itself can stop this update.
+		healthy: []bool{true},
+	}
+	o := opts()
+	o.Auto, o.AutoUpdate, o.HasBackup = true, true, false
+
+	_, err := Run(f, o)
+
+	if !errors.Is(err, ErrNoBackup) {
+		t.Fatalf("expected a refusal without a backup, got %v", err)
+	}
+	// Skipping the backup and skipping the refusal both leave the stack recreated with no way back,
+	// which is what the --no-backup refusal already exists to prevent.
+	if len(f.calls) != 0 {
+		t.Fatalf("must not touch a stack it cannot restore: %v", f.calls)
+	}
+}
+
 func TestFailedBackupStopsTheUpdate(t *testing.T) {
 	f := &fakeRunner{
 		before:    []compose.Image{img("app", "repo:tag", "sha256:old", "sha256:new")},

@@ -27,9 +27,10 @@ func newStackUpdateCmd() *cobra.Command {
 			"recreates the affected services, and waits for the stack's health URL. If it does not\n" +
 			"come back, the previous images are restored and the stack is checked again.\n\n" +
 			"An unchanged stack is left alone: no recreate, no backup, no downtime.\n\n" +
-			"--auto is the form a scheduler runs. It refuses any stack not marked autoUpdate, and any\n" +
-			"stack with no healthUrl, since an unattended update that cannot tell a healthy start from\n" +
-			"a crash loop is worse than no update at all.",
+			"--auto is the form a scheduler runs. It refuses any stack not marked autoUpdate, any stack\n" +
+			"with no healthUrl, and any stack with no database backup configured, since an unattended\n" +
+			"update that cannot tell a healthy start from a crash loop, or cannot go back when it is a\n" +
+			"crash loop, is worse than no update at all.",
 		Args: cobra.ExactArgs(1),
 		Example: "  baryovm stack update playground --dry-run\n" +
 			"  baryovm stack update playground\n" +

@@ -76,17 +76,25 @@ var ErrNotAutoUpdatable = errors.New("stack is not marked autoUpdate")
 // ErrNoHealthCheck is returned when an unattended update has no way to verify itself.
 var ErrNoHealthCheck = errors.New("stack has no healthUrl, so an update cannot be verified or rolled back")
 
+// ErrNoBackup is returned when an unattended update has no backup to go back to. It is the same rule
+// that refuses --auto with --no-backup: a stack with no database configured has no way back either,
+// and the outcome of never configuring one is identical to asking to skip it.
+var ErrNoBackup = errors.New("stack has no database configured, so an unattended update has no way back: set --db-container and --db-name with `baryovm stack add`")
+
 // Run performs the update. It returns a Result describing what happened; an error means the stack
 // may need attention, and Result.RolledBack says whether it was put back first.
 func Run(r Runner, o Options) (Result, error) {
 	if o.Auto {
-		// Both of these are refusals on purpose: an unattended run must be opted into, and must be
-		// able to tell a healthy start from a crash loop.
+		// These are refusals on purpose: an unattended run must be opted into, must be able to tell a
+		// healthy start from a crash loop, and must have something to restore if it cannot.
 		if !o.AutoUpdate {
 			return Result{Skipped: "not marked autoUpdate"}, ErrNotAutoUpdatable
 		}
 		if !o.HasHealthCheck {
 			return Result{Skipped: "no healthUrl"}, ErrNoHealthCheck
+		}
+		if !o.HasBackup {
+			return Result{Skipped: "no backup configured"}, ErrNoBackup
 		}
 	}
 
