@@ -100,7 +100,18 @@ const NoBackupsMarker = "(no backups yet)"
 func List(c sshx.Runner, cfg Config) (string, error) {
 	var b strings.Builder
 	b.WriteString(cfg.bkVar())
-	b.WriteString("ls -1t \"$BK\"/db-*.dump 2>/dev/null || echo " + sshx.Quote(NoBackupsMarker) + "\n")
+	// Check the directory before globbing it. `ls glob || echo marker` cannot tell "the
+	// directory holds no dumps" from "the directory could not be read", and both would
+	// arrive as the marker, so an unreadable backup directory would be reported as a
+	// successful listing of zero backups. That is the exact failure this command's
+	// result type was added to end, so it must not be reintroduced one line above it.
+	//
+	// A missing directory is still empty rather than an error: a stack that has never
+	// been backed up has no backup directory, and that is a normal answer.
+	b.WriteString("if [ ! -e \"$BK\" ]; then echo " + sshx.Quote(NoBackupsMarker) + "\n")
+	b.WriteString("elif [ ! -r \"$BK\" ] || [ ! -x \"$BK\" ]; then echo \"cannot read $BK\" >&2; exit 1\n")
+	b.WriteString("else ls -1t \"$BK\"/db-*.dump 2>/dev/null || echo " + sshx.Quote(NoBackupsMarker) + "\n")
+	b.WriteString("fi\n")
 	return c.Run(b.String())
 }
 

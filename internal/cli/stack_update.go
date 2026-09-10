@@ -30,7 +30,9 @@ func newStackUpdateCmd() *cobra.Command {
 			"--auto is the form a scheduler runs. It refuses any stack not marked autoUpdate, any stack\n" +
 			"with no healthUrl, and any stack with no database backup configured, since an unattended\n" +
 			"update that cannot tell a healthy start from a crash loop is worse than no update at all.\n" +
-			"A stack that genuinely has no database says so with `stack set-update --no-database`.",
+			"A stack that genuinely has no database says so with `stack set-update --no-database`.\n" +
+			"--dry-run is exempt from both backup refusals: it recreates nothing, so it has nothing\n" +
+			"to go back from.",
 		Args: cobra.ExactArgs(1),
 		Example: "  baryovm stack update playground --dry-run\n" +
 			"  baryovm stack update playground\n" +

@@ -70,7 +70,27 @@ func installDocker() error {
 		}
 		return fmt.Errorf("install Docker Desktop from https://docker.com/products/docker-desktop")
 	case "linux":
-		return run("/bin/sh", "-c", `curl -fsSL https://get.docker.com | sudo sh`)
+		// Fetch, then run the script through rootRun rather than piping into `sudo sh`.
+		// The pipe bypassed the one place that knows about -n and about already being
+		// root, so it hung on a host wanting a sudo password (with no TTY to answer it
+		// under -o json) and failed needlessly in a root container with no sudo
+		// installed, two functions away from an installer that handles both.
+		f, err := os.CreateTemp("", "get-docker-*.sh")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(f.Name())
+		out, err := exec.Command("curl", "-fsSL", "https://get.docker.com").Output()
+		if err != nil {
+			f.Close()
+			return fmt.Errorf("fetching the docker install script: %w", err)
+		}
+		if _, err := f.Write(out); err != nil {
+			f.Close()
+			return err
+		}
+		f.Close()
+		return rootRun("/bin/sh", f.Name())
 	default:
 		return fmt.Errorf("automatic docker install is not supported on %s", runtime.GOOS)
 	}

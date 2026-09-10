@@ -2,6 +2,9 @@ package backup
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,3 +61,86 @@ func (f *fakeRunner) Run(cmd string) (string, error) {
 	f.cmd = cmd
 	return "", nil
 }
+
+// The script List builds, run against real directories.
+//
+// The version this replaces was `ls glob 2>/dev/null || echo marker`, which cannot tell "no dumps
+// here" from "could not read the directory": both arrived as the marker, so DescribeList reported an
+// unreadable backup directory as a successful listing of zero backups. That is precisely the
+// empty-versus-failed confusion ListResult was added to end, one line above ListResult.
+func TestTheListingScriptTellsEmptyFromUnreadable(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this machine")
+	}
+	runFor := func(t *testing.T, dir string) (string, error) {
+		t.Helper()
+		script, err := List(scriptOnly{}, Config{Name: "app", BackupDir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(sh, "-c", script).Output()
+		return string(out), err
+	}
+
+	t.Run("a directory that was never created is empty, not an error", func(t *testing.T) {
+		out, err := runFor(t, filepath.Join(t.TempDir(), "never-backed-up"))
+		if err != nil {
+			t.Fatalf("a stack that has never been backed up is a normal answer, got error: %v", err)
+		}
+		if got := DescribeList(out); got.Count != 0 {
+			t.Errorf("count = %d, want 0", got.Count)
+		}
+	})
+
+	t.Run("a readable directory holding no dumps is empty", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runFor(t, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := DescribeList(out); got.Count != 0 {
+			t.Errorf("count = %d, want 0; a non-dump file is not a backup", got.Count)
+		}
+	})
+
+	t.Run("a directory that cannot be read is an error, not an empty listing", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores the permission bits this case depends on")
+		}
+		dir := t.TempDir()
+		locked := filepath.Join(dir, "locked")
+		if err := os.Mkdir(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+		if _, err := runFor(t, locked); err == nil {
+			t.Error("an unreadable backup directory reported success; empty and unavailable must not look the same")
+		}
+	})
+
+	t.Run("dumps are listed", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, n := range []string{"db-20260901-010101.dump", "db-20260902-010101.dump"} {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := runFor(t, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := DescribeList(out); got.Count != 2 {
+			t.Errorf("count = %d, want 2: %v", got.Count, got.Backups)
+		}
+	})
+}
+
+// scriptOnly hands back the script instead of running it, so a test can run it locally.
+type scriptOnly struct{}
+
+func (scriptOnly) Run(cmd string) (string, error) { return cmd, nil }
