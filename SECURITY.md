@@ -27,6 +27,9 @@ down.
 
 - Protect your SSH private keys and `~/.baryovm/fleet.json`.
 - BaryoVM runs commands on hosts you register, so only add machines you control.
+- `vm exec` runs arbitrary remote commands as the SSH user for that VM. That is
+  the same authority as opening an interactive SSH session with the registered
+  key; the CLI only shortens the path.
 - Restore is destructive (`stack restore` replaces a database) and requires
   `--yes`.
 

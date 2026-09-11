@@ -34,9 +34,18 @@ baryovm vm add oracle --host <your-vm-ip> --user opc --key ~/.ssh/id_ed25519
 
 baryovm vm list
 baryovm vm ping oracle           # SSH in, report host + Docker version
+baryovm vm exec oracle -- uname -sr
+baryovm vm exec oracle -- 'df -h /var/www'
+baryovm vm exec oracle -o json -- 'cat /etc/os-release'
 baryovm vm bootstrap oracle      # install Docker if missing
 baryovm vm remove oracle         # forget it (does not destroy the machine)
 ```
+
+`vm exec` runs an arbitrary command on one named VM with the SSH key already in
+`fleet.json`. Put `sudo -n` in the remote command when you need root; there is
+no `--sudo` flag. A non-zero remote exit becomes a non-zero CLI exit. Under
+`-o json` the envelope keeps `stdout`, `stderr` and `exitCode` as separate
+fields.
 
 ## Hardening, and seeing what hits the box
 

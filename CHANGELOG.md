@@ -8,6 +8,14 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- **`vm exec`.** Run a one-off command on a registered VM over the SSH key already
+  in `fleet.json`, so checking state does not mean dropping back to raw `ssh`.
+  There is no `--sudo` flag (put `sudo -n` in the remote command). A non-zero
+  remote exit becomes a non-zero CLI exit, and `-o json` keeps stdout, stderr and
+  exitCode as separate fields. ([#23])
+
 ## [0.3.0] - 2026-09-10
 
 Two new commands, an install that does not assume a Go toolchain, and the class of bug where a
@@ -194,3 +202,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#55]: https://github.com/BaryoDev/BaryoVM/pull/55
 [#56]: https://github.com/BaryoDev/BaryoVM/issues/56
 [#59]: https://github.com/BaryoDev/BaryoVM/issues/59
+[#23]: https://github.com/BaryoDev/BaryoVM/issues/23
