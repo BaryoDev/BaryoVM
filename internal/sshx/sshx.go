@@ -68,18 +68,49 @@ type Runner interface {
 
 // Run executes a command and returns its stdout, or an error carrying stderr.
 func (c *Client) Run(cmd string) (string, error) {
+	cap, err := c.RunCapture(cmd)
+	if err != nil {
+		return cap.Stdout, err
+	}
+	if cap.ExitCode != 0 {
+		msg := strings.TrimSpace(cap.Stderr)
+		if msg == "" {
+			msg = fmt.Sprintf("exit status %d", cap.ExitCode)
+		}
+		return cap.Stdout, fmt.Errorf("remote `%s`: %s", cmd, msg)
+	}
+	return cap.Stdout, nil
+}
+
+// Capture is the stdout, stderr and exit code of one remote command.
+type Capture struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// RunCapture runs a command and always returns its streams. A non-zero remote
+// exit is reported in Capture.ExitCode with a nil error; error is reserved for
+// dial/session failures where no remote process ran.
+func (c *Client) RunCapture(cmd string) (Capture, error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
-		return "", err
+		return Capture{}, err
 	}
 	defer sess.Close()
 	var out, errb bytes.Buffer
 	sess.Stdout = &out
 	sess.Stderr = &errb
-	if err := sess.Run(cmd); err != nil {
-		return out.String(), fmt.Errorf("remote `%s`: %w: %s", cmd, err, strings.TrimSpace(errb.String()))
+	err = sess.Run(cmd)
+	cap := Capture{Stdout: out.String(), Stderr: errb.String()}
+	if err == nil {
+		return cap, nil
 	}
-	return out.String(), nil
+	if ee, ok := err.(*ssh.ExitError); ok {
+		cap.ExitCode = ee.ExitStatus()
+		return cap, nil
+	}
+	return cap, fmt.Errorf("remote `%s`: %w: %s", cmd, err, strings.TrimSpace(errb.String()))
 }
 
 // Close ends the connection.
