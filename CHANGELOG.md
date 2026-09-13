@@ -24,6 +24,12 @@ previously accepted is called out here rather than left to be discovered.
   the next `stack release` failed with a name conflict and a public site served 502 for two
   minutes. `stack release`, `stack deploy` and `stack update` now remove that leftover and try the up
   once more. A conflict on any other container name still fails as before. (#57)
+- **A container name taken by a hand-run container is caught before any work.** When the compose
+  file sets a `container_name` that a container started with `docker run` already holds, compose up
+  failed at the end of `stack release`, after the backup, the rsync and a full image build.
+  `stack release` now checks the names first, and `stack deploy` and `stack update` check before
+  pulling or backing up. The error names the container and the `docker rm -f` that frees the name.
+  Nothing is removed for you, and containers this compose project owns are not affected. (#1)
 
 ## [0.3.0] - 2026-09-10
 

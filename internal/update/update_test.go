@@ -24,6 +24,12 @@ type fakeRunner struct {
 	upErrOnFirst bool
 	backupErr    error
 	retagErr     error
+	namesErr     error
+}
+
+func (f *fakeRunner) CheckNames() error {
+	f.calls = append(f.calls, "names")
+	return f.namesErr
 }
 
 func (f *fakeRunner) Images(svcs []string) ([]compose.Image, error) {

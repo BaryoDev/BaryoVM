@@ -33,6 +33,9 @@ type Runner interface {
 	Healthy() (bool, error)
 	// Backup takes a database backup. Skipped when the stack has none configured.
 	Backup() (string, error)
+	// CheckNames fails when a container outside this compose project holds a container_name the
+	// compose file declares, which compose up would otherwise fail on after the backup.
+	CheckNames() error
 }
 
 // Options controls one update.
@@ -133,6 +136,13 @@ func Run(r Runner, o Options) (Result, error) {
 	}
 
 	res := Result{Services: changed, Checked: checked}
+
+	// Only once there is something to recreate: a stack that is up to date never reaches compose up,
+	// so a taken name cannot hurt it, and a dry run changes nothing. Before the backup, because
+	// compose up would fail on the name after it (#1).
+	if err := r.CheckNames(); err != nil {
+		return res, fmt.Errorf("not updating: %w", err)
+	}
 
 	// Back up before recreating, not after: if the new image migrates the schema on start, the
 	// backup taken afterwards already contains the migration.
@@ -284,6 +294,18 @@ func (s SSHRunner) Pull(svcs []string) (string, error) {
 
 func (s SSHRunner) Up(svcs []string) (string, error) {
 	return compose.Up(s.Client, s.Stack, compose.UpOptions{Services: svcs})
+}
+
+// CheckNames returns only a real conflict. Names that could not be read skip the check: compose up
+// reads the same file and reports what is wrong with it, and an update never needed this check
+// before, so a scheduled run must not start failing on it.
+func (s SSHRunner) CheckNames() error {
+	err := compose.CheckContainerNames(s.Client, s.Stack)
+	var conflict *compose.NameConflictError
+	if errors.As(err, &conflict) {
+		return err
+	}
+	return nil
 }
 
 func (s SSHRunner) Retag(id, ref string) (string, error) {

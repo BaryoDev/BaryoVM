@@ -59,6 +59,16 @@ func stackFixture(t *testing.T) {
 // that calls it directly still passes.
 func runCmd(t *testing.T, cmd *cobra.Command, r sshx.Runner, jsonMode bool, args ...string) (string, string) {
 	t.Helper()
+	stdout, stderr, err := runCmdE(t, cmd, r, jsonMode, args...)
+	if err != nil {
+		t.Fatalf("%s: %v\nstderr: %s", cmd.Name(), err, stderr)
+	}
+	return stdout, stderr
+}
+
+// runCmdE is runCmd for a command that is expected to fail: it hands back the error instead.
+func runCmdE(t *testing.T, cmd *cobra.Command, r sshx.Runner, jsonMode bool, args ...string) (string, string, error) {
+	t.Helper()
 
 	prev := runOnVM
 	runOnVM = func(vm *fleet.VM, fn func(c sshx.Runner) (opOutput, error)) (opOutput, error) { return fn(r) }
@@ -89,10 +99,7 @@ func runCmd(t *testing.T, cmd *cobra.Command, r sshx.Runner, jsonMode bool, args
 	errW.Close()
 	stdout, _ := io.ReadAll(outR)
 	stderr, _ := io.ReadAll(errR)
-	if runErr != nil {
-		t.Fatalf("%s: %v\nstderr: %s", cmd.Name(), runErr, stderr)
-	}
-	return string(stdout), string(stderr)
+	return string(stdout), string(stderr), runErr
 }
 
 type envelope struct {
@@ -280,16 +287,24 @@ func sudoStackFixture(t *testing.T) {
 // rw------- root root, the right mode for a file holding a database password.
 func TestStackDeployRunsAsRootForASudoStack(t *testing.T) {
 	sudoStackFixture(t)
-	f := &fakeRunner{answers: map[string]string{"up -d": "recreated app\n"}}
+	f := &fakeRunner{answers: map[string]string{
+		"config --format json": `{"name": "baryo-cms", "services": {"app": {}}}`,
+		"up -d":                "recreated app\n",
+	}}
 
 	runCmd(t, newStackDeployCmd(), f, false, "app")
 
-	if len(f.seen) != 1 {
-		t.Fatalf("expected one remote command, got %v", f.seen)
+	// The container name check reads the compose config first; the up is still the command that
+	// matters here, and every command before it must be elevated too.
+	if len(f.seen) != 2 {
+		t.Fatalf("expected the config read and the up, got %v", f.seen)
 	}
 	want := "sudo -n \"${SHELL:-/bin/sh}\" -c 'cd '\\''/opt/baryo-cms'\\'' && docker compose up -d'"
-	if f.seen[0] != want {
-		t.Fatalf("want %q, got %q", want, f.seen[0])
+	if f.seen[1] != want {
+		t.Fatalf("want %q, got %q", want, f.seen[1])
+	}
+	if !strings.HasPrefix(f.seen[0], "sudo -n ") {
+		t.Errorf("the config read ran unelevated on a sudo stack: %q", f.seen[0])
 	}
 }
 
@@ -323,9 +338,8 @@ func TestAnOrdinaryStackIsNeverRunAsRoot(t *testing.T) {
 	}
 }
 
-// The release's own two reads of the sudo decision. Both were untested, and `stack release` dials
-// sshx.Dial directly rather than going through the runOnVM seam the other stack commands use, so
-// they are pinned where the decision is made instead of through a fake VM.
+// The release's own two reads of the sudo decision. Both were untested, and they are pinned where
+// the decision is made rather than through a whole release against a fake VM.
 
 // The compose up that ends a release. Before this test a constant in either direction passed the
 // whole suite: `true` elevates a stack nobody registered --sudo, `false` puts back the gap #8
