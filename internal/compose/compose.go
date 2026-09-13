@@ -10,6 +10,7 @@ package compose
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,7 +88,40 @@ func Up(c sshx.Runner, s Stack, o UpOptions) (string, error) {
 	args += services(o.Services)
 	r, err := c.Run(s.cmd(args))
 	out.WriteString(r)
+	if id := staleRenamedContainer(err); id != "" {
+		rm, rmErr := c.Run(s.docker() + " rm -f " + sshx.Quote(id))
+		out.WriteString(rm)
+		if rmErr != nil {
+			return out.String(), fmt.Errorf("%w (removing leftover container %s also failed: %v)", err, id, rmErr)
+		}
+		r, err = c.Run(s.cmd(args))
+		out.WriteString(r)
+	}
 	return out.String(), err
+}
+
+// staleRenameConflict is the daemon's answer when compose tries to rename a container it is
+// replacing and finds that name taken by a container an earlier recreate left behind.
+var staleRenameConflict = regexp.MustCompile(`container name "/[0-9a-f]{12}_[^"]+" is already in use by container "([0-9a-f]{64})"`)
+
+// staleRenamedContainer returns the id of the container blocking a recreate, or "" when err is not
+// that conflict.
+//
+// A release of umbraco-pwa on 2 Sep 2026 failed its compose up this way and the public site served
+// 502 for two minutes (#57). Compose renames a container to `<12 hex>_<name>` only while replacing
+// it, and removes it itself once the new one is up, so a container still holding that name is one
+// compose had already decided to discard. Removing it and trying once more is what finishing that
+// recreate would have done. A clash on any other name is left alone: that is someone's real
+// container, and removing it is not this tool's call.
+func staleRenamedContainer(err error) string {
+	if err == nil {
+		return ""
+	}
+	m := staleRenameConflict.FindStringSubmatch(err.Error())
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 // Pull fetches the latest images for the stack (or selected services).
