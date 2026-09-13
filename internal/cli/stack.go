@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -99,6 +100,21 @@ func newStackAddCmd() *cobra.Command {
 	return cmd
 }
 
+// checkContainerNames refuses a compose up that would collide with a container this project does
+// not own. A failure to read the names is a warning rather than a refusal: compose up reads the same
+// file and reports what is wrong with it, and these commands ran without this check before.
+func checkContainerNames(c sshx.Runner, cs compose.Stack) error {
+	err := compose.CheckContainerNames(c, cs)
+	var conflict *compose.NameConflictError
+	if errors.As(err, &conflict) {
+		return err
+	}
+	if err != nil {
+		ui.Warnf("could not check container names before compose up: %v", err)
+	}
+	return nil
+}
+
 // runLocal runs a local command (e.g. rsync) and returns combined output. A variable so a release
 // can be driven in tests without transferring anything.
 var runLocal = func(c *exec.Cmd) (string, error) {
@@ -159,6 +175,22 @@ func newStackReleaseCmd() *cobra.Command {
 			fail := func(e error) error {
 				ui.Emit(ui.Result{OK: false, Action: "stack release", Error: e.Error()})
 				return e
+			}
+
+			// A container_name held by a container this project does not own, typically one started
+			// by hand with docker run, fails compose up at the very end: after the backup, the rsync
+			// and a full image build (#1). So it is checked before any of them.
+			if !m.NoCompose {
+				if err := ui.Step("check container names", func() error {
+					c, err := dialRelease(vm)
+					if err != nil {
+						return err
+					}
+					defer c.Close()
+					return checkContainerNames(c, releaseComposeStack(st, m))
+				}); err != nil {
+					return fail(err)
+				}
 			}
 
 			// Safety first: back up before releasing (unless opted out / no DB configured).
@@ -507,6 +539,9 @@ func newStackDeployCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (string, error) {
+					if err := checkContainerNames(c, cs); err != nil {
+						return "", err
+					}
 					return compose.Up(c, cs, compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
 				})
 		},

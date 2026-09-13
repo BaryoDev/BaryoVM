@@ -124,6 +124,102 @@ func staleRenamedContainer(err error) string {
 	return m[1]
 }
 
+// NameConflict is one container_name from the compose file that a container outside this compose
+// project already holds.
+type NameConflict struct {
+	Name    string // the container_name, as docker lists it
+	Project string // the holder's com.docker.compose.project label; empty for a `docker run` container
+}
+
+// NameConflictError reports every container_name that compose up would fail on.
+type NameConflictError struct {
+	Conflicts []NameConflict
+	Sudo      bool
+}
+
+func (e *NameConflictError) Error() string {
+	parts := make([]string, 0, len(e.Conflicts))
+	for _, c := range e.Conflicts {
+		holder := "a container compose does not manage, probably started with docker run"
+		if c.Project != "" {
+			holder = fmt.Sprintf("a container from compose project %q", c.Project)
+		}
+		fix := sshx.Sudo(e.Sudo, "docker") + " rm -f " + sshx.Quote(c.Name)
+		parts = append(parts, fmt.Sprintf("container name %q is held by %s: check it is safe to remove, then run `%s` on the VM and try again", c.Name, holder, fix))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// NamesCmd lists every container on the host with the compose project it belongs to, if any.
+func (s Stack) NamesCmd() string {
+	return s.docker() + ` ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}'`
+}
+
+// CheckContainerNames returns a *NameConflictError when a container_name in the compose file is
+// already held by a container this compose project does not own.
+//
+// Compose only finds out at `up`, and in a release that is the last step, after the backup, the
+// rsync and a full image build (#1). The usual holder is a container started by hand with docker
+// run, which is what a VM someone already has tends to be running. It is reported, never removed:
+// that container is the user's.
+//
+// A container carrying this project's label is not a conflict. That covers the project's own
+// container on a second release, and the `<id>_<name>` leftover Up already deals with. If compose
+// does not report a project name, any compose-labelled container is given the benefit of the doubt.
+//
+// Any other error means the names could not be read, which is not a conflict, and callers decide
+// what to do with it.
+func CheckContainerNames(c sshx.Runner, s Stack) error {
+	out, err := c.Run(s.ConfigCmd())
+	if err != nil {
+		return err
+	}
+	var cfg struct {
+		Name     string `json:"name"`
+		Services map[string]struct {
+			ContainerName string `json:"container_name"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+		return fmt.Errorf("parse compose config: %w", err)
+	}
+	declared := map[string]bool{}
+	for _, svc := range cfg.Services {
+		if svc.ContainerName != "" {
+			declared[svc.ContainerName] = true
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+
+	out, err = c.Run(s.NamesCmd())
+	if err != nil {
+		return err
+	}
+	var conflicts []NameConflict
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 2)
+		name := strings.TrimSpace(parts[0])
+		if !declared[name] {
+			continue
+		}
+		project := ""
+		if len(parts) == 2 {
+			project = strings.TrimSpace(parts[1])
+		}
+		if project != "" && (cfg.Name == "" || project == cfg.Name) {
+			continue
+		}
+		conflicts = append(conflicts, NameConflict{Name: name, Project: project})
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Name < conflicts[j].Name })
+	return &NameConflictError{Conflicts: conflicts, Sudo: s.Sudo}
+}
+
 // Pull fetches the latest images for the stack (or selected services).
 func Pull(c sshx.Runner, s Stack, svcs []string) (string, error) {
 	return c.Run(s.PullCmd(svcs))

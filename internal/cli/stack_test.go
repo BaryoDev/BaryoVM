@@ -287,16 +287,24 @@ func sudoStackFixture(t *testing.T) {
 // rw------- root root, the right mode for a file holding a database password.
 func TestStackDeployRunsAsRootForASudoStack(t *testing.T) {
 	sudoStackFixture(t)
-	f := &fakeRunner{answers: map[string]string{"up -d": "recreated app\n"}}
+	f := &fakeRunner{answers: map[string]string{
+		"config --format json": `{"name": "baryo-cms", "services": {"app": {}}}`,
+		"up -d":                "recreated app\n",
+	}}
 
 	runCmd(t, newStackDeployCmd(), f, false, "app")
 
-	if len(f.seen) != 1 {
-		t.Fatalf("expected one remote command, got %v", f.seen)
+	// The container name check reads the compose config first; the up is still the command that
+	// matters here, and every command before it must be elevated too.
+	if len(f.seen) != 2 {
+		t.Fatalf("expected the config read and the up, got %v", f.seen)
 	}
 	want := "sudo -n \"${SHELL:-/bin/sh}\" -c 'cd '\\''/opt/baryo-cms'\\'' && docker compose up -d'"
-	if f.seen[0] != want {
-		t.Fatalf("want %q, got %q", want, f.seen[0])
+	if f.seen[1] != want {
+		t.Fatalf("want %q, got %q", want, f.seen[1])
+	}
+	if !strings.HasPrefix(f.seen[0], "sudo -n ") {
+		t.Errorf("the config read ran unelevated on a sudo stack: %q", f.seen[0])
 	}
 }
 

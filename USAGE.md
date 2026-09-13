@@ -162,6 +162,27 @@ Manifest options:
 | `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
 | `verifyDelaySeconds` | `3` | wait between attempts |
 
+#### Moving a hand-run container into a stack
+
+A VM you already have is usually running containers started with `docker run`. If your compose file
+gives a service the same `container_name`, compose cannot create it while the old container exists.
+`stack release`, `stack deploy` and `stack update` check this before they back up, sync, build or
+pull, and stop with the container's name and the command that frees it:
+
+```
+container name "umbraco-pwa-demo" is held by a container compose does not manage, probably started with docker run: check it is safe to remove, then run `docker rm -f 'umbraco-pwa-demo'` on the VM and try again
+```
+
+BaryoVM never removes that container itself. Check first that its data lives in a volume, not in the
+container. If the old container used a named volume, declare it `external: true` in the compose file.
+Otherwise compose creates a new, empty, project-prefixed volume and the app starts with no data.
+
+```yaml
+volumes:
+  umbraco-pwa-demo-data:
+    external: true
+```
+
 #### Verifying a release
 
 A release that reports success without asking the running site anything cannot tell a working
