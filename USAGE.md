@@ -98,6 +98,15 @@ baryovm stack logs barako --service app --tail 100
 baryovm stack remove barako                               # forget the registration
 ```
 
+Running `stack add` again for a stack that already exists updates it in place. `--vm` and `--path`
+are still required, and any other flag you pass replaces its value, but settings you do not name
+stay as they were, including the update policy from `stack set-update`. So adding a database to an
+existing stack is:
+
+```sh
+baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy-postgres-1 --db-name barako
+```
+
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
 `--force-recreate`, `--no-deps`.
 
