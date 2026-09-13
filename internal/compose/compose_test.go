@@ -16,7 +16,7 @@ func TestParseConfigImages(t *testing.T) {
 	const out = `{
       "services": {
         "app":       {"image": "ghcr.io/baryodev/barako-cms:playground"},
-        "admin":     {"image": "ghcr.io/baryodev/barako-admin:playground"},
+        "admin":     {"image": "ghcr.io/baryodev/barako-brew:playground"},
         "postgres":  {"image": "postgres:16-alpine"},
         "worker":    {"build": {"context": "."}}
       }
