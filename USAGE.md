@@ -221,6 +221,42 @@ rsync -az --delete --dry-run --itemize-changes --rsync-path="sudo -n rsync" \
   -e "ssh -i ~/.ssh/your_key" ~/repos/site/out/ user@host:/var/www/site/
 ```
 
+#### When a release refuses to sync the compose directory
+
+The compose directory is the stack's `--path`, and it holds the `.env`. rsync `--delete` removes any
+file on the VM that is not in the local source, so a sync that reaches that directory would delete
+the `.env`. `stack release` checks for this after the pre-release backup and before the first sync
+entry runs. It stops if any entry lands on the compose directory or on a directory above it.
+
+Where an entry lands follows the trailing slash rule above. With `"remoteRoot": "/opt/app"` and a
+stack registered with `--path /opt/app/deploy`:
+
+- `"deploy"` lands on `/opt/app/deploy` and is refused.
+- `"out/"` lands on `/opt/app`, which contains `deploy`, and is refused.
+- `"api"`, `"web"` and `"deploy-assets"` are allowed. A name that only starts with `deploy` is not
+  inside it.
+
+The first case fails with:
+
+```
+sync entry "deploy" lands on /opt/app/deploy, which contains the compose directory /opt/app/deploy: rsync --delete would remove its .env. Sync the application directories individually instead of the root that holds them
+```
+
+Under `-o json` the same text is the envelope's `error`, with `"action": "stack release"`.
+
+To fix it, list the directories the release needs one by one, leaving the compose directory out:
+`"sync": ["api", "web"]` rather than `"sync": ["out/"]`. A `remoteRoot` that does not contain the
+compose directory passes too.
+
+What the check does not do:
+
+- It skips a manifest with `"noCompose": true`. A static site's stack directory is its webroot, so
+  it is the same path as `remoteRoot` on purpose and there is no `.env` to protect.
+- It compares the paths as written, after trimming spaces and one trailing slash. It does not
+  resolve symlinks or `..`, and it does not look at the VM, so a destination that reaches the
+  compose directory through a symlink is not caught.
+- It is the same with or without `--sudo`.
+
 ### Static sites (no containers)
 
 Not everything on a VM is a container. A built static site is files the host's own web server
