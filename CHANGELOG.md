@@ -19,6 +19,11 @@ previously accepted is called out here rather than left to be discovered.
   flag not passed again. That mattered because `stack backup` tells you to register a missing
   database with `stack add`, and following it turned off unattended updates. Re-adding now changes
   only the fields its flags name. (#63)
+- **A compose up no longer fails on a container an earlier recreate left renamed.** Compose renames
+  the container it is replacing to `<id>_<name>`, and when an earlier run left one of those behind,
+  the next `stack release` failed with a name conflict and a public site served 502 for two
+  minutes. `stack release`, `stack deploy` and `stack update` now remove that leftover and try the up
+  once more. A conflict on any other container name still fails as before. (#57)
 
 ## [0.3.0] - 2026-09-10
 
