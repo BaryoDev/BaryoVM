@@ -99,10 +99,27 @@ func newStackAddCmd() *cobra.Command {
 	return cmd
 }
 
-// runLocal runs a local command (e.g. rsync) and returns combined output.
-func runLocal(c *exec.Cmd) (string, error) {
+// runLocal runs a local command (e.g. rsync) and returns combined output. A variable so a release
+// can be driven in tests without transferring anything.
+var runLocal = func(c *exec.Cmd) (string, error) {
 	out, err := c.CombinedOutput()
 	return string(out), err
+}
+
+// remoteSession is what a release needs from a connection: run commands, then hang up.
+type remoteSession interface {
+	sshx.Runner
+	Close() error
+}
+
+// dialRelease connects to a VM for a release. A variable for the same reason as runOnVM: so the whole
+// command, in its real order, can run against a fake VM.
+var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
+	c, err := sshx.Dial(vm.Target())
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func newStackReleaseCmd() *cobra.Command {
@@ -147,7 +164,7 @@ func newStackReleaseCmd() *cobra.Command {
 			// Safety first: back up before releasing (unless opted out / no DB configured).
 			if !noBackup && st.DBContainer != "" && st.DBName != "" {
 				if err := ui.Step("backup", func() error {
-					c, err := sshx.Dial(vm.Target())
+					c, err := dialRelease(vm)
 					if err != nil {
 						return err
 					}
@@ -181,7 +198,7 @@ func newStackReleaseCmd() *cobra.Command {
 			}
 
 			// 2 + 3: build images on the VM, then compose up.
-			c, err := sshx.Dial(vm.Target())
+			c, err := dialRelease(vm)
 			if err != nil {
 				return fail(err)
 			}
