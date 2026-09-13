@@ -41,8 +41,72 @@ func buildExecRemote(argv []string) (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
+// parseExecArgs parses DisableFlagParsing argv for `vm exec`.
+// Accepted forms (flags may appear anywhere before `--`):
+//
+//	exec <name> -- <command>...
+//	exec -o json <name> -- <command>...
+//	exec <name> -o json -- <command>...
+//
+// Remote flags such as `-h` must come after `--`; without `--` this returns an
+// error so cobra never treats them as help.
+func parseExecArgs(args []string) (name string, remote []string, help bool, err error) {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		return "", nil, true, nil
+	}
+	if len(args) == 0 {
+		return "", nil, true, nil
+	}
+
+	dash := -1
+	for i, a := range args {
+		if a == "--" {
+			dash = i
+			break
+		}
+	}
+	if dash < 0 {
+		return "", nil, false, fmt.Errorf("put the remote command after --: baryovm vm exec <name> -- <command>...")
+	}
+
+	prefix := args[:dash]
+	remote = args[dash+1:]
+	var positional []string
+	for i := 0; i < len(prefix); i++ {
+		a := prefix[i]
+		switch {
+		case a == "-h" || a == "--help":
+			return "", nil, true, nil
+		case a == "-o" || a == "--output":
+			if i+1 >= len(prefix) {
+				return "", nil, false, fmt.Errorf("flag needs an argument: %s", a)
+			}
+			outputFormat = prefix[i+1]
+			ui.SetJSON(outputFormat == "json")
+			i++
+		case strings.HasPrefix(a, "-o="):
+			outputFormat = strings.TrimPrefix(a, "-o=")
+			ui.SetJSON(outputFormat == "json")
+		case strings.HasPrefix(a, "--output="):
+			outputFormat = strings.TrimPrefix(a, "--output=")
+			ui.SetJSON(outputFormat == "json")
+		case strings.HasPrefix(a, "-"):
+			return "", nil, false, fmt.Errorf("unknown flag: %s", a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+	if len(positional) != 1 {
+		return "", nil, false, fmt.Errorf("usage: baryovm vm exec <name> -- <command>...")
+	}
+	if len(remote) == 0 {
+		return "", nil, false, fmt.Errorf("missing command: baryovm vm exec <name> -- <command>...")
+	}
+	return positional[0], remote, false, nil
+}
+
 func newVMExecCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "exec <name> -- <command>...",
 		Short: "Run a command on a registered VM over SSH",
 		Long: strings.TrimSpace(`
@@ -55,11 +119,22 @@ sudo -n so -o json does not hang on a password prompt).
 
 A non-zero remote exit becomes a non-zero CLI exit. Under -o json the envelope
 keeps stdout, stderr and exitCode as separate fields.
+
+The remote command must follow -- so flags like -h belong to the remote
+process rather than this CLI (e.g. baryovm vm exec web1 -- df -h).
 `),
-		Args: cobra.MinimumNArgs(2),
+		// Cobra would otherwise treat remote -h/--help as CLI help and exit 0
+		// without running anything. Parse the prefix ourselves instead.
+		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			remote, err := buildExecRemote(args[1:])
+			name, remoteArgs, help, err := parseExecArgs(args)
+			if err != nil {
+				return err
+			}
+			if help {
+				return cmd.Help()
+			}
+			remote, err := buildExecRemote(remoteArgs)
 			if err != nil {
 				return err
 			}
@@ -119,6 +194,7 @@ keeps stdout, stderr and exitCode as separate fields.
 			return nil
 		},
 	}
+	return cmd
 }
 
 func nonZeroErr(cap sshx.Capture) string {

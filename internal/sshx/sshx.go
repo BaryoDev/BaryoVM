@@ -77,16 +77,22 @@ func (c *Client) Run(cmd string) (string, error) {
 		if msg == "" {
 			msg = fmt.Sprintf("exit status %d", cap.ExitCode)
 		}
+		if cap.ExitErr != nil {
+			return cap.Stdout, fmt.Errorf("remote `%s`: %w: %s", cmd, cap.ExitErr, msg)
+		}
 		return cap.Stdout, fmt.Errorf("remote `%s`: %s", cmd, msg)
 	}
 	return cap.Stdout, nil
 }
 
 // Capture is the stdout, stderr and exit code of one remote command.
+// ExitErr is the *ssh.ExitError when ExitCode != 0, so callers of Run can
+// still unwrap it after the Capture split.
 type Capture struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	ExitErr  error
 }
 
 // RunCapture runs a command and always returns its streams. A non-zero remote
@@ -108,6 +114,7 @@ func (c *Client) RunCapture(cmd string) (Capture, error) {
 	}
 	if ee, ok := err.(*ssh.ExitError); ok {
 		cap.ExitCode = ee.ExitStatus()
+		cap.ExitErr = ee
 		return cap, nil
 	}
 	return cap, fmt.Errorf("remote `%s`: %w: %s", cmd, err, strings.TrimSpace(errb.String()))

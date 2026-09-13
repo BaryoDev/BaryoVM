@@ -7,6 +7,8 @@ package cli
 import (
 	"errors"
 	"testing"
+
+	"github.com/BaryoDev/BaryoVM/internal/ui"
 )
 
 func TestBuildExecRemoteQuotesEachArg(t *testing.T) {
@@ -72,5 +74,77 @@ func TestExitCodeOfPropagatesRemoteStatus(t *testing.T) {
 	code, silent = exitCodeOf(errors.New("dial failed"))
 	if code != 1 || silent {
 		t.Errorf("plain error: got code=%d silent=%v", code, silent)
+	}
+}
+
+func TestParseExecArgsRequiresDash(t *testing.T) {
+	_, _, _, err := parseExecArgs([]string{"web1", "df", "-h"})
+	if err == nil {
+		t.Fatal("expected error when remote command is not after --")
+	}
+}
+
+func TestParseExecArgsAcceptsFlagsAroundName(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantName   string
+		wantRemote []string
+		wantJSON   bool
+	}{
+		{
+			name:       "plain",
+			args:       []string{"web1", "--", "df", "-h"},
+			wantName:   "web1",
+			wantRemote: []string{"df", "-h"},
+		},
+		{
+			name:       "output before name",
+			args:       []string{"-o", "json", "web1", "--", "uptime"},
+			wantName:   "web1",
+			wantRemote: []string{"uptime"},
+			wantJSON:   true,
+		},
+		{
+			name:       "output after name",
+			args:       []string{"oracle", "-o", "json", "--", "cat", "/etc/os-release"},
+			wantName:   "oracle",
+			wantRemote: []string{"cat", "/etc/os-release"},
+			wantJSON:   true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			outputFormat = "human"
+			ui.SetJSON(false)
+			name, remote, help, err := parseExecArgs(c.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if help {
+				t.Fatal("unexpected help")
+			}
+			if name != c.wantName {
+				t.Errorf("name: got %q want %q", name, c.wantName)
+			}
+			if len(remote) != len(c.wantRemote) {
+				t.Fatalf("remote: got %v want %v", remote, c.wantRemote)
+			}
+			for i := range remote {
+				if remote[i] != c.wantRemote[i] {
+					t.Fatalf("remote: got %v want %v", remote, c.wantRemote)
+				}
+			}
+			if ui.JSON() != c.wantJSON {
+				t.Errorf("json mode: got %v want %v", ui.JSON(), c.wantJSON)
+			}
+		})
+	}
+}
+
+func TestParseExecArgsHelp(t *testing.T) {
+	_, _, help, err := parseExecArgs([]string{"--help"})
+	if err != nil || !help {
+		t.Fatalf("got help=%v err=%v", help, err)
 	}
 }
