@@ -47,17 +47,37 @@ func newStackAddCmd() *cobra.Command {
 			if store.Find(vm) == nil {
 				return fmt.Errorf("no VM named %q: register it first with `baryovm vm add`", vm)
 			}
-			st := fleet.Stack{
-				Name: args[0], VM: vm, Dir: path, File: file,
-				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser,
-				EnvFile: envFile, BackupDir: backupDir, Keep: keep,
-				ReleaseFile: releaseFile, Sudo: useSudo,
+			// Re-adding a stack changes only what the flags name. It used to replace the record,
+			// which cleared the update policy that only `stack set-update` writes, and `stack add`
+			// is where the backup error sends you to register a database (#63).
+			st := fleet.Stack{Name: args[0]}
+			verb := "registered"
+			if existing := store.FindStack(args[0]); existing != nil {
+				st = *existing
+				verb = "updated"
+			}
+			st.VM, st.Dir = vm, path
+			f := cmd.Flags()
+			for name, apply := range map[string]func(){
+				"file":         func() { st.File = file },
+				"db-container": func() { st.DBContainer = dbContainer },
+				"db-name":      func() { st.DBName = dbName },
+				"db-user":      func() { st.DBUser = dbUser },
+				"env-file":     func() { st.EnvFile = envFile },
+				"backup-dir":   func() { st.BackupDir = backupDir },
+				"keep":         func() { st.Keep = keep },
+				"release-file": func() { st.ReleaseFile = releaseFile },
+				"sudo":         func() { st.Sudo = useSudo },
+			} {
+				if f.Changed(name) {
+					apply()
+				}
 			}
 			store.UpsertStack(st)
 			if err := store.Save(); err != nil {
 				return err
 			}
-			ui.Emit(ui.Result{OK: true, Action: "stack add", Message: fmt.Sprintf("registered stack %s (%s on %s)", args[0], path, vm), Data: st})
+			ui.Emit(ui.Result{OK: true, Action: "stack add", Message: fmt.Sprintf("%s stack %s (%s on %s)", verb, args[0], path, vm), Data: st})
 			return nil
 		},
 	}

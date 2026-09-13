@@ -14,6 +14,11 @@ previously accepted is called out here rather than left to be discovered.
   this one" and "On it" got no hint, and "Working on this" matched only as the whole comment, so
   "Working on this, PR tomorrow" was ignored. The pattern is now covered by a table of phrasings in
   `internal/workflows`. (#72)
+- **Re-running `stack add` no longer clears a stack's update policy.** It replaced the whole
+  record, so `autoUpdate`, `healthUrl`, `updateServices` and `noDatabase` were lost, along with any
+  flag not passed again. That mattered because `stack backup` tells you to register a missing
+  database with `stack add`, and following it turned off unattended updates. Re-adding now changes
+  only the fields its flags name. (#63)
 
 ## [0.3.0] - 2026-09-10
 
