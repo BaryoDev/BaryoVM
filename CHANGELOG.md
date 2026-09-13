@@ -8,6 +8,13 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The self-assign hint now answers a bare claim.** "Taking this", "Picking this up", "Grabbing
+  this one" and "On it" got no hint, and "Working on this" matched only as the whole comment, so
+  "Working on this, PR tomorrow" was ignored. The pattern is now covered by a table of phrasings in
+  `internal/workflows`. (#72)
+
 ## [0.3.0] - 2026-09-10
 
 Two new commands, an install that does not assume a Go toolchain, and the class of bug where a
