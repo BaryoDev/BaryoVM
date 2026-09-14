@@ -88,6 +88,10 @@ jobs:
   # A nudge rather than an assignment. Matching intent from prose is guesswork, and the negations
   # are the problem: "I don't think I'd like to work on this" contains "like to work on this". A
   # wrong assignment has to be noticed and undone by a human; a wrong hint costs one comment.
+  #
+  # The gerund forms ("Taking this", "Picking this up", "On it") have no first-person subject, and
+  # the hint missed them on a real claim (#72). The regex is tested in internal/workflows; add a
+  # phrasing to that table when you change it.
   hint:
     if: >
       !github.event.issue.pull_request &&
@@ -106,7 +110,7 @@ jobs:
             // Bots asking to be assigned is not a thing we need to answer.
             if (context.payload.comment.user.type === 'Bot') return;
 
-            const asking = /(assign\s+(me|it|this|to\s+me)|can\s+(i|u|you)\s+(assign|work|take)|could\s+(i|you)\s+(assign|work|take)|(i|I)('d|\s+would)?\s*(like|want)\s+to\s+(work|take)|may\s+i\s+(work|take)|let\s+me\s+(work|take|handle)|i'?ll\s+take\s+(this|it)|i\s+can\s+take\s+(this|it)|please\s+assign|working\s+on\s+this\??$)/i;
+            const asking = /(assign\s+(me|it|this|to\s+me)|can\s+(i|u|you)\s+(assign|work|take)|could\s+(i|you)\s+(assign|work|take)|(i|I)('d|\s+would)?\s*(like|want)\s+to\s+(work|take)|may\s+i\s+(work|take)|let\s+me\s+(work|take|handle)|i'?ll\s+take\s+(this|it)|i\s+can\s+take\s+(this|it)|please\s+assign|working\s+on\s+(this|it)|(^|\s)(taking|grabbing|claiming)\s+(this|it)|(^|\s)picking\s+(this|it)\s+up|^\s*on\s+it\b)/i;
             if (!asking.test(body)) {
               core.info('Not an assignment request; ignoring.');
               return;
