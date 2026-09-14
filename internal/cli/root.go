@@ -38,7 +38,10 @@ func newRoot() *cobra.Command {
 // Execute runs the root command.
 func Execute() {
 	if err := newRoot().Execute(); err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
-		os.Exit(1)
+		code, silent := exitCodeOf(err)
+		if !silent {
+			ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
+		}
+		os.Exit(code)
 	}
 }
