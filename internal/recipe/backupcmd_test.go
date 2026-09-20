@@ -6,6 +6,7 @@ package recipe
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -228,6 +229,10 @@ func TestStackNameCannotBreakOutOfTheDefaultBackupDir(t *testing.T) {
 	// Asking a shell is the only check that cannot be fooled by a substring. Run the assignment
 	// and print the result: if the quoting held, BK is one value containing the whole stack name,
 	// and whoami never ran. If it broke, the shell executes it.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("home: %v", err)
+	}
 	out, err := exec.Command("sh", "-c", bk+"\nprintf '%s' \"$BK\"").CombinedOutput()
 	if err != nil {
 		t.Fatalf("running the assignment failed, which itself means the quoting broke: %v\n%s", err, out)
@@ -236,8 +241,12 @@ func TestStackNameCannotBreakOutOfTheDefaultBackupDir(t *testing.T) {
 	if !strings.HasSuffix(got2, `x";whoami;echo "-backups`) {
 		t.Errorf("BK should hold the whole stack name as text, got %q from:\n%s", got2, bk)
 	}
-	if strings.Contains(got2, "root") || strings.Contains(got2, "runner") {
-		t.Errorf("whoami appears to have run, so the name escaped its quoting: %q", got2)
+	// Do not look for a username in the output: on a CI runner $HOME is /home/runner, so a check
+	// for "runner" matches the safe result and fails a passing test. Prove it positively instead.
+	// If the quoting broke, the shell runs whoami and BK holds only the part before the semicolon,
+	// so the suffix assertion above is the real check and this one pins the whole value.
+	if got2 != home+`/x";whoami;echo "-backups` {
+		t.Errorf("BK should be exactly $HOME plus the stack name, got %q", got2)
 	}
 }
 
