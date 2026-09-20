@@ -151,7 +151,10 @@ func BackupScript(strategies []Strategy, backupDir, stackName string, keep int, 
 	if backupDir != "" {
 		b.WriteString("BK=" + sshx.Quote(backupDir) + "\n")
 	} else {
-		b.WriteString(fmt.Sprintf("BK=\"$HOME/%s-backups\"\n", stackName))
+		// Quoted the same way backupDir is. The unquoted form was reachable: a stack named
+		// `x";whoami;echo "` closed the quote and ran a command on the VM. $HOME stays outside the
+		// quoting so the shell still expands it, and the rest is one quoted literal.
+		b.WriteString(`BK="$HOME/"` + sshx.Quote(stackName+"-backups") + "\n")
 	}
 	b.WriteString("mkdir -p \"$BK\"\n")
 	// One timestamp for the whole run. Each strategy calling date would drift across a slow dump

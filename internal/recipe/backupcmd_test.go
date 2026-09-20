@@ -6,6 +6,7 @@ package recipe
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -204,12 +205,48 @@ func TestBackupDirIsQuotedWhenGiven(t *testing.T) {
 	}
 }
 
+// Found by an automated security review after the first version shipped in a branch: the default
+// backup dir interpolated the stack name into a double-quoted shell string with no quoting, while
+// the explicit dir two lines above went through sshx.Quote. A stack named `x";whoami;echo "` closed
+// the quote and ran a command on the VM.
+func TestStackNameCannotBreakOutOfTheDefaultBackupDir(t *testing.T) {
+	got, err := BackupScript([]Strategy{{Kind: KindFiles, Paths: []string{"/a"}}},
+		"", `x";whoami;echo "`, 14, false)
+	if err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	var bk string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "BK=") {
+			bk = line
+		}
+	}
+	if bk == "" {
+		t.Fatal("no BK= line in the script")
+	}
+
+	// Asking a shell is the only check that cannot be fooled by a substring. Run the assignment
+	// and print the result: if the quoting held, BK is one value containing the whole stack name,
+	// and whoami never ran. If it broke, the shell executes it.
+	out, err := exec.Command("sh", "-c", bk+"\nprintf '%s' \"$BK\"").CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the assignment failed, which itself means the quoting broke: %v\n%s", err, out)
+	}
+	got2 := string(out)
+	if !strings.HasSuffix(got2, `x";whoami;echo "-backups`) {
+		t.Errorf("BK should hold the whole stack name as text, got %q from:\n%s", got2, bk)
+	}
+	if strings.Contains(got2, "root") || strings.Contains(got2, "runner") {
+		t.Errorf("whoami appears to have run, so the name escaped its quoting: %q", got2)
+	}
+}
+
 func TestBackupDirDefaultsUnderHome(t *testing.T) {
 	got, err := BackupScript([]Strategy{{Kind: KindFiles, Paths: []string{"/a"}}}, "", "myapp", 14, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
-	if !strings.Contains(got, `BK="$HOME/myapp-backups"`) {
+	if !strings.Contains(got, `BK="$HOME/"'myapp-backups'`) {
 		t.Errorf("want the default:\n%s", got)
 	}
 }
