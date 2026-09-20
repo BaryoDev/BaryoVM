@@ -229,12 +229,69 @@ Add `-o json` to any command for a stable result envelope:
 This is how the planned MAUI desktop/mobile app and **MCP server** will drive
 BaryoVM. The CLI is the single source of truth.
 
-## Where it's going
+## Where it's going: recipes
 
-BaryoVM today is the CLI core. The broader plan, a self-hosted control plane
-(native app + MCP server) over Docker with provider adapters (SSH / Lightsail /
-OCI), reverse-proxy and DNS ("type a domain, click"), GitHub deploys and email,
-lives in [docs/VISION.md](docs/VISION.md).
+Today you register a stack by telling BaryoVM about it: the directory, the
+database container, the health URL. That works, and it means every team writes
+the same knowledge again for the same application.
+
+A **recipe** is that knowledge, published once by the application and versioned
+with it. It declares what a stack *is*, positively:
+
+```json
+{
+  "schema": 1,
+  "name": "barako",
+  "version": "4.2.1",
+  "services": [
+    { "name": "api", "image": "ghcr.io/baryodev/barako:4.2.1",
+      "healthUrl": "http://127.0.0.1:8080/health" },
+    { "name": "db", "image": "postgres:17" }
+  ],
+  "routes": [ { "host": "cms.example.com", "port": 8080, "tls": true } ],
+  "backup": [
+    { "kind": "postgres-container", "container": "db", "database": "app" },
+    { "kind": "files", "paths": ["/srv/app/uploads"] }
+  ],
+  "inputs": [
+    { "name": "DB_PASSWORD", "secret": true,
+      "description": "the application database password" }
+  ]
+}
+```
+
+Four things about that file are deliberate.
+
+**`stack add <name>` stays generic.** The name is whatever you call your stack.
+Nothing in BaryoVM's command surface knows the word "barako", and nothing ever
+will: the moment one application is named there, every other stack is second
+class. Whether a stack is barako, WordPress, Umbraco or a VitePress site is the
+recipe's business.
+
+**A stack says what it is, not what it lacks.** A static site is a recipe with
+files and routes and no services. It is not a compose stack with its pieces
+missing, which is what a `noCompose` flag would make it. Every deployment shape
+that needs a negative flag is a code path nobody tests.
+
+**Backup is a list of strategies, each with its restore.** Postgres in a
+container, MySQL, Mongo, a directory of uploads, or `kind: "command"` with your
+own dump and restore for anything else. MSSQL, SQLite and a Redis snapshot
+should not wait for a BaryoVM release. A strategy that declares a dump and no
+restore is refused, because a backup nobody can restore is hope.
+
+**A recipe declares inputs, never values.** It says it needs `DB_PASSWORD`. The
+project says where that lives. BaryoVM resolves the reference at deploy time,
+writes it into the remote config, and stores nothing. A secret with a default is
+refused outright: a recipe is published, so a default secret is a shared secret.
+
+A recipe written for a schema this binary does not know is refused rather than
+parsed leniently, and so is a field it does not recognise. Accepting a newer
+recipe and ignoring the parts it adds is a deploy that quietly does less than
+was asked, and nobody finds out until the skipped part mattered.
+
+The older plan, a self-hosted control plane with a native app and an MCP server,
+lives in [docs/VISION.md](docs/VISION.md) as a historical record rather than a
+specification.
 
 ## Development
 
