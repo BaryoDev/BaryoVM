@@ -6,10 +6,15 @@ package cli
 
 import (
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -17,7 +22,7 @@ import (
 
 func newVMCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "vm", Short: "Manage the VMs in your fleet"}
-	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd())
+	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd(), newVMForgetKeyCmd())
 	return cmd
 }
 
@@ -181,4 +186,57 @@ func requireVM(name string) (fleet.VM, error) {
 		return fleet.VM{}, fmt.Errorf("no VM named %q: register it with `baryovm vm add %s --host ... --key ...`", name, name)
 	}
 	return *vm, nil
+}
+
+// newVMForgetKeyCmd drops a recorded host key so the next connection learns the new one.
+//
+// This exists because refusing a changed key is only useful if there is a stated way through it. A
+// rebuilt VM presents a new key legitimately, and without this command the operator's options are
+// to edit known_hosts by hand or to find a flag that turns verification off, and the second is what
+// people actually do. It takes one host at a time on purpose: there is no "accept everything".
+func newVMForgetKeyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "forget-key <name-or-host>",
+		Short: "Forget a VM's recorded SSH host key, so the next connection learns it again",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := args[0]
+
+			// A fleet name is the convenient thing to type; the key is stored under host:port.
+			if store, err := fleet.Load(); err == nil {
+				if vm := store.Find(target); vm != nil {
+					t := vm.Target()
+					port := t.Port
+					if port == 0 {
+						port = 22
+					}
+					target = net.JoinHostPort(t.Host, strconv.Itoa(port))
+				}
+			}
+
+			hk := hostkeys.New(baryovmHome())
+			n, err := hk.Forget(target)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return fmt.Errorf("no recorded host key for %s in %s", target, hk.Path())
+			}
+			ui.Emit(ui.Result{
+				OK:      true,
+				Action:  "vm forget-key",
+				Message: fmt.Sprintf("forgot %d host key(s) for %s, the next connection will learn the new one", n, target),
+			})
+			return nil
+		},
+	}
+}
+
+// baryovmHome mirrors fleet's rule: BARYOVM_HOME if set, else ~/.baryovm.
+func baryovmHome() string {
+	if d := os.Getenv("BARYOVM_HOME"); d != "" {
+		return d
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".baryovm")
 }

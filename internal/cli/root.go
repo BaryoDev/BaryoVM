@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +38,12 @@ func newRoot() *cobra.Command {
 
 // Execute runs the root command.
 func Execute() {
+	// Tell the operator what host identity was just trusted. sshx does not print (engine packages
+	// never do), so the hook lives here. ui.Detail goes to stderr and is suppressed under -o json,
+	// which keeps the JSON envelope the one document on stdout.
+	sshx.OnLearnHostKey = func(host, fingerprint string) {
+		ui.Detail("learned host key for "+host, fingerprint)
+	}
 	if err := newRoot().Execute(); err != nil {
 		code, silent := exitCodeOf(err)
 		if !silent {

@@ -13,6 +13,16 @@ down.
   (override with `BARYOVM_HOME`), written **owner-only (`0600`)**. It contains
   hostnames, users, key paths and stack config, and **no passwords, tokens, or key
   material**.
+- **Host identity**. Before running anything on a VM, BaryoVM checks the host's
+  SSH key against `~/.baryovm/known_hosts` (override with `BARYOVM_HOME`),
+  written **owner-only (`0600`)**. The first connection to a machine records the
+  key and prints its fingerprint; every later connection must match. A key that
+  has **changed** stops the command and prints both fingerprints, because a
+  rebuilt VM and someone else answering on that address look identical from
+  here. `baryovm vm forget-key <name-or-host>` drops one recorded key so the
+  next connection learns the new one. There is no flag that disables the check
+  for every host. Your own `~/.ssh/known_hosts` is read as an additional source,
+  never written.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.

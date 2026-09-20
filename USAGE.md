@@ -39,7 +39,26 @@ baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
 baryovm vm remove oracle         # forget it (does not destroy the machine)
+baryovm vm forget-key oracle     # drop its recorded SSH host key
 ```
+
+### Host keys
+
+The first connection to a machine records its SSH host key in
+`~/.baryovm/known_hosts` and prints the fingerprint. Every connection after that
+must match, and one that does not stops the command:
+
+```text
+host key for 203.0.113.10:22 changed
+  stored   SHA256:aWxF...
+  offered  SHA256:9KpQ...
+```
+
+A rebuilt VM is the ordinary reason, and so is someone answering on that address
+who should not be. BaryoVM cannot tell them apart, so it stops. If you rebuilt
+the machine, `baryovm vm forget-key <name-or-host>` drops the old key and the
+next connection learns the new one. There is no flag that turns the check off
+for every host.
 
 `vm exec` runs an arbitrary command on one named VM with the SSH key already in
 `fleet.json`. Everything after `--` is the remote command, so its own flags reach
