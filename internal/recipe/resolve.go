@@ -30,6 +30,13 @@ type Ref struct {
 	// Path is the file to read, for From == "file". Trailing whitespace is trimmed, because a
 	// secret written with `echo` carries a newline and a trailing newline in a password is a
 	// failure that looks like a wrong password.
+	//
+	// Any readable path is accepted, including one that walks out of the project directory. That is
+	// deliberate: a project file is operator input, the same trust level as the SSH key path in
+	// fleet.json, and secrets usually live outside the repository on purpose (/run/secrets, a
+	// mounted volume, the home directory). Constraining it to the project tree would push people
+	// towards keeping secrets next to the code, which is the outcome this whole design avoids. It
+	// is not a sanitisation boundary, and it must not be fed a path from anywhere untrusted.
 	Path string `json:"path,omitempty"`
 
 	// Value is refused. It exists in the struct only so a project containing one gets an error
@@ -45,6 +52,10 @@ type Bindings map[string]Ref
 type Resolved struct {
 	values  map[string]string
 	secrets map[string]bool
+	// unset records an input that was declared, is optional, and was never supplied. It resolves
+	// to the empty string like any other, and this is how a caller tells that apart from a value
+	// somebody deliberately set to nothing.
+	unset map[string]bool
 }
 
 // Get returns a resolved value.
@@ -56,6 +67,22 @@ func (r *Resolved) Get(name string) (string, bool) {
 // IsSecret reports whether a name was declared secret by the recipe, so a caller can keep it out of
 // a log line or a JSON envelope.
 func (r *Resolved) IsSecret(name string) bool { return r.secrets[name] }
+
+// IsUnset reports that an input was declared and optional and nothing supplied it. Its value is the
+// empty string either way; this is how a caller writing a config file tells "nobody set this" from
+// "somebody set this to nothing", which are different intentions with the same bytes.
+func (r *Resolved) IsUnset(name string) bool { return r.unset[name] }
+
+// Unset lists every declared input nothing supplied, sorted, so a deploy can say what it is going
+// to leave empty rather than leaving the operator to notice afterwards.
+func (r *Resolved) Unset() []string {
+	out := make([]string, 0, len(r.unset))
+	for k := range r.unset {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Names returns every resolved name, sorted.
 func (r *Resolved) Names() []string {
@@ -163,14 +190,21 @@ func Resolve(r *Recipe, b Bindings, projectPath string) (*Resolved, error) {
 	out := &Resolved{
 		values:  make(map[string]string, len(r.Inputs)),
 		secrets: make(map[string]bool, len(r.Inputs)),
+		unset:   make(map[string]bool),
 	}
 	for _, in := range r.Inputs {
 		out.secrets[in.Name] = in.Secret
 
 		ref, bound := b[in.Name]
 		if !bound {
-			if in.Default != "" {
-				out.values[in.Name] = in.Default
+			// An optional input with no default and no binding used to be skipped outright, so its
+			// name was absent from the resolved set rather than present and empty. A caller writing
+			// the remote config then had no way to tell "declared optional and genuinely absent"
+			// from "never asked for", and the key simply would not appear in the file with nothing
+			// saying so. Record it as empty and remember that it was never supplied.
+			out.values[in.Name] = in.Default
+			if in.Default == "" {
+				out.unset[in.Name] = true
 			}
 			continue
 		}
@@ -203,6 +237,11 @@ func read(ref Ref) (string, error) {
 		// a failure that presents as a wrong password.
 		return strings.TrimRight(string(b), "\r\n"), nil
 	default:
+		// ValidateBindings runs first and rejects any source outside env and file, so this is
+		// unreachable today. It stays because the two lists can drift: adding a third source to
+		// ValidateBindings and not here would otherwise read nothing and return an empty value,
+		// which for a required input is caught, and for an optional one is silence. Erroring is
+		// the safe direction for a case that should not happen.
 		return "", fmt.Errorf("unknown source %q", ref.From)
 	}
 }

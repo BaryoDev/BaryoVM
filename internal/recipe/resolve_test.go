@@ -178,3 +178,92 @@ func TestMissingFileIsNamed(t *testing.T) {
 		t.Errorf("the error should name the path: %v", err)
 	}
 }
+
+// The defect a critic found on the first review of this file: an optional input with no default and
+// no binding used to vanish from the resolved set entirely. Resolve returned success and the name
+// was simply absent, so a caller writing the remote config had no way to tell "declared optional and
+// nobody supplied it" from "never asked for". Success over something that did not happen.
+func TestOptionalUnboundInputIsPresentAndMarkedUnset(t *testing.T) {
+	no := false
+	r := &Recipe{
+		Schema: SchemaVersion, Name: "x",
+		Files:  []Files{{From: "a/", To: "/b"}},
+		Inputs: []Input{{Name: "OPTIONAL_TOKEN", Required: &no}},
+	}
+
+	got, err := Resolve(r, Bindings{}, "project.json")
+	if err != nil {
+		t.Fatalf("an optional input nobody supplied is not an error: %v", err)
+	}
+
+	v, ok := got.Get("OPTIONAL_TOKEN")
+	if !ok {
+		t.Fatal("a declared input must appear in the resolved set even when nothing supplied it")
+	}
+	if v != "" {
+		t.Errorf("want empty, got %q", v)
+	}
+	if !got.IsUnset("OPTIONAL_TOKEN") {
+		t.Error("an input nothing supplied must be distinguishable from one set to empty")
+	}
+	if names := got.Unset(); len(names) != 1 || names[0] != "OPTIONAL_TOKEN" {
+		t.Errorf("Unset() = %v", names)
+	}
+}
+
+// The other half of the same distinction: a value somebody deliberately set to empty is not unset.
+func TestDeliberatelyEmptyOptionalIsNotUnset(t *testing.T) {
+	t.Setenv("DELIBERATELY_EMPTY", "")
+	no := false
+	r := &Recipe{
+		Schema: SchemaVersion, Name: "x",
+		Files:  []Files{{From: "a/", To: "/b"}},
+		Inputs: []Input{{Name: "OPTIONAL_TOKEN", Required: &no}},
+	}
+
+	got, err := Resolve(r, Bindings{"OPTIONAL_TOKEN": {From: "env", Name: "DELIBERATELY_EMPTY"}}, "project.json")
+	if err != nil {
+		t.Fatalf("an optional input may resolve to empty: %v", err)
+	}
+	if got.IsUnset("OPTIONAL_TOKEN") {
+		t.Error("a bound input is not unset, whatever its value")
+	}
+}
+
+func TestNilBindingsBehavesLikeEmpty(t *testing.T) {
+	r := recipeWith(t, `[{"name":"SITE_URL","default":"http://localhost"}]`)
+	got, err := Resolve(r, nil, "project.json")
+	if err != nil {
+		t.Fatalf("a nil bindings map is an empty one: %v", err)
+	}
+	if v, _ := got.Get("SITE_URL"); v != "http://localhost" {
+		t.Errorf("got %q", v)
+	}
+}
+
+// A binding wins over a default rather than the two being combined somehow.
+func TestBindingWinsOverDefault(t *testing.T) {
+	t.Setenv("FROM_ENV", "bound")
+	r := recipeWith(t, `[{"name":"SITE_URL","default":"http://localhost"}]`)
+	got, err := Resolve(r, Bindings{"SITE_URL": {From: "env", Name: "FROM_ENV"}}, "project.json")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if v, _ := got.Get("SITE_URL"); v != "bound" {
+		t.Errorf("the binding should win, got %q", v)
+	}
+	if got.IsUnset("SITE_URL") {
+		t.Error("a bound input is not unset")
+	}
+}
+
+func TestRedactedOnARecipeWithNoInputs(t *testing.T) {
+	r := &Recipe{Schema: SchemaVersion, Name: "x", Files: []Files{{From: "a/", To: "/b"}}}
+	got, err := Resolve(r, Bindings{}, "project.json")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Redacted()) != 0 || len(got.Names()) != 0 || len(got.Unset()) != 0 {
+		t.Error("a recipe with no inputs resolves to nothing, and says so consistently")
+	}
+}
