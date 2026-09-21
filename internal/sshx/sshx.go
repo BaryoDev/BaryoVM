@@ -32,6 +32,30 @@ func home() string {
 	return filepath.Join(h, ".baryovm")
 }
 
+// StrictHostKeys reports whether an unknown host should be refused rather than learned.
+//
+// Read from the environment rather than passed down, because it has to reach a dial from every
+// command without threading a parameter through six engine packages that have no business knowing
+// about it. BARYOVM_STRICT_HOST_KEYS=1 is the form a CI job sets once for the whole workflow.
+//
+// strictOverride is what the --strict-host-keys flag sets, so the flag wins over the environment.
+var strictOverride *bool
+
+// SetStrictHostKeys is how the cli layer applies its flag.
+func SetStrictHostKeys(on bool) { strictOverride = &on }
+
+// StrictHostKeys resolves the flag, then the environment.
+func StrictHostKeys() bool {
+	if strictOverride != nil {
+		return *strictOverride
+	}
+	switch os.Getenv("BARYOVM_STRICT_HOST_KEYS") {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 // OnLearnHostKey is called the first time a host key is recorded, so the operator sees the
 // fingerprint they are now trusting. The cli layer sets it; sshx does not print (see CLAUDE.md on
 // the dependency direction), so a nil hook means the learning is silent.
@@ -70,7 +94,7 @@ func Dial(t Target) (*Client, error) {
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostkeys.New(home()).Callback(learned),
+		HostKeyCallback: hostkeys.New(home()).Strict(StrictHostKeys()).Callback(learned),
 		Timeout:         15 * time.Second,
 	}
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))

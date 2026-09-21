@@ -17,6 +17,7 @@ import (
 )
 
 var outputFormat string
+var strictHostKeys bool
 
 // errDryRun signals that a command stopped early because --dry-run was set.
 var errDryRun = errors.New("dry run")
@@ -30,9 +31,16 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			ui.SetJSON(outputFormat == "json")
+			// Only apply the flag when it was actually given, so it overrides the environment
+			// rather than a default false switching strict mode off for a CI job that set it.
+			if cmd.Flags().Changed("strict-host-keys") {
+				sshx.SetStrictHostKeys(strictHostKeys)
+			}
 		},
 	}
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
+	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
+		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd())
 	return root
 }

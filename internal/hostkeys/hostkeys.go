@@ -61,10 +61,50 @@ func (e *ErrChanged) Error() string {
 		e.Host, e.Stored, e.Offered, e.Host)
 }
 
+// ErrUnknownHost is returned in strict mode for a host with no recorded key. It carries the offered
+// fingerprint so an operator can pin it after checking it, rather than having to go and fetch it.
+type ErrUnknownHost struct {
+	Host    string
+	Offered string
+	Store   string
+}
+
+func (e *ErrUnknownHost) Error() string {
+	return fmt.Sprintf(
+		"no recorded host key for %s, and strict host key checking is on.\n"+
+			"  offered  %s\n"+
+			"\n"+
+			"Strict mode refuses to learn a key, because there is nobody here to check it. A runner\n"+
+			"with no memory between runs would otherwise trust whatever answers on this address,\n"+
+			"every run.\n"+
+			"\n"+
+			"Check that fingerprint against the machine, then record it before this runs:\n"+
+			"\n"+
+			"  ssh-keyscan -t ecdsa,ed25519 %s >> %s\n",
+		e.Host, e.Offered, hostOnly(e.Host), e.Store)
+}
+
+// hostOnly strips the port, since ssh-keyscan takes a host and an optional -p.
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
 // Store is a known_hosts file BaryoVM owns, plus the user's own file as a read-only second source.
 type Store struct {
 	path      string // BaryoVM's own known_hosts, written here
 	extraPath string // the user's ~/.ssh/known_hosts, read but never written
+
+	// strict refuses to learn. An unknown host is an error rather than a key recorded on faith.
+	//
+	// Trust on first use assumes there is a first use: one moment where a key is learned and every
+	// connection after it is checked. A CI runner has no memory between runs, so every run is the
+	// first one, and TOFU degrades to accepting whatever answers on the recorded address, every
+	// time, with a key that can dump the production database. Strict mode is how CI says "I already
+	// know this key, and if you do not, stop".
+	strict bool
 }
 
 // New returns the store rooted at dir, which is BaryoVM's home.
@@ -73,6 +113,13 @@ func New(dir string) *Store {
 	if home, err := os.UserHomeDir(); err == nil {
 		s.extraPath = filepath.Join(home, ".ssh", "known_hosts")
 	}
+	return s
+}
+
+// Strict makes an unknown host an error rather than something to learn. Set it wherever there is no
+// human to check a fingerprint and no memory between runs.
+func (s *Store) Strict(on bool) *Store {
+	s.strict = on
 	return s
 }
 
@@ -111,7 +158,11 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 			}
 		}
 
-		// Unknown everywhere: the fresh VM case. Learn it.
+		// Unknown everywhere: the fresh VM case.
+		if s.strict {
+			return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+		}
+		// Learn it.
 		if err := s.add(hostname, key); err != nil {
 			return err
 		}
