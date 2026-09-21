@@ -79,6 +79,13 @@ func knownKeys(t reflect.Type) map[string]bool {
 	out := map[string]bool{}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
+		// encoding/json only ever represents exported fields, so an unexported one is not a key.
+		// Counting it as known was this file's own bug one level down: `rest` itself has no tag,
+		// fell back to its field name, and registered "rest" as known, so a future file carrying a
+		// genuine "rest" key would have been dropped by the very code meant to preserve it.
+		if f.PkgPath != "" {
+			continue
+		}
 		tag := f.Tag.Get("json")
 		if tag == "-" {
 			continue

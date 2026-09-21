@@ -201,3 +201,27 @@ func TestLoadAndSavePreserveThroughTheRealFile(t *testing.T) {
 		t.Errorf("the new stack should be there too:\n%s", b)
 	}
 }
+
+// Caught by review on the pull request that introduced this file: knownKeys walked every struct
+// field including the unexported `rest`, which has no json tag and so fell back to its field name.
+// "rest" was registered as a known key, so a future fleet.json carrying a genuine "rest" field
+// would be dropped by the code written to preserve it. encoding/json never marshals an unexported
+// field, so it can never be a key.
+func TestUnexportedFieldsAreNotKeys(t *testing.T) {
+	type plain Stack
+	if knownKeys(reflect.TypeOf(plain{}))["rest"] {
+		t.Fatal("the unexported rest field must not count as a json key")
+	}
+
+	var st Stack
+	if err := json.Unmarshal([]byte(`{"name":"app","rest":{"a":1}}`), &st); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	out, err := json.Marshal(st)
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if !strings.Contains(string(out), `"rest":{"a":1}`) {
+		t.Errorf("a field literally named rest must survive like any other:\n%s", out)
+	}
+}
