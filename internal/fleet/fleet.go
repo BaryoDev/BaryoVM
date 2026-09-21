@@ -25,6 +25,10 @@ type VM struct {
 	KeyPath  string `json:"keyPath"`
 	Provider string `json:"provider"`     // "ssh" (registered) | "lightsail" | "oci"
 	ID       string `json:"id,omitempty"` // cloud instance id, when provisioned
+
+	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
+	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
+	rest unknownFields
 }
 
 // Target converts a VM into an SSH dial target.
@@ -77,6 +81,10 @@ type Stack struct {
 
 	// UpdateServices limits which services an update touches. Empty means all of them.
 	UpdateServices []string `json:"updateServices,omitempty"`
+
+	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
+	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
+	rest unknownFields
 }
 
 // Store is the whole fleet.
