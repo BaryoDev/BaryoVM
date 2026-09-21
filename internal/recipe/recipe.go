@@ -22,6 +22,7 @@ package recipe
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -134,6 +135,13 @@ func Parse(b []byte, path string) (*Recipe, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&r); err != nil {
 		return nil, fmt.Errorf("parse recipe %s: %w", path, err)
+	}
+	// Decode stops at the end of the first JSON value, so a file holding two recipes back to back
+	// parses as the first one and the second is never read. Two recipes concatenated by a bad merge
+	// would deploy the top half of the file with nothing saying so, which is the same shape as the
+	// unknown field and unknown schema refusals above.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return nil, fmt.Errorf("parse recipe %s: more than one JSON value in the file", path)
 	}
 	if err := r.Validate(path); err != nil {
 		return nil, err

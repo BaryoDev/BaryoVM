@@ -142,3 +142,22 @@ func TestRouteNeedsAPort(t *testing.T) {
 		t.Fatal("a route with no destination is a hostname nobody serves")
 	}
 }
+
+// Caught by review: json.Decoder stops at the end of the first value, so a file holding two recipes
+// back to back parsed as the first one and the second was never read. Two recipes concatenated by a
+// bad merge would deploy the top half of the file with nothing saying so.
+func TestTrailingJSONIsRefused(t *testing.T) {
+	_, err := parse(t, `{"schema":1,"name":"x","files":[{"from":"a/","to":"/b"}]}{"schema":1,"name":"second"}`)
+	if err == nil {
+		t.Fatal("a second JSON value after the recipe must be refused")
+	}
+	if !strings.Contains(err.Error(), "more than one JSON value") {
+		t.Errorf("the error should say what is wrong: %v", err)
+	}
+}
+
+func TestTrailingWhitespaceIsFine(t *testing.T) {
+	if _, err := parse(t, "{\"schema\":1,\"name\":\"x\",\"files\":[{\"from\":\"a/\",\"to\":\"/b\"}]}\n\n  \n"); err != nil {
+		t.Fatalf("a trailing newline is not a second value: %v", err)
+	}
+}
