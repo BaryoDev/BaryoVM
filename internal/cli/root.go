@@ -9,6 +9,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -39,11 +40,24 @@ func newRoot() *cobra.Command {
 // Execute runs the root command.
 func Execute() {
 	// Tell the operator what host identity was just trusted. sshx does not print (engine packages
-	// never do), so the hook lives here. ui.Detail goes to stderr and is suppressed under -o json,
-	// which keeps the JSON envelope the one document on stdout.
+	// never do), so the hook lives here.
+	//
+	// Collected and printed at the end rather than as it happens. Dialling occurs inside ui.Step,
+	// whose spinner rewrites the line every 80ms, so a Detail printed mid-step is drawn and then
+	// erased by the next frame. Tested against a real host: the key was learned and written and the
+	// operator saw nothing, which is the one moment the fingerprint is worth checking.
+	var learned []string
 	sshx.OnLearnHostKey = func(host, fingerprint string) {
-		ui.Detail("learned host key for "+host, fingerprint)
+		learned = append(learned, host+" "+fingerprint)
 	}
+	defer func() {
+		for _, l := range learned {
+			host, fp, _ := strings.Cut(l, " ")
+			ui.Warnf("learned the host key for %s: %s", host, fp)
+			ui.Detail("verify it", "ssh-keyscan -t ecdsa,ed25519 "+host+" | ssh-keygen -lf -")
+		}
+	}()
+
 	if err := newRoot().Execute(); err != nil {
 		code, silent := exitCodeOf(err)
 		if !silent {
