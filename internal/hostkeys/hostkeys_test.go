@@ -224,3 +224,65 @@ func sshBase64(k ssh.PublicKey) string {
 	}
 	return parts[1]
 }
+
+// Strict mode exists because trust on first use assumes there IS a first use. A CI runner has no
+// memory between runs, so every run is the first one and TOFU degrades to accepting whatever
+// answers on the recorded address, every time.
+func TestStrictRefusesAnUnknownHost(t *testing.T) {
+	s := newStore(t).Strict(true)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	if err == nil {
+		t.Fatal("strict mode must refuse a host it has never seen")
+	}
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) {
+		t.Fatalf("want ErrUnknownHost, got %T: %v", err, err)
+	}
+	if ue.Offered == "" {
+		t.Error("the offered fingerprint must be carried, so it can be pinned after checking")
+	}
+	if !strings.Contains(err.Error(), "ssh-keyscan") {
+		t.Error("the error must say how to record the key")
+	}
+}
+
+// Refusing must not write anything: a strict run that recorded the key would have learned it, which
+// is the thing strict mode forbids.
+func TestStrictLearnsNothing(t *testing.T) {
+	s := newStore(t).Strict(true)
+	_ = s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("strict mode must not write a known_hosts entry it refused to trust")
+	}
+}
+
+// A pinned key still works in strict mode, which is the whole point: CI supplies the file.
+func TestStrictAcceptsARecordedKey(t *testing.T) {
+	s := newStore(t)
+	key := newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("learning in normal mode: %v", err)
+	}
+	strict := New(t.TempDir()).Strict(true)
+	strict.path = s.Path() // the same recorded file a CI job would supply
+	strict.extraPath = ""
+	if err := strict.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("a recorded key must still pass in strict mode: %v", err)
+	}
+}
+
+// Strict changes what happens to an UNKNOWN host. A changed key was already refused and must stay
+// refused, with the changed-key error rather than the unknown-host one.
+func TestStrictStillReportsAChangedKeyAsChanged(t *testing.T) {
+	s := newStore(t)
+	first, second := newKey(t), newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), first); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	s.strict = true
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), second)
+	var ce *ErrChanged
+	if !errors.As(err, &ce) {
+		t.Fatalf("want ErrChanged, got %T: %v", err, err)
+	}
+}

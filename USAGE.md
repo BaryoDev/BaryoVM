@@ -60,6 +60,40 @@ the machine, `baryovm vm forget-key <name-or-host>` drops the old key and the
 next connection learns the new one. There is no flag that turns the check off
 for every host.
 
+### Host keys in CI
+
+Trust on first use assumes there is a first use. A CI runner has no memory
+between runs, so every run is the first one, and learning a key on each run
+means trusting whatever answers on that address, every time, with a key that can
+dump your database.
+
+Strict mode refuses to learn. An unknown host is an error:
+
+```sh
+export BARYOVM_STRICT_HOST_KEYS=1     # or --strict-host-keys
+```
+
+So a CI job records the key first, and fails rather than trusting a new one:
+
+```yaml
+- name: Pin the host key
+  run: |
+    mkdir -p ~/.baryovm
+    ssh-keyscan -t ecdsa,ed25519 "$VM_HOST" >> ~/.baryovm/known_hosts
+
+- name: Deploy
+  env:
+    BARYOVM_STRICT_HOST_KEYS: "1"
+  run: baryovm stack release myapp
+```
+
+Better still, commit the expected `known_hosts` or keep it in a secret, so the
+pin is reviewed rather than fetched from the network on every run. `ssh-keyscan`
+at deploy time trusts whatever answers; a committed file does not.
+
+The flag beats the environment, so `--strict-host-keys=false` is how a human
+turns it off for one command on a machine where the workflow sets it globally.
+
 `vm exec` runs an arbitrary command on one named VM with the SSH key already in
 `fleet.json`. Everything after `--` is the remote command, so its own flags reach
 the VM. Put `sudo -n` in the remote command when you need root; there is no
