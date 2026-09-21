@@ -17,7 +17,31 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 )
+
+// home is where BaryoVM keeps its own state, the same rule fleet uses: BARYOVM_HOME if set, else
+// ~/.baryovm. Duplicated rather than imported because fleet imports nothing from here and the
+// dependency direction in CLAUDE.md runs one way.
+func home() string {
+	if d := os.Getenv("BARYOVM_HOME"); d != "" {
+		return d
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".baryovm")
+}
+
+// OnLearnHostKey is called the first time a host key is recorded, so the operator sees the
+// fingerprint they are now trusting. The cli layer sets it; sshx does not print (see CLAUDE.md on
+// the dependency direction), so a nil hook means the learning is silent.
+var OnLearnHostKey func(host, fingerprint string)
+
+func learned(host, fingerprint string) {
+	if OnLearnHostKey != nil {
+		OnLearnHostKey(host, fingerprint)
+	}
+}
 
 // Target is a host to connect to.
 type Target struct {
@@ -44,11 +68,9 @@ func Dial(t Target) (*Client, error) {
 		return nil, fmt.Errorf("parse key %s: %w", t.KeyPath, err)
 	}
 	cfg := &ssh.ClientConfig{
-		User: t.User,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		// TODO(security): replace with a TOFU known_hosts store. A fresh VM has
-		// no known host key yet, so we accept-on-first-connect for now.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            t.User,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: hostkeys.New(home()).Callback(learned),
 		Timeout:         15 * time.Second,
 	}
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))

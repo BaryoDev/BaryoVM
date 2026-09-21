@@ -103,9 +103,17 @@ every interpolated value with `sshx.Quote`**. This is the injection boundary and
 it is covered by tests in `internal/sshx/sshx_test.go`. A remote command built
 with `fmt.Sprintf` and a bare `%s` is a bug even when the value looks safe.
 
-Known gap, deliberately marked: `sshx.Dial` uses `ssh.InsecureIgnoreHostKey()`
-with a `TODO(security)` for a TOFU known_hosts store. Do not quietly remove the
-TODO; if you fix it, fix it properly.
+Host identity is verified in `internal/hostkeys`: trust on first use against
+`$BARYOVM_HOME/known_hosts`, then refuse on change. The user's own
+`~/.ssh/known_hosts` is read as a second source, since a key they checked by
+hand is better than one offered to us now. There is deliberately no flag that
+skips the check for every host, because the moment one exists it ends up in a
+CI script; `baryovm vm forget-key <host>` drops one recorded key on purpose.
+
+`internal/release` passes `-o StrictHostKeyChecking=accept-new` to rsync, which
+is the same trust model on the other transport. Keep them agreeing: two
+transports in one command with two answers to "is this the right machine" is
+how the gap lasted as long as it did.
 
 ### Command builders are separate from execution
 
