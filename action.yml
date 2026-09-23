@@ -1,0 +1,42 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# Composite action: download+verify BaryoVM, then run a command. See README for
+# the scan-before-release example. `scan` needs Docker on the runner.
+name: BaryoVM
+description: Download BaryoVM and run a command (deploy, release, or a passive ZAP scan)
+inputs:
+  command:
+    description: The baryovm command and flags to run, e.g. "scan --url https://staging.example.com --fail-on medium"
+    required: true
+  version:
+    description: BaryoVM release to use, e.g. "1.2.0". Defaults to the latest release.
+    required: false
+    default: latest
+runs:
+  using: composite
+  steps:
+    - name: Install BaryoVM
+      shell: bash
+      env:
+        BVM_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        os=linux
+        arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+        if [ "$BVM_VERSION" = "latest" ]; then
+          BVM_VERSION=$(curl -fsSL https://api.github.com/repos/BaryoDev/BaryoVM/releases/latest \
+            | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+        fi
+        base="https://github.com/BaryoDev/BaryoVM/releases/download/v${BVM_VERSION}"
+        curl -fsSLO "${base}/baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz"
+        curl -fsSLO "${base}/checksums.txt"
+        # Verify against the published checksum before trusting the archive.
+        grep " baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz\$" checksums.txt | sha256sum -c -
+        tar -xzf "baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz" baryovm
+        install -m 0755 baryovm "$RUNNER_TEMP/baryovm"
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+    - name: Run BaryoVM
+      shell: bash
+      run: baryovm ${{ inputs.command }}

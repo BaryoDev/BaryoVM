@@ -146,6 +146,7 @@ baryovm stack restore app --yes
 | **Deploy** | `stack deploy` (compose up) · **`stack release`** (sync → build → deploy) |
 | **Backups** | **`stack backup`** · `stack backups` · **`stack restore --yes`** |
 | **Single container** | `deploy` |
+| **Security** | **`scan`** (OWASP ZAP baseline, passive) |
 | **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
 | **Local** | `doctor [--fix]` · `version` |
 
@@ -228,6 +229,32 @@ Add `-o json` to any command for a stable result envelope:
 
 This is how the planned MAUI desktop/mobile app and **MCP server** will drive
 BaryoVM. The CLI is the single source of truth.
+
+## Scan before you release
+
+`baryovm scan` runs the [OWASP ZAP](https://www.zaproxy.org/) baseline against a
+deployed site and reports what it finds, worst first. The baseline is passive: it
+crawls the target and flags missing headers, weak cookies and information leaks,
+and sends no attack payloads. Scan only sites you are authorised to reach. It
+needs Docker on the machine that runs it, and pulls the official ZAP image.
+
+```sh
+baryovm scan --url https://staging.example.com --fail-on medium
+```
+
+`--fail-on` makes it exit non-zero when a finding is at or above that severity, so
+it gates a release. In a pipeline, deploy to staging, scan, and promote only if it
+passes. The bundled GitHub Action removes the download boilerplate:
+
+```yaml
+- uses: BaryoDev/BaryoVM@v1
+  with:
+    command: scan --url https://staging.example.com --fail-on medium
+```
+
+For any other CI (a CDK pipeline's CodeBuild, GitLab, etc.), install the binary
+from a release archive and call the same command; the archive install is under
+[Install](#install).
 
 ## Where it's going: recipes
 
