@@ -6,7 +6,7 @@ people and for every agent, not only Claude.
 ## How work is done here
 
 This repository follows the
-[lean agent method](https://github.com/arnelirobles/lean-agent-method).
+[lean agent](https://github.com/arnelirobles/lean-agent).
 
 - Search open issues before filing. If one covers the area, add to its Covers
   list instead.
