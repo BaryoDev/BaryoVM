@@ -8,6 +8,11 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- Generated Cobra command reference pages under `docs/commands`, with a CI check to keep them
+  synchronized with the CLI.
+
 ## [0.4.0] - 2026-09-21
 
 BaryoVM now checks which machine it is talking to. Until this release every SSH connection accepted
