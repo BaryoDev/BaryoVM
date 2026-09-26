@@ -8,8 +8,35 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-21
+
+BaryoVM now checks which machine it is talking to. Until this release every SSH connection accepted
+whatever host key it was offered.
+
+There was no 0.3.1 release. The fixes planned for it are in this one.
+
+### Changed
+
+- **SSH host keys are verified.** The first connection to a host records its key in
+  `~/.baryovm/known_hosts` (written 0600) and prints the fingerprint when the command finishes. Every
+  later connection must offer the same key. A changed key stops the command and prints the stored
+  and offered fingerprints. Keys you already trust in `~/.ssh/known_hosts` are read as a second
+  source, never written. This refuses something earlier versions accepted: a VM rebuilt with a new
+  key now needs `baryovm vm forget-key <name>` once. There is no flag that turns the check off for
+  every host. ([#12])
+
 ### Added
 
+- **`vm forget-key <name-or-host>`.** Drops one recorded host key, so the next connection learns
+  the new one. Takes a fleet name or `host:port`. ([#12])
+- **Strict host keys for CI.** `--strict-host-keys`, or `BARYOVM_STRICT_HOST_KEYS=1`, makes an
+  unknown host an error instead of a key to learn, since a CI runner has no first use to trust. The
+  error carries the offered fingerprint and the `ssh-keyscan` line that records it. The flag wins
+  over the environment only when it is given. A changed key is still reported as changed.
+- **The recipe format, as a package.** `internal/recipe` parses and validates a recipe: services,
+  static files, routes, a list of backup strategies each with its restore, and the inputs it needs,
+  where a secret input may not carry a default. An unknown schema version or field is refused. No command reads a recipe
+  yet; the README section "Where it's going: recipes" describes the plan.
 - **`vm exec`.** Run a one-off command on a registered VM over the SSH key already
   in `fleet.json`, so checking state does not mean dropping back to raw `ssh`.
   The remote command goes after `--`, so its flags (`df -h`) reach the VM instead
@@ -19,6 +46,11 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Fixed
 
+- **`fleet.json` keeps fields this binary does not know.** An older binary dropped any field it had
+  no struct field for the next time it saved the file, for example on an unrelated `stack add`, so
+  a downgrade could silently remove `releaseFile`, `autoUpdate` or `noDatabase` from every stack.
+  Unknown fields are now read and written back. This protects fields added from here on; binaries
+  already installed still drop what they do not know.
 - **The self-assign hint now answers a bare claim.** "Taking this", "Picking this up", "Grabbing
   this one" and "On it" got no hint, and "Working on this" matched only as the whole comment, so
   "Working on this, PR tomorrow" was ignored. The pattern is now covered by a table of phrasings in
@@ -213,7 +245,8 @@ decision made in one place so a new call site cannot quietly skip it.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.1.0...v0.2.0
@@ -227,3 +260,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#56]: https://github.com/BaryoDev/BaryoVM/issues/56
 [#59]: https://github.com/BaryoDev/BaryoVM/issues/59
 [#23]: https://github.com/BaryoDev/BaryoVM/issues/23
+[#12]: https://github.com/BaryoDev/BaryoVM/issues/12
