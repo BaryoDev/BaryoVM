@@ -149,7 +149,8 @@ baryovm stack restore app --yes
 | **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
 | **Local** | `doctor [--fix]` · `version` |
 
-Full flags and examples: **[USAGE.md](USAGE.md)**.
+Generated command flags and examples: **[command reference](docs/commands/baryovm.md)**.
+Operator workflows: **[USAGE.md](USAGE.md)**.
 
 ### `stack release` is config-driven
 
