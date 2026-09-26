@@ -28,9 +28,9 @@ func TestParsesAComposeRecipe(t *testing.T) {
 	r := mustParse(t, `{
 	  "schema": 1,
 	  "name": "barako",
-	  "version": "4.2.1",
+	  "version": "4.4.1",
 	  "services": [
-	    { "name": "api", "image": "ghcr.io/baryodev/barako:4.2.1", "healthUrl": "http://127.0.0.1:8080/health" },
+	    { "name": "api", "image": "ghcr.io/baryodev/barako-cms:4.4.1", "healthUrl": "http://127.0.0.1:8080/health" },
 	    { "name": "db",  "image": "postgres:17" }
 	  ],
 	  "routes": [ { "host": "cms.example.com", "port": 8080, "tls": true } ],
