@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestGenerateCommandDocsWritesAndChecks(t *testing.T) {
@@ -49,5 +52,22 @@ func TestGenerateCommandDocsWritesAndChecks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "stale.md")); !os.IsNotExist(err) {
 		t.Fatalf("stale command doc was not removed: %v", err)
+	}
+}
+
+func TestGenerateCommandDocsIgnoresTerminalColor(t *testing.T) {
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	dest := filepath.Join(t.TempDir(), "commands")
+	if err := GenerateCommandDocs(dest, false); err != nil {
+		t.Fatalf("generate command docs: %v", err)
+	}
+	root, err := os.ReadFile(filepath.Join(dest, "baryovm.md"))
+	if err != nil {
+		t.Fatalf("read root command doc: %v", err)
+	}
+	if strings.Contains(string(root), "\x1b[") {
+		t.Fatalf("root command doc contains ANSI codes: %q", root)
 	}
 }
