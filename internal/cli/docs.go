@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra/doc"
 )
 
@@ -22,6 +24,11 @@ func GenerateCommandDocs(dest string, check bool) error {
 		return fmt.Errorf("create temporary command docs directory: %w", err)
 	}
 	defer os.RemoveAll(tmp)
+
+	// Help text is styled with lipgloss, which adds ANSI codes when run in a color
+	// terminal. The pages must not depend on where they were generated.
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.Ascii)
 
 	root := newRoot()
 	root.DisableAutoGenTag = true
