@@ -8,21 +8,63 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-20
+
+BaryoVM can now tell a Windows host from a Linux one, install a GitHub Actions runner, scan a
+deployed site, release without rsync, and keeps a local log of what it ran.
+
 ### Added
 
-- Generated Cobra command reference pages under `docs/commands`, with a CI check to keep them
-  synchronized with the CLI.
+- **Windows hosts, `vm exec` only.** `vm add` detects whether a host is Linux or Windows and records
+  it in `fleet.json` as `os`, plus `shell` (cmd or powershell) for Windows. `--os linux|windows`
+  skips detection, and `--shell` goes with `--os windows`. On Windows, `vm exec` runs its command as
+  PowerShell and returns the exit code and plain-text errors under either default shell. Every
+  other command refuses a Windows VM before connecting. Entries without `os` read as Linux, so
+  existing fleets are unchanged. ([#111])
+- **`vm runner <vm> --repo owner/name`.** Installs a GitHub Actions self-hosted runner on a VM as a
+  systemd service under a `github-runner` user, with `MemoryMax` and `CPUQuota` caps (`4G` and
+  `200%` by default). `vm runner remove` uninstalls and unregisters it. A repo that is not private
+  is refused before connecting. Tokens come from the local `gh`, go over stdin and are never stored.
+  The runner tarball is checked against GitHub's published digest. Safe to rerun. ([#116])
+- **`scan --url <target>`.** Runs the OWASP ZAP baseline (passive: crawl and report, no attack
+  payloads) in Docker against a deployed site and lists findings worst first. `--fail-on <severity>`
+  exits non-zero at or above it. The image is pinned to `zaproxy/zap-stable:2.17.0`, and a scan is
+  killed inside its container after 10 minutes by default.
+- **`action.yml`.** A composite GitHub Action that downloads a release, checks its checksum and runs
+  one baryovm command. The command is split on whitespace and not evaluated by a shell.
+- **Activity log.** Every command except `vm list`, `stack list`, help, version and completion
+  appends one JSON line to `~/.baryovm/activity.jsonl` (0600): time, version, action, VM or stack,
+  result, duration and host. Flag values and error text are never recorded. `BARYOVM_ACTIVITY=off`
+  turns it off. See `docs/activity-log.md`. ([#126])
 - **Static release works without rsync.** When local rsync is missing, `stack release` writes a
   tar archive with Go and streams it into `tar -x` on the host over the SSH session, then removes
   files deleted locally, only inside the entry's destination directory and only after a clean
   extract. rsync stays the default when it exists. The transport is printed and is in the JSON
   result as `data.transport`. Excludes follow rsync's matching under both; a pattern the tar
   transport cannot match is refused rather than guessed. Linux hosts only. ([#127], [#42])
+- Generated Cobra command reference pages under `docs/commands`, with a CI check to keep them
+  synchronized with the CLI.
 
 ### Changed
 
+- **Host certificates, revoked keys and unreadable known_hosts files are refused.** Each of these
+  used to fall through to trust on first use, so a host on a VM's address could replace the
+  recorded key with its own. BaryoVM now records and checks plain host keys only, and a known_hosts
+  line it cannot parse stops the connection and names the file to fix. This refuses something 0.4.0
+  accepted.
+- An `os` value in `fleet.json` that is neither `linux` nor `windows` is refused, with the command
+  that fixes it, instead of being run as Linux.
 - `doctor` no longer fails a machine for lacking rsync, and has a "release transport" line saying
   which one a release will use. This supersedes the 0.2.x note below that rsync is required.
+
+### Fixed
+
+- **A known host is no longer reported as changed when it offers several key types.** BaryoVM now
+  asks for the key types it has on record for the host first, so a host recorded with ED25519 (for
+  example by `ssh`) is not compared against the ECDSA key Go preferred. ([#118])
+- The "verify it" hint after a new host key, and the strict-mode error, pass the port to
+  `ssh-keyscan` with `-p`. The hint used `host:22`, which `ssh-keyscan` cannot resolve, and the
+  strict-mode line dropped a non-default port.
 
 ## [0.4.0] - 2026-09-21
 
@@ -261,7 +303,8 @@ decision made in one place so a new call site cannot quietly skip it.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.0...v0.2.1
@@ -277,3 +320,8 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#59]: https://github.com/BaryoDev/BaryoVM/issues/59
 [#23]: https://github.com/BaryoDev/BaryoVM/issues/23
 [#12]: https://github.com/BaryoDev/BaryoVM/issues/12
+[#111]: https://github.com/BaryoDev/BaryoVM/issues/111
+[#116]: https://github.com/BaryoDev/BaryoVM/issues/116
+[#118]: https://github.com/BaryoDev/BaryoVM/issues/118
+[#126]: https://github.com/BaryoDev/BaryoVM/issues/126
+[#127]: https://github.com/BaryoDev/BaryoVM/issues/127
