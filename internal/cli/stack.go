@@ -534,7 +534,7 @@ func newStackDeployCmd() *cobra.Command {
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
 		Args:  cobra.ExactArgs(1),
-		Example: "  baryovm stack deploy barako --force-recreate --service app,admin\n" +
+		Example: "  baryovm stack deploy barako --force-recreate --service api,console\n" +
 			"  baryovm stack deploy barako --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),

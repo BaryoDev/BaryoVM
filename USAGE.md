@@ -153,10 +153,10 @@ baryovm stack add barako --vm oracle --path /opt/barakocms
 
 baryovm stack list
 baryovm stack ps barako                                   # compose ps
-baryovm stack deploy barako --force-recreate --service app,admin
+baryovm stack deploy barako --force-recreate --service api,console
 baryovm stack deploy barako --pull                        # pull images, then recreate
 baryovm stack pull barako
-baryovm stack logs barako --service app --tail 100
+baryovm stack logs barako --service api --tail 100
 baryovm stack remove barako                               # forget the registration
 ```
 
@@ -416,10 +416,10 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
-Example: the barakoCMS admin health-page redeploy is one command:
+Example: recreating the barakoCMS API and the barakoBrew console together is one command:
 
 ```sh
-baryovm stack deploy barako --force-recreate --service app,admin
+baryovm stack deploy barako --force-recreate --service api,console
 ```
 
 ### Updates (health-gated, with rollback)

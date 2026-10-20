@@ -150,7 +150,8 @@ baryovm stack restore app --yes
 | **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
 | **Local** | `doctor [--fix]` · `version` |
 
-Full flags and examples: **[USAGE.md](USAGE.md)**.
+Generated command flags and examples: **[command reference](docs/commands/baryovm.md)**.
+Operator workflows: **[USAGE.md](USAGE.md)**.
 
 ### `stack release` is config-driven
 
@@ -272,9 +273,9 @@ with it. It declares what a stack *is*, positively:
 {
   "schema": 1,
   "name": "barako",
-  "version": "4.2.1",
+  "version": "4.4.1",
   "services": [
-    { "name": "api", "image": "ghcr.io/baryodev/barako:4.2.1",
+    { "name": "api", "image": "ghcr.io/baryodev/barako-cms:4.4.1",
       "healthUrl": "http://127.0.0.1:8080/health" },
     { "name": "db", "image": "postgres:17" }
   ],
