@@ -19,6 +19,7 @@ CLI-first: the MAUI app and MCP server drive this same CLI (with -o json).
 
 * [baryovm deploy](baryovm_deploy.md)	 - Deploy a container image to a VM
 * [baryovm doctor](baryovm_doctor.md)	 - Check (and with --fix, auto-install) local prerequisites
+* [baryovm scan](baryovm_scan.md)	 - Run an OWASP ZAP baseline (passive) scan against a URL
 * [baryovm stack](baryovm_stack.md)	 - Manage docker compose stacks on your VMs
 * [baryovm up](baryovm_up.md)	 - Provision (if new) → install Docker → deploy, in one command
 * [baryovm version](baryovm_version.md)	 - Print the BaryoVM version
