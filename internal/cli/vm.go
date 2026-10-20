@@ -56,7 +56,10 @@ connection or to say it when detection cannot.
 						return err
 					}
 					defer c.Close()
-					vm.OS, err = sshx.DetectOS(c)
+					if vm.OS, err = sshx.DetectOS(c); err != nil || vm.OS != sshx.Windows {
+						return err
+					}
+					vm.Shell, err = sshx.DetectShell(c)
 					return err
 				})
 				if err != nil {

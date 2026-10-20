@@ -43,7 +43,7 @@ func TestAFleetWithNoOSFieldLoadsAsLinux(t *testing.T) {
 func TestTheOSSurvivesARoundTrip(t *testing.T) {
 	t.Setenv("BARYOVM_HOME", t.TempDir())
 	s := &Store{}
-	s.Upsert(VM{Name: "win1", Host: "h", User: "u", KeyPath: "k", Provider: "ssh", OS: sshx.Windows})
+	s.Upsert(VM{Name: "win1", Host: "h", User: "u", KeyPath: "k", Provider: "ssh", OS: sshx.Windows, Shell: sshx.ShellPowerShell})
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestTheOSSurvivesARoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vm := got.Find("win1"); vm == nil || vm.HostOS() != sshx.Windows {
-		t.Errorf("OS lost: %+v", vm)
+	if vm := got.Find("win1"); vm == nil || vm.HostOS() != sshx.Windows || vm.Shell != sshx.ShellPowerShell {
+		t.Errorf("OS or shell lost: %+v", vm)
 	}
 }

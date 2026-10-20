@@ -143,7 +143,7 @@ process rather than this CLI (e.g. baryovm vm exec web1 -- df -h).
 			if err != nil {
 				return err
 			}
-			remote, shown, err := buildExecRemoteFor(vm.HostOS(), remoteArgs)
+			remote, shown, err := buildExecRemoteFor(vm.HostOS(), vm.Shell, remoteArgs)
 			if err != nil {
 				return err
 			}

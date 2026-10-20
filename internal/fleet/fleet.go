@@ -30,6 +30,10 @@ type VM struct {
 	// linux: use HostOS rather than reading it directly.
 	OS sshx.OS `json:"os,omitempty"`
 
+	// Shell is the program OpenSSH on a Windows host runs commands in, detected with the OS.
+	// Empty means cmd.exe, the OpenSSH default, and is always the value on Linux.
+	Shell sshx.Shell `json:"shell,omitempty"`
+
 	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
 	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
 	rest unknownFields

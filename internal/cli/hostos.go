@@ -29,13 +29,13 @@ func requireLinux(vm *fleet.VM, command string) error {
 // Windows the words are joined into one PowerShell script and run as written: quoting each would
 // turn a parameter such as -Name into a string, and the point of `vm exec` on Windows is to run a
 // PowerShell command, not an executable.
-func buildExecRemoteFor(os sshx.OS, argv []string) (line, shown string, err error) {
+func buildExecRemoteFor(os sshx.OS, sh sshx.Shell, argv []string) (line, shown string, err error) {
 	if len(argv) == 0 {
 		return "", "", fmt.Errorf("missing command: baryovm vm exec <name> -- <command>...")
 	}
 	if os.Resolved() == sshx.Windows {
 		shown = strings.Join(argv, " ")
-		return sshx.Windows.Script(shown), shown, nil
+		return sshx.Windows.Script(sh, shown), shown, nil
 	}
 	line, err = buildExecRemote(argv)
 	return line, line, err

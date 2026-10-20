@@ -54,27 +54,29 @@ func TestStackDeployOnAWindowsVMFailsBeforeAnythingIsSent(t *testing.T) {
 }
 
 func TestBuildExecRemoteForWindowsRunsThePowerShellAsGiven(t *testing.T) {
-	line, shown, err := buildExecRemoteFor(sshx.Windows, []string{"Get-Process", "-Name", "sshd"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if shown != "Get-Process -Name sshd" {
-		t.Errorf("shown = %q", shown)
-	}
-	if line != sshx.Windows.Script("Get-Process -Name sshd") {
-		t.Errorf("line is not the encoded script: %q", line)
+	for _, sh := range []sshx.Shell{sshx.ShellCmd, sshx.ShellPowerShell} {
+		line, shown, err := buildExecRemoteFor(sshx.Windows, sh, []string{"Get-Process", "-Name", "sshd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shown != "Get-Process -Name sshd" {
+			t.Errorf("shown = %q", shown)
+		}
+		if line != sshx.Windows.Script(sh, "Get-Process -Name sshd") {
+			t.Errorf("%s: line is not the encoded script: %q", sh, line)
+		}
 	}
 }
 
 func TestBuildExecRemoteForLinuxIsUnchanged(t *testing.T) {
-	line, shown, err := buildExecRemoteFor(sshx.Linux, []string{"echo", "a'b"})
+	line, shown, err := buildExecRemoteFor(sshx.Linux, "", []string{"echo", "a'b"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if line != `'echo' 'a'\''b'` || shown != line {
 		t.Errorf("line = %q, shown = %q", line, shown)
 	}
-	if _, _, err := buildExecRemoteFor(sshx.Windows, nil); err == nil {
+	if _, _, err := buildExecRemoteFor(sshx.Windows, "", nil); err == nil {
 		t.Error("expected an error for an empty argv")
 	}
 }

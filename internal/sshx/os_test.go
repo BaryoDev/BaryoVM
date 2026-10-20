@@ -48,14 +48,15 @@ func TestQuotePOSIXIsUnchanged(t *testing.T) {
 }
 
 const encodedPrefix = "powershell -NoProfile -NonInteractive -EncodedCommand "
+const psSuffix = "; exit $LASTEXITCODE"
 
-// decodeEncoded reads the script back out of a powershell -EncodedCommand line.
-func decodeEncoded(t *testing.T, line string) string {
+// decodePayload reads the PowerShell wrapper back out of a powershell -EncodedCommand line.
+func decodePayload(t *testing.T, line string) string {
 	t.Helper()
 	if !strings.HasPrefix(line, encodedPrefix) {
 		t.Fatalf("not a powershell command line: %q", line)
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, encodedPrefix))
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(strings.TrimPrefix(line, encodedPrefix), psSuffix))
 	if err != nil {
 		t.Fatalf("payload is not base64: %v", err)
 	}
@@ -66,43 +67,129 @@ func decodeEncoded(t *testing.T, line string) string {
 	return string(utf16.Decode(u))
 }
 
+// decodeEncoded reads the user's script back out of the wrapper, without the epilogue that
+// captures its result.
+func decodeEncoded(t *testing.T, line string) string {
+	t.Helper()
+	payload := decodePayload(t, line)
+	const open = "FromBase64String('"
+	i := strings.Index(payload, open)
+	if i < 0 {
+		t.Fatalf("no script literal in payload: %q", payload)
+	}
+	rest := payload[i+len(open):]
+	raw, err := base64.StdEncoding.DecodeString(rest[:strings.Index(rest, "'")])
+	if err != nil {
+		t.Fatalf("script literal is not base64: %v", err)
+	}
+	return strings.TrimSuffix(string(raw), "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE")
+}
+
 func TestWindowsScriptTravelsWithoutAnOuterQuotingLayer(t *testing.T) {
 	// The line has to mean the same thing whether the host's default shell is cmd.exe or
 	// powershell, so nothing in it may be a character either of them interprets.
 	script := `Write-Output 'it''s $x; "q" ` + "`t" + ` |&<>%^'`
-	line := Windows.Script(script)
-	if strings.ContainsAny(strings.TrimPrefix(line, encodedPrefix), " \"'$;`|&<>%^") {
-		t.Errorf("payload carries shell syntax: %q", line)
-	}
-	if got := decodeEncoded(t, line); !strings.HasSuffix(got, script) {
-		t.Errorf("script lost in transit: got %q", got)
+	for _, sh := range []Shell{ShellCmd, ShellPowerShell} {
+		line := Windows.Script(sh, script)
+		if strings.ContainsAny(strings.TrimSuffix(strings.TrimPrefix(line, encodedPrefix), psSuffix), " \"'$;`|&<>%^") {
+			t.Errorf("%s: payload carries shell syntax: %q", sh, line)
+		}
+		if got := decodeEncoded(t, line); got != script {
+			t.Errorf("%s: script lost in transit: got %q", sh, got)
+		}
 	}
 }
 
-func TestWindowsScriptSilencesProgress(t *testing.T) {
+// Under powershell as the SSH shell, any failed child reports 1 unless the line says otherwise.
+// Under cmd.exe the same text would be handed to powershell.exe as an argument and fail.
+func TestWindowsScriptKeepsTheExitCodeOnlyUnderPowerShell(t *testing.T) {
+	if got := Windows.Script(ShellPowerShell, "exit 3"); !strings.HasSuffix(got, psSuffix) {
+		t.Errorf("powershell shell: missing the exit suffix: %q", got)
+	}
+	if got := Windows.Script(ShellCmd, "exit 3"); strings.Contains(got, "exit $") {
+		t.Errorf("cmd shell: line must be one powershell invocation: %q", got)
+	}
+	if Windows.Script("", "exit 3") != Windows.Script(ShellCmd, "exit 3") {
+		t.Error("an unset shell means cmd")
+	}
+}
+
+func TestWindowsPayloadKeepsErrorsAsText(t *testing.T) {
+	payload := decodePayload(t, Windows.Script(ShellCmd, "Write-Error boom"))
 	// Without this a non-interactive powershell writes progress records to stderr as CLIXML.
-	if got := decodeEncoded(t, Windows.Script("Get-Date")); !strings.HasPrefix(got, "$ProgressPreference='SilentlyContinue';") {
-		t.Errorf("got %q", got)
+	if !strings.HasPrefix(payload, "$ProgressPreference='SilentlyContinue'") {
+		t.Errorf("progress is not silenced: %q", payload)
+	}
+	// Errors are written to stderr by us, as their message, instead of left to be serialised.
+	for _, want := range []string{"[Console]::Error.WriteLine($_.ToString())", "2>&1", "NativeCommandError", "exit $global:bvmCode", "catch{[Console]::Error.WriteLine($_.ToString());exit 1}"} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("payload does not contain %q:\n%s", want, payload)
+		}
+	}
+	// The script is data, so it cannot end the wrapper's own quoting.
+	if strings.Contains(payload, "Write-Error boom") {
+		t.Errorf("the script must travel encoded, not spliced into the wrapper:\n%s", payload)
 	}
 }
 
 func TestLinuxScriptIsTheCommandAsGiven(t *testing.T) {
-	if got := Linux.Script("df -h"); got != "df -h" {
+	if got := Linux.Script(ShellCmd, "df -h"); got != "df -h" {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestWindowsCommandQuotesEachWord(t *testing.T) {
-	got := decodeEncoded(t, Windows.Command([]string{`C:\Program Files\app.exe`, "it's", "$x", "a`b;c"}))
+	got := decodeEncoded(t, Windows.Command(ShellCmd, []string{`C:\Program Files\app.exe`, "it's", "$x", "a`b;c"}))
 	want := `& 'C:\Program Files\app.exe' 'it''s' '$x' 'a` + "`" + `b;c'`
-	if !strings.HasSuffix(got, want) {
-		t.Errorf("got %q, want suffix %q", got, want)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
 func TestLinuxCommandQuotesEachWord(t *testing.T) {
-	if got, want := Linux.Command([]string{"echo", "a'b"}), `'echo' 'a'\''b'`; got != want {
+	if got, want := Linux.Command(ShellCmd, []string{"echo", "a'b"}), `'echo' 'a'\''b'`; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParseShell(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    Shell
+		wantErr bool
+	}{
+		{"", ShellCmd, false},
+		{"CMD", ShellCmd, false},
+		{"powershell", ShellPowerShell, false},
+		{"bash", "", true},
+	}
+	for _, c := range cases {
+		got, err := ParseShell(c.in)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("ParseShell(%q) = %q, %v", c.in, got, err)
+		}
+	}
+}
+
+func TestDetectShell(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		err  error
+		want Shell
+		ok   bool
+	}{
+		{"cmd expands %OS%", "Windows_NT\r\n", nil, ShellCmd, true},
+		{"powershell leaves it as text", "%OS%\r\n", nil, ShellPowerShell, true},
+		{"anything else is not guessed", "hello", nil, "", false},
+		{"a failed probe is an error", "", errors.New("exit 1"), "", false},
+	}
+	for _, c := range cases {
+		h := &fakeHost{answers: map[string]fakeAnswer{"echo %OS%": {out: c.out, err: c.err}}}
+		got, err := DetectShell(h)
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("%s: got %q, %v", c.name, got, err)
+		}
 	}
 }
 

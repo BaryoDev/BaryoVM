@@ -57,36 +57,104 @@ func quotePowerShell(s string) string {
 
 const powerShell = "powershell -NoProfile -NonInteractive"
 
-// Script returns the command line that runs a script in this OS's shell.
+// Shell is the program OpenSSH on the host starts to run a command line. It matters on Windows,
+// where the default is cmd.exe unless the administrator set powershell.exe, and the two read the
+// same line differently. Empty means cmd.exe, the OpenSSH default.
+type Shell string
+
+const (
+	ShellCmd        Shell = "cmd"
+	ShellPowerShell Shell = "powershell"
+)
+
+// ParseShell reads a shell name, with empty meaning cmd.
+func ParseShell(s string) (Shell, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "cmd":
+		return ShellCmd, nil
+	case "powershell":
+		return ShellPowerShell, nil
+	}
+	return "", fmt.Errorf("unknown shell %q: use cmd or powershell", s)
+}
+
+// DetectShell asks a Windows host which shell runs its SSH commands. %OS% is expanded by cmd.exe
+// (to Windows_NT) and left as the literal text by PowerShell, which is the whole probe.
+func DetectShell(r Runner) (Shell, error) {
+	out, err := r.Run("echo %OS%")
+	if err != nil {
+		return "", fmt.Errorf("could not tell which shell the host runs SSH commands in: %w", err)
+	}
+	switch strings.TrimSpace(out) {
+	case "Windows_NT":
+		return ShellCmd, nil
+	case "%OS%":
+		return ShellPowerShell, nil
+	}
+	return "", fmt.Errorf("could not tell which shell the host runs SSH commands in: unexpected output %q", strings.TrimSpace(out))
+}
+
+// Script returns the command line that runs a script on a host of this OS whose SSH shell is sh.
 //
 // On Linux the script is the command line already, as before. On Windows it is
-// `powershell -NoProfile -NonInteractive` with the script passed as -EncodedCommand (base64 of
-// UTF-16LE), which is -Command with the script sent as data. The reason is that the line is first
-// parsed by the host's default SSH shell, which is cmd.exe or powershell depending on how OpenSSH
-// was set up, and no quoting is correct for both. Base64 has nothing in it either of them reads.
-func (o OS) Script(script string) string {
+// `powershell -NoProfile -NonInteractive -EncodedCommand <base64>`. The base64 is there because the
+// line is first parsed by the host's SSH shell, and no quoting is correct for both cmd.exe and
+// powershell; base64 has nothing in it either of them reads. What it carries is windowsPayload.
+//
+// When the SSH shell is powershell, the line ends with `; exit $LASTEXITCODE`. Without it that
+// shell reports 1 for any failed child, whatever the child's own exit code was. cmd.exe would pass
+// the extra text to powershell.exe as an argument and fail, so it is not added there.
+func (o OS) Script(sh Shell, script string) string {
 	if o.Resolved() != Windows {
 		return script
 	}
-	// Silence the progress stream, which a non-interactive powershell otherwise writes to stderr
-	// as CLIXML.
-	u := utf16.Encode([]rune("$ProgressPreference='SilentlyContinue';" + script))
+	u := utf16.Encode([]rune(windowsPayload(script)))
 	b := make([]byte, 0, len(u)*2)
 	for _, c := range u {
 		b = append(b, byte(c), byte(c>>8))
 	}
-	return powerShell + " -EncodedCommand " + base64.StdEncoding.EncodeToString(b)
+	line := powerShell + " -EncodedCommand " + base64.StdEncoding.EncodeToString(b)
+	if sh == ShellPowerShell {
+		line += "; exit $LASTEXITCODE"
+	}
+	return line
+}
+
+// windowsPayload is the PowerShell that runs a user's script and keeps the result plain.
+//
+// powershell -EncodedCommand writes its error stream to stderr as CLIXML when stderr is not a
+// terminal, which is always the case over SSH. So the script's own errors are caught here and
+// written as text instead: each error record's message goes to stderr, and the native-command
+// kind (a program writing to its stderr) is not treated as a failure, only its exit code is.
+// Progress output is silenced for the same CLIXML reason.
+//
+// The script travels as base64 inside this text, so nothing in it can break the wrapper, and a
+// script that does not parse reports its error as text too. The exit code is the script's own
+// `exit`, else the code of a native command that was the last thing to fail, else 1 if a PowerShell
+// error was written. A native command that only wrote to its stderr and exited 0 succeeded, though
+// PowerShell 5.1 sets $? false for it.
+func windowsPayload(script string) string {
+	body := script + "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE"
+	b64 := base64.StdEncoding.EncodeToString([]byte(body))
+	return strings.Join([]string{
+		"$ProgressPreference='SilentlyContinue'",
+		"try{$s=[ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + b64 + "')))}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}",
+		"$global:bvmFail=$false",
+		"try{& $s 2>&1|ForEach-Object{if($_ -is [Management.Automation.ErrorRecord]){[Console]::Error.WriteLine($_.ToString());if($_.FullyQualifiedErrorId -ne 'NativeCommandError'){$global:bvmFail=$true}}else{$_}}}catch{[Console]::Error.WriteLine($_.ToString());exit 1}",
+		"if($global:bvmOk -eq $false -and $global:bvmCode){exit $global:bvmCode}",
+		"if($global:bvmFail){exit 1}",
+	}, "\n")
 }
 
 // Command builds a command line that runs argv as one program with its arguments, every word
 // quoted for this OS's shell.
-func (o OS) Command(argv []string) string {
+func (o OS) Command(sh Shell, argv []string) string {
 	parts := make([]string, len(argv))
 	for i, a := range argv {
 		parts[i] = o.Quote(a)
 	}
 	if o.Resolved() == Windows {
-		return o.Script("& " + strings.Join(parts, " "))
+		return o.Script(sh, "& "+strings.Join(parts, " "))
 	}
 	return strings.Join(parts, " ")
 }
@@ -118,7 +186,7 @@ func DetectOS(r Runner) (OS, error) {
 			return o, nil
 		}
 	}
-	psOut, psErr := r.Run(Windows.Script("[System.Environment]::OSVersion.Platform"))
+	psOut, psErr := r.Run(Windows.Script(ShellCmd, "[System.Environment]::OSVersion.Platform"))
 	if psErr == nil {
 		if o, ok := osFromPlatform(psOut); ok {
 			return o, nil
