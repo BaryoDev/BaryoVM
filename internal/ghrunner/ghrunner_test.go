@@ -54,8 +54,12 @@ func (f *fakeRemote) RunInput(cmd, stdin string) (string, error) {
 
 func (f *fakeRemote) Close() error { f.closed = true; return nil }
 
+// ran skips the probe, which names config.sh in its own test -x check.
 func (f *fakeRemote) ran(sub string) bool {
 	for _, c := range f.calls {
+		if strings.Contains(c.cmd, `echo "arch=`) {
+			continue
+		}
 		if strings.Contains(c.cmd, sub) {
 			return true
 		}
