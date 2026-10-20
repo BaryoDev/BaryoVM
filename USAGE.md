@@ -142,8 +142,10 @@ runner is not touched.
 - The memory and CPU limits cover the runner and what it runs directly. Containers a job starts
   through Docker (Testcontainers, `docker run`) run under `dockerd` and are not bounded by them.
 - `vm runner remove` stops and uninstalls the service, unregisters the runner and deletes its
-  directory. If no remove token can be fetched it removes the local runner anyway, and you have
-  to delete the entry on the repo's Settings, Actions, Runners page by hand.
+  directory. If no remove token can be fetched, or GitHub rejects it, it removes the local runner
+  anyway and says so, and you have to delete the entry on the repo's Settings, Actions, Runners
+  page by hand. If that local removal fails too, the command fails and leaves the directory in place
+  for another try.
 
 ## Hardening, and seeing what hits the box
 

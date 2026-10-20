@@ -5,8 +5,9 @@ Take a GitHub Actions runner off a VM and out of GitHub
 ### Synopsis
 
 Stop and uninstall the runner service, unregister it from GitHub with a remove token (fetched
-locally, sent on stdin), and delete the runner directory. If no remove token can be fetched, the
-local runner is still removed and the GitHub entry has to be deleted by hand.
+locally, sent on stdin), and delete the runner directory. If no remove token can be fetched, or
+GitHub rejects it, the local runner is still removed and the GitHub entry has to be deleted by
+hand. If that local removal fails too, the command fails and the directory stays for another try.
 
 ```
 baryovm vm runner remove <vm> [flags]
