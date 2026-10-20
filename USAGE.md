@@ -38,6 +38,8 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
+baryovm vm runner remove oracle --repo acme/app
 baryovm vm remove oracle         # forget it (does not destroy the machine)
 baryovm vm forget-key oracle     # drop its recorded SSH host key
 ```
@@ -99,6 +101,51 @@ turns it off for one command on a machine where the workflow sets it globally.
 the VM. Put `sudo -n` in the remote command when you need root; there is no
 `--sudo` flag. A non-zero remote exit becomes a non-zero CLI exit. Under
 `-o json` the envelope keeps `stdout`, `stderr` and `exitCode` as separate fields.
+
+### GitHub Actions runner
+
+```sh
+baryovm vm runner oracle --repo acme/app
+baryovm vm runner oracle --repo acme/app --labels docker,gpu --memory-max 6G --cpu-quota 300%
+baryovm vm runner remove oracle --repo acme/app
+```
+
+`vm runner` installs a self-hosted runner for one repo on a registered VM. It needs the `gh`
+CLI logged in with admin rights on the repo, and Docker on the VM (`vm bootstrap`). It creates a
+`github-runner` user in the docker group, unpacks the runner under
+`/opt/github-runner/<owner>__<repo>` (lowercase), registers it, installs it as a systemd service and checks
+that the service is active.
+
+| Flag | Default | |
+|------|---------|---|
+| `--repo` | required | `owner/name` |
+| `--name` | `<vm>-<repo>` | runner name; reruns use `--replace`, so one registration stays |
+| `--labels` | none | extra labels on top of `self-hosted`, `Linux` and the arch |
+| `--version` | latest release | pin a runner version such as `2.320.0` |
+| `--memory-max` | `4G` | systemd `MemoryMax` for the service |
+| `--cpu-quota` | `200%` | systemd `CPUQuota` for the service |
+
+It is safe to rerun. A configured, running runner is reported as `alreadyReady` and nothing
+changes. A stopped one is started, and one with no service gets the service installed. A rerun
+after a crash continues from the step that failed. If you pass `--memory-max` or `--cpu-quota`
+explicitly, they are applied even to a runner that is otherwise ready: the drop-in is rewritten
+and the service restarted, and the result reports `limitsApplied`. Leave them out and a ready
+runner is not touched.
+
+- A repo whose visibility is not `private` is refused before BaryoVM connects to the VM, because a
+  fork pull request could run its code there. That includes enterprise `internal` repos, which
+  every enterprise member can see and fork.
+- Also turn on "Require approval for all outside collaborators" for fork pull request workflows
+  in the repo's Settings, Actions, General page.
+- The runner tarball is checked against the sha256 digest GitHub publishes for the release asset
+  before it is extracted. A release with no digest is refused.
+- The memory and CPU limits cover the runner and what it runs directly. Containers a job starts
+  through Docker (Testcontainers, `docker run`) run under `dockerd` and are not bounded by them.
+- `vm runner remove` stops and uninstalls the service, unregisters the runner and deletes its
+  directory. If no remove token can be fetched, or GitHub rejects it, it removes the local runner
+  anyway and says so, and you have to delete the entry on the repo's Settings, Actions, Runners
+  page by hand. If that local removal fails too, the command fails and leaves the directory in place
+  for another try.
 
 ## Hardening, and seeing what hits the box
 
@@ -174,7 +221,7 @@ baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy
 
 ### Release: sync source, build, deploy (config-driven)
 
-`stack release` is the full deploy in one command: **back up → rsync source → build
+`stack release` is the full deploy in one command: **back up → sync source → build
 images on the VM → compose up**. It's driven by a JSON manifest in your project, so the
 pipeline is generic (no app-specific logic). The compose dir (with its `.env`) is never in
 the sync list, so secrets can't be wiped by `--delete`.
@@ -215,7 +262,7 @@ Manifest options:
 | `localRoot` | required | local source root, `~` allowed |
 | `remoteRoot` | required | absolute destination on the VM |
 | `sync` | required | paths under `localRoot` to rsync. **A trailing slash follows rsync's own rule** |
-| `exclude` | none | rsync excludes |
+| `exclude` | `bin`, `obj`, `node_modules`, `.next`, `.git` | rsync-style excludes, honoured by both transports (see below) |
 | `builds` | none | images to build on the VM after syncing |
 | `sudo` | `false` | run the release's remote steps as root: the far side of the rsync, the image builds, `preDeploy`, `postDeploy` and the closing `compose up`. A stack registered `--sudo` turns this on for its own release and a manifest cannot turn it back off |
 | `noCompose` | `false` | skip `docker compose up` at the end |
@@ -267,6 +314,40 @@ laptop either fails or, worse, reaches something local and passes.
 One rule worth carrying into any check script: a "must not contain" assertion only means something
 after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
 grep, so assert the status and a minimum size first.
+
+#### Sync transports and excludes
+
+With local `rsync` on your PATH, `sync` entries go through rsync. Without it they go as a tar
+stream over the SSH session (Linux hosts), and `baryovm doctor` names which one a release will
+use. The stream is written with Go's `archive/tar` straight into `tar -x` on the host, never held
+in memory. Once the extract has exited cleanly, files that are on the host and not local are
+removed, so the result matches `rsync --delete`. Two differences: there is no delta transfer, and
+files arrive owned by the SSH user (root under `sudo`) rather than with your local owner.
+Setuid and setgid bits are dropped.
+
+`exclude` follows rsync's matching under both transports:
+
+- A pattern with no `/` matches a name at any depth: `.env`, `*.map`.
+- A pattern with a `/` matches the end of the path at any depth: `secrets/.env` also excludes
+  `a/secrets/.env`.
+- A leading `/` anchors to the transfer root: `/secrets/.env` matches only the top level. With a
+  `sync` entry like `"out"` (no trailing slash) rsync's paths start with `out/`, so anchor as
+  `/out/secrets/.env`.
+- `*` and `?` stop at `/`, `**` crosses it. A leading `**/` also matches zero directories, so
+  `**/.env` excludes the top-level `.env` too. A trailing `/` matches directories only.
+- Excluded paths are not sent, are not deleted from the host, and a host directory that holds one
+  is not deleted either.
+
+The tar transport supports only that subset. A pattern using character classes (`[ab]`), a
+backslash, `***`, a leading `//` or a filter prefix (`!`, `+ `, `- `) is refused with an error before anything
+touches the host; simplify it or install rsync.
+
+Pruning is confined to the entry's destination directory. It is refused when that directory, or
+one between `remoteRoot` and it, is a symlink on the host. Each removal re-checks, on the host
+and just before the delete, that the path's parent still resolves inside the release dir. A
+window of an instant remains between that check and the delete, which POSIX tools cannot close,
+so do not release into a directory that other users can write to. A symlink to a single file
+cannot be a `sync` entry under tar.
 
 #### The trailing slash on `sync` entries
 

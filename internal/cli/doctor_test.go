@@ -130,7 +130,7 @@ func TestDoctorIsNotOKWhenAToolIsMissing(t *testing.T) {
 	if err == nil {
 		t.Error("doctor reported ok: false and still exited 0")
 	}
-	if !strings.Contains(r.Error, "rsync") {
+	if !strings.Contains(r.Error, "ssh") {
 		t.Errorf("the envelope gives no reason naming the missing tool: %q", r.Error)
 	}
 }
@@ -192,7 +192,7 @@ func TestFixSaysWhyItCannotInstallSsh(t *testing.T) {
 	if len(checks) == 0 {
 		t.Fatal("doctor reported no checks at all")
 	}
-	ssh := checks[len(checks)-1]
+	ssh := checks[len(checks)-2]
 	if ssh.Name != "ssh" || ssh.Present {
 		t.Fatalf("expected a missing ssh check, got %+v", ssh)
 	}

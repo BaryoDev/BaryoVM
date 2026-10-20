@@ -122,6 +122,24 @@ var runLocal = func(c *exec.Cmd) (string, error) {
 	return string(out), err
 }
 
+// lookPath finds a local tool. A variable so the transport choice can be driven without
+// changing PATH.
+var lookPath = exec.LookPath
+
+// syncTar copies one sync entry over its own SSH session as a tar stream.
+func syncTar(m *release.Manifest, vm *fleet.VM, sub string) error {
+	c, err := dialRelease(vm)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	sr, ok := c.(sshx.StdinRunner)
+	if !ok {
+		return fmt.Errorf("this connection cannot stream a tar archive")
+	}
+	return m.TarSync(sr, sub)
+}
+
 // remoteSession is what a release needs from a connection: run commands, then hang up.
 type remoteSession interface {
 	sshx.Runner
@@ -215,10 +233,16 @@ func newStackReleaseCmd() *cobra.Command {
 				return fail(err)
 			}
 
-			// 1. Sync each source subdir (local rsync). The compose dir (with .env) is never synced.
+			// 1. Sync each source subdir. The compose dir (with .env) is never synced. rsync when the
+			// operator's machine has it, otherwise a tar stream over the SSH session.
+			transport := release.PickTransport(lookPath)
+			ui.Notef("sync transport: %s", transport)
 			for _, sub := range m.Sync {
 				sub := sub
 				if err := ui.Step("sync "+sub, func() error {
+					if transport == release.TransportTar {
+						return syncTar(m, vm, sub)
+					}
 					out, e := runLocal(m.RsyncCmd(sub, vm.User, vm.Host, vm.Port, vm.KeyPath))
 					if e != nil {
 						return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
@@ -333,7 +357,8 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
-			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released"})
+			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released",
+				Data: map[string]string{"transport": string(transport)}})
 			ui.Successf("%s: release done", args[0])
 			return nil
 		},
