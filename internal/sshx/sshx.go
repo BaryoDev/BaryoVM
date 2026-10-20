@@ -10,6 +10,7 @@ package sshx
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -145,6 +146,31 @@ type Capture struct {
 // exit is reported in Capture.ExitCode with a nil error; error is reserved for
 // dial/session failures where no remote process ran.
 func (c *Client) RunCapture(cmd string) (Capture, error) {
+	return c.runCapture(cmd, nil)
+}
+
+// RunInput runs a command with stdin as its standard input and returns its stdout, or an error
+// carrying stderr. It exists so a secret can reach a remote process without ever being part of the
+// command line, where `ps` on the VM would show it.
+//
+// The error echoes cmd and the remote stderr, as Run does. cmd is safe to echo because the secret
+// is in stdin; stderr is the caller's to redact, since only the caller knows what it sent.
+func (c *Client) RunInput(cmd string, stdin string) (string, error) {
+	cap, err := c.runCapture(cmd, strings.NewReader(stdin))
+	if err != nil {
+		return cap.Stdout, err
+	}
+	if cap.ExitCode != 0 {
+		msg := strings.TrimSpace(cap.Stderr)
+		if msg == "" {
+			msg = fmt.Sprintf("exit status %d", cap.ExitCode)
+		}
+		return cap.Stdout, fmt.Errorf("remote `%s`: %w: %s", cmd, cap.ExitErr, msg)
+	}
+	return cap.Stdout, nil
+}
+
+func (c *Client) runCapture(cmd string, stdin io.Reader) (Capture, error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return Capture{}, err
@@ -153,6 +179,9 @@ func (c *Client) RunCapture(cmd string) (Capture, error) {
 	var out, errb bytes.Buffer
 	sess.Stdout = &out
 	sess.Stderr = &errb
+	if stdin != nil {
+		sess.Stdin = stdin
+	}
 	err = sess.Run(cmd)
 	cap := Capture{Stdout: out.String(), Stderr: errb.String()}
 	if err == nil {
