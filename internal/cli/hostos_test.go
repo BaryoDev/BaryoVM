@@ -70,6 +70,8 @@ var guardedCommands = []struct {
 	{"up", newUpCmd, []string{"win1", "--image", "nginx", "--container", "site"}},
 	{"vm ping", newVMPingCmd, []string{"win1"}},
 	{"vm bootstrap", newVMBootstrapCmd, []string{"win1"}},
+	{"vm runner", newVMRunnerCmd, []string{"win1", "--repo", "acme/app"}},
+	{"vm runner remove", newVMRunnerRemoveCmd, []string{"win1", "--repo", "acme/app"}},
 	{"vm harden", newVMHardenCmd, []string{"win1"}},
 	{"vm threats", newVMThreatsCmd, []string{"win1"}},
 	{"stack deploy", newStackDeployCmd, []string{"app"}},

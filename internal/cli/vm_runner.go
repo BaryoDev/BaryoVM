@@ -95,6 +95,9 @@ func splitLabels(s string) []string {
 
 func runRunner(action string, o ghrunner.Options, remove bool) error {
 	vm, err := requireVM(o.VM)
+	if err == nil {
+		err = requireLinux(&vm, action)
+	}
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
