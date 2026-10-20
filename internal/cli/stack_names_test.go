@@ -73,6 +73,7 @@ func releaseFixture(t *testing.T) {
 // order, in f.seen.
 func releaseAgainst(t *testing.T, f *fakeRunner) error {
 	t.Helper()
+	withLookPath(t, hasRsync)
 	prevDial, prevLocal := dialRelease, runLocal
 	dialRelease = func(*fleet.VM) (remoteSession, error) { return fakeSession{f}, nil }
 	runLocal = func(c *exec.Cmd) (string, error) {

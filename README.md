@@ -33,7 +33,7 @@ sequenceDiagram
     participant Site as the running site
 
     You->>VM: pg_dump, before anything changes
-    You->>VM: rsync the source (never the compose dir)
+    You->>VM: sync the source (never the compose dir)
     You->>VM: docker build
     You->>VM: docker compose up
     You->>VM: post-deploy: reload nginx, restore SELinux context
@@ -104,15 +104,14 @@ State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written
 owner-only (`0600`). It stores hostnames, users and **SSH key paths, never key
 contents or secrets**. See [SECURITY.md](SECURITY.md).
 
-`stack release` needs local **`rsync`** on your PATH, with **`ssh`** as its
-transport: it syncs your source to the VM by running them, and the built-in Go
-SSH client does not cover that transfer. macOS ships both, and every Linux
-package manager has rsync, though a minimal image may not have it installed
-(`baryovm doctor --fix` installs it). Windows does not ship rsync, so run
-BaryoVM inside WSL, or install the rsync package in Git Bash. Everything else
+`stack release` syncs your source to the VM with local **`rsync`** (and **`ssh`**
+as its transport) when rsync is on your PATH. Without rsync it writes a tar
+archive with Go and streams it over the SSH session, then removes files you
+deleted locally, so a machine with no rsync (Windows, a minimal image) can
+still release to a Linux host. `baryovm doctor` shows which one a release will
+use, and `baryovm doctor --fix` installs rsync where it can. Everything else
 (`vm add`, `vm ping`, `stack add`, `stack deploy`, `stack backup`) needs
-neither. Run `baryovm doctor` to see what is missing before your first
-release.
+neither.
 
 ## Quickstart
 

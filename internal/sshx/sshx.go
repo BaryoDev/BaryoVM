@@ -113,6 +113,37 @@ type Runner interface {
 	Run(cmd string) (string, error)
 }
 
+// StdinRunner is a Runner that can also stream a reader into the command's stdin. The tar
+// transport uses it to feed an archive to `tar -x` as it is written, never holding it whole.
+type StdinRunner interface {
+	Runner
+	RunStdin(cmd string, stdin io.Reader) (string, error)
+}
+
+var _ StdinRunner = (*Client)(nil)
+
+// RunStdin runs a command with stdin read from in, and returns its stdout. The reader is copied
+// as the command consumes it. A non-zero exit is an error carrying stderr, as in Run.
+func (c *Client) RunStdin(cmd string, in io.Reader) (string, error) {
+	sess, err := c.c.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer sess.Close()
+	var out, errb bytes.Buffer
+	sess.Stdin = in
+	sess.Stdout = &out
+	sess.Stderr = &errb
+	if err := sess.Run(cmd); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out.String(), fmt.Errorf("remote `%s`: %w: %s", cmd, err, msg)
+	}
+	return out.String(), nil
+}
+
 // Run executes a command and returns its stdout, or an error carrying stderr.
 func (c *Client) Run(cmd string) (string, error) {
 	cap, err := c.RunCapture(cmd)

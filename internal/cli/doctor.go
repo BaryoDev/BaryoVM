@@ -7,11 +7,11 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/toolchain"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -33,11 +33,12 @@ type doctorCheck struct {
 // checkedCLIs are the binaries BaryoVM shells out to locally, and whether a
 // machine without one is actually broken.
 //
-// rsync and ssh are required: `stack release` runs them to sync source, since
-// release.RsyncCmd builds an rsync command and passes ssh as its transport with
-// -e, and the Go SSH client covers the command sessions rather than that
-// transfer. Missing either fails the release after the pre-release backup has
-// already run, which is the worst moment to learn a tool is absent.
+// ssh is required: rsync passes it as its transport with -e, and the Go SSH
+// client covers the command sessions rather than that transfer.
+//
+// rsync is optional: without it `stack release` streams a tar archive over the
+// Go SSH session instead, and the "release transport" line says which one a
+// release will use.
 //
 // docker is not required, and saying otherwise was wrong in a way that mattered:
 // every docker call this tool makes is remote, over the SSH client, on the VM.
@@ -51,7 +52,7 @@ var checkedCLIs = []struct {
 	optional bool
 }{
 	{"docker", true},
-	{"rsync", false},
+	{"rsync", true},
 	{"ssh", false},
 }
 
@@ -137,7 +138,7 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 		if fix {
 			path, err = toolchain.EnsureCLI(tool)
 		} else {
-			path, err = exec.LookPath(tool)
+			path, err = lookPath(tool)
 		}
 		r := doctorCheck{Name: tool, Present: err == nil, Detail: path, Optional: c.optional}
 		if err != nil {
@@ -151,6 +152,15 @@ func doctorChecks(fix bool, goos string) []doctorCheck {
 		}
 		results = append(results, r)
 	}
+
+	// Decided from what the lookup above found, so --fix installing rsync shows as rsync.
+	detail := string(release.TransportTar) + " over ssh (rsync not found, release streams a tar archive)"
+	for _, r := range results {
+		if r.Name == "rsync" && r.Present {
+			detail = string(release.TransportRsync) + " (" + r.Detail + ")"
+		}
+	}
+	results = append(results, doctorCheck{Name: "release transport", Present: true, Detail: detail})
 	return results
 }
 
