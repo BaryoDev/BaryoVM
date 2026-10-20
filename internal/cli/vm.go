@@ -49,6 +49,7 @@ host's default shell is powershell.exe.
 			}
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
 			var unreached bool
+			var detectErr error
 			manualOS, manualShell, err := resolveManualHost(osName, shellName)
 			if err != nil {
 				return err
@@ -67,7 +68,7 @@ host's default shell is powershell.exe.
 					}
 					defer c.Close()
 					if vm.OS, err = sshx.DetectOS(c); err != nil {
-						vm.OS, unreached = "", true
+						vm.OS, detectErr = "", err
 						return nil
 					}
 					if vm.OS != sshx.Windows {
@@ -86,8 +87,11 @@ host's default shell is powershell.exe.
 				return err
 			}
 			msg := fmt.Sprintf("registered %s (%s@%s, %s)", name, user, host, vm.HostOS())
-			if unreached {
+			if unreached || detectErr != nil {
 				note := fmt.Sprintf("could not reach %s to detect its OS, recorded it as linux. Run vm add again when it is up, or pass --os windows", host)
+				if detectErr != nil {
+					note = fmt.Sprintf("connected to %s but could not detect its OS (%v), recorded it as linux. Run vm add again or pass --os windows", host, detectErr)
+				}
 				if ui.JSON() {
 					msg += ". " + note
 				} else {

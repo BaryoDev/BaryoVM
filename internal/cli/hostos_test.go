@@ -133,7 +133,7 @@ func TestEveryLinuxOnlyCommandRefusesAWindowsVMBeforeDialling(t *testing.T) {
 
 func TestUnknownOSIsRefusedNotRunAsLinux(t *testing.T) {
 	err := requireLinux(&fleet.VM{Name: "box", OS: "freebsd"}, "stack deploy")
-	if err == nil || err.Error() != `unknown os "freebsd" for VM box in fleet.json` {
+	if err == nil || err.Error() != `unknown os "freebsd" for VM box in fleet.json; set it to linux or windows, or re-register with: baryovm vm add box --os linux|windows` {
 		t.Fatalf("got %v", err)
 	}
 	if _, err := hostOS(&fleet.VM{Name: "box", OS: "freebsd"}); err == nil {

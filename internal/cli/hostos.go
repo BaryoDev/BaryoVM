@@ -16,7 +16,7 @@ import (
 // neither linux nor windows (a typo in fleet.json) is refused rather than run as Linux.
 func hostOS(vm *fleet.VM) (sshx.OS, error) {
 	if !vm.OS.Known() {
-		return "", fmt.Errorf("unknown os %q for VM %s in fleet.json", string(vm.OS), vm.Name)
+		return "", fmt.Errorf("unknown os %q for VM %s in fleet.json; set it to linux or windows, or re-register with: baryovm vm add %s --os linux|windows", string(vm.OS), vm.Name, vm.Name)
 	}
 	return vm.HostOS(), nil
 }

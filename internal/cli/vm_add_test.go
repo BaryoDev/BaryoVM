@@ -152,3 +152,66 @@ func TestVMAddHostKeyMismatchStillFailsAndSavesNothing(t *testing.T) {
 		t.Error("nothing may be saved after a host key refusal")
 	}
 }
+
+// A host that answers SSH but cannot run the probes is reachable. The warning must carry the
+// detection error and must not claim the host was unreachable.
+func TestVMAddDetectionFailureKeepsTheErrorAndDoesNotSayUnreachable(t *testing.T) {
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(newSigner(t))
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				sc, chans, reqs, err := ssh.NewServerConn(conn, cfg)
+				if err != nil {
+					return
+				}
+				defer sc.Close()
+				go ssh.DiscardRequests(reqs)
+				for nc := range chans {
+					ch, creqs, err := nc.Accept()
+					if err != nil {
+						return
+					}
+					go func() {
+						for r := range creqs {
+							_ = r.Reply(false, nil)
+						}
+						ch.Close()
+					}()
+				}
+			}()
+		}
+	}()
+	host, port, _ := net.SplitHostPort(l.Addr().String())
+
+	_, stderr, err := runCmdE(t, newVMAddCmd(), nil, false, "box", "--host", host, "--port", port, "--key", writeTestKey(t))
+	if err != nil {
+		t.Fatalf("a failed detection must not fail vm add: %v", err)
+	}
+	if !strings.Contains(stderr, "could not tell whether the host is Linux or Windows") {
+		t.Errorf("detection error missing from the warning:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "could not reach") || strings.Contains(stderr, "unreachable") {
+		t.Errorf("the host was reached, the warning must not say otherwise:\n%s", stderr)
+	}
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Find("box") == nil {
+		t.Error("the VM must still be added")
+	}
+}
