@@ -11,6 +11,11 @@ session; the CLI only shortens the path.
 There is no --sudo flag: put sudo in the remote command yourself (prefer
 sudo -n so -o json does not hang on a password prompt).
 
+On a Windows VM the words after -- are run as one PowerShell command, so
+cmdlets, parameters and pipes work as at a PowerShell prompt (quote the whole
+command in your own shell if it contains | or ;). There is no sudo there: an
+administrator's SSH session is already elevated.
+
 A non-zero remote exit becomes a non-zero CLI exit. Under -o json the envelope
 keeps stdout, stderr and exitCode as separate fields.
 

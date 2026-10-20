@@ -100,6 +100,12 @@ the VM. Put `sudo -n` in the remote command when you need root; there is no
 `--sudo` flag. A non-zero remote exit becomes a non-zero CLI exit. Under
 `-o json` the envelope keeps `stdout`, `stderr` and `exitCode` as separate fields.
 
+`vm add` connects once to detect whether the host runs Linux or Windows and records
+it in `fleet.json` (`--os linux|windows` skips the connection). Entries from before
+this existed are read as Linux. On a Windows VM (OpenSSH Server, administrator
+account) only `vm exec` works so far: the words after `--` run as one PowerShell
+command. Every other command stops with a message naming it and the VM.
+
 ## Hardening, and seeing what hits the box
 
 A VM with a public SSH port is found within minutes and guessed at continuously.

@@ -2,6 +2,12 @@
 
 Register an existing VM by host + SSH key
 
+### Synopsis
+
+Register an existing VM and record whether it runs Linux or Windows. The OS
+is detected once, over SSH, when the VM is added; pass --os to skip the
+connection or to say it when detection cannot.
+
 ```
 baryovm vm add <name> [flags]
 ```
@@ -12,6 +18,7 @@ baryovm vm add <name> [flags]
   -h, --help          help for add
       --host string   public IP or hostname (required)
       --key string    path to the private SSH key (required)
+      --os string     host OS, linux or windows (default: detect over SSH)
       --port int      SSH port (default 22)
       --user string   SSH user (default "ubuntu")
 ```
