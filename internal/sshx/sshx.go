@@ -93,13 +93,17 @@ func Dial(t Target) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse key %s: %w", t.KeyPath, err)
 	}
+	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
+	store := hostkeys.New(home()).Strict(StrictHostKeys())
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostkeys.New(home()).Strict(StrictHostKeys()).Callback(learned),
-		Timeout:         15 * time.Second,
+		HostKeyCallback: store.Callback(learned),
+		// Ask for the key types already recorded first, so a server holding several offers one we
+		// can check rather than one that looks like a changed key.
+		HostKeyAlgorithms: store.Algorithms(addr),
+		Timeout:           15 * time.Second,
 	}
-	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	c, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)

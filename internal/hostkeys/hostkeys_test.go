@@ -286,3 +286,20 @@ func TestStrictStillReportsAChangedKeyAsChanged(t *testing.T) {
 		t.Fatalf("want ErrChanged, got %T: %v", err, err)
 	}
 }
+
+func TestKeyscanPassesThePortAsAFlag(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"192.0.2.10:22", "ssh-keyscan -p 22 -t ecdsa,ed25519 192.0.2.10"},
+		{"192.0.2.10:2222", "ssh-keyscan -p 2222 -t ecdsa,ed25519 192.0.2.10"},
+		{"[2001:db8::1]:22", "ssh-keyscan -p 22 -t ecdsa,ed25519 2001:db8::1"},
+		{"vm.example", "ssh-keyscan -t ecdsa,ed25519 vm.example"},
+	} {
+		if got := Keyscan(c.in); got != c.want {
+			t.Errorf("Keyscan(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	err := &ErrUnknownHost{Host: "192.0.2.10:2222", Offered: "SHA256:x", Store: "/k"}
+	if !strings.Contains(err.Error(), "ssh-keyscan -p 2222 -t ecdsa,ed25519 192.0.2.10 >> /k") {
+		t.Errorf("strict-mode error must keep the port: %s", err)
+	}
+}

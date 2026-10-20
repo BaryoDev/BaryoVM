@@ -25,11 +25,15 @@
 package hostkeys
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -80,16 +84,18 @@ func (e *ErrUnknownHost) Error() string {
 			"\n"+
 			"Check that fingerprint against the machine, then record it before this runs:\n"+
 			"\n"+
-			"  ssh-keyscan -t ecdsa,ed25519 %s >> %s\n",
-		e.Host, e.Offered, hostOnly(e.Host), e.Store)
+			"  %s >> %s\n",
+		e.Host, e.Offered, Keyscan(e.Host), e.Store)
 }
 
-// hostOnly strips the port, since ssh-keyscan takes a host and an optional -p.
-func hostOnly(hostport string) string {
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		return h
+// Keyscan is the ssh-keyscan command that fetches a host's ecdsa and ed25519 keys. ssh-keyscan
+// takes the port as -p and cannot resolve host:port.
+func Keyscan(hostport string) string {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return "ssh-keyscan -t ecdsa,ed25519 " + hostport
 	}
-	return hostport
+	return "ssh-keyscan -p " + port + " -t ecdsa,ed25519 " + host
 }
 
 // Store is a known_hosts file BaryoVM owns, plus the user's own file as a read-only second source.
@@ -131,30 +137,32 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		offered := ssh.FingerprintSHA256(key)
 
+		// Only plain keys are recorded and compared. knownhosts answers a certificate with an error
+		// that is neither "absent" nor "changed", which used to fall through to learning it, so any
+		// self-signed certificate replaced the recorded key.
+		if _, ok := key.(*ssh.Certificate); ok {
+			return fmt.Errorf("%s offered a host certificate (%s); BaryoVM checks plain host keys only and will not trust it", hostname, key.Type())
+		}
+
 		// Our own file first. A key we recorded is the one we mean to check against.
 		err := s.check(s.path, hostname, remote, key)
-		switch {
-		case err == nil:
+		if err == nil {
 			return nil
-		case isChanged(err):
-			stored, _ := s.storedFingerprint(s.path, hostname)
-			return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: s.path}
+		}
+		if err := s.refusal(err, s.path, hostname, offered); err != nil {
+			return err
 		}
 
 		// Not in ours. The user's own file is a better source than the network: if they have
 		// SSHed to this box by hand, that key was checked by them, not offered to us now.
 		if s.extraPath != "" {
 			err := s.check(s.extraPath, hostname, remote, key)
-			switch {
-			case err == nil:
+			if err == nil {
 				// Record it in ours too, so the trust does not depend on a file we do not own.
-				if werr := s.add(hostname, key); werr != nil {
-					return werr
-				}
-				return nil
-			case isChanged(err):
-				stored, _ := s.storedFingerprint(s.extraPath, hostname)
-				return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: s.extraPath}
+				return s.add(hostname, key)
+			}
+			if err := s.refusal(err, s.extraPath, hostname, offered); err != nil {
+				return err
 			}
 		}
 
@@ -171,6 +179,154 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		}
 		return nil
 	}
+}
+
+// refusal turns a failed check into the error to return, or nil when the host is simply absent from
+// path. Everything that is not "absent" refuses: a file that cannot be read may hold the very key that
+// would have refused this one, so learning past it fails open.
+func (s *Store) refusal(err error, path, hostname, offered string) error {
+	var re *knownhosts.RevokedError
+	switch {
+	case errors.Is(err, errNotFound):
+		return nil
+	case errors.As(err, &re):
+		return fmt.Errorf("host key %s for %s is marked @revoked in %s", offered, hostname, path)
+	case isChanged(err):
+		stored, _ := s.storedFingerprint(path, hostname)
+		return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: path}
+	}
+	return fmt.Errorf("check the host key for %s against %s: %w; fix or remove the bad line before connecting", hostname, path, err)
+}
+
+// PlainAlgorithms is every host key algorithm the client supports except certificates, for
+// ssh.ClientConfig.HostKeyAlgorithms. Callback refuses certificates, so offering them would make a
+// host that has both a certificate and a plain key unreachable.
+func PlainAlgorithms() []string {
+	var out []string
+	for _, a := range ssh.SupportedAlgorithms().HostKeys {
+		if !strings.Contains(a, "-cert-") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// Algorithms returns the host key algorithms of the keys recorded for a host, for
+// ssh.ClientConfig.HostKeyAlgorithms. Without it the server offers whichever key type the client
+// prefers, which may not be the one recorded, and a recorded ED25519 key then looks like a changed
+// host key when the server offers ECDSA.
+//
+// The recorded types come first and the rest of the supported ones follow, so the list only
+// reorders preference. A server holding the recorded type offers it. A server without it offers
+// another type, and Callback reports that as a changed key instead of the handshake failing with
+// "no common algorithm". Callback still checks the key itself.
+//
+// BaryoVM's own file wins when it has the host, the same order Callback checks in; the user's file
+// is used only when ours has nothing. A host with no recorded key gets PlainAlgorithms, so a fresh
+// VM can still be learned. Certificate types are never offered: Callback refuses certificates.
+func (s *Store) Algorithms(hostname string) []string {
+	for _, path := range []string{s.path, s.extraPath} {
+		stored := algorithmsIn(path, hostname)
+		if len(stored) == 0 {
+			continue
+		}
+		supported := PlainAlgorithms()
+		var algs []string
+		seen := map[string]bool{}
+		for _, a := range stored {
+			if slices.Contains(supported, a) && !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+		if len(algs) == 0 {
+			return supported // only types Go cannot check as a host key; Callback will report it
+		}
+		for _, a := range supported {
+			if !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+		return algs
+	}
+	return PlainAlgorithms()
+}
+
+// algorithmsIn reads one known_hosts file. Lines it cannot parse, and @revoked and @cert-authority
+// entries (which are not host keys to offer), are skipped. A missing file has no algorithms.
+func algorithmsIn(path, hostname string) []string {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	want := knownhosts.Normalize(hostname)
+	var algs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		marker, hosts, key, _, _, err := ssh.ParseKnownHosts([]byte(line))
+		if err != nil || marker != "" || !hostMatches(hosts, want) {
+			continue
+		}
+		for _, a := range keyAlgorithms(key) {
+			if !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+	}
+	return algs
+}
+
+// hostMatches reports whether any host field of a known_hosts line is the wanted, normalized name.
+// A hashed field (|1|salt|hash) cannot be compared as text, so it is re-hashed with its own salt.
+func hostMatches(hosts []string, want string) bool {
+	for _, h := range hosts {
+		if strings.HasPrefix(h, "|1|") {
+			if hashedMatches(h, want) {
+				return true
+			}
+			continue
+		}
+		if h == want || knownhosts.Normalize(h) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hashedMatches(field, want string) bool {
+	parts := strings.Split(field, "|")
+	if len(parts) != 4 {
+		return false
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	sum, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha1.New, salt)
+	mac.Write([]byte(want))
+	return hmac.Equal(mac.Sum(nil), sum)
+}
+
+// keyAlgorithms maps a stored key to the signature algorithms a server may use for it. An RSA key
+// can be proven with any of three, newest first; every other type has one.
+func keyAlgorithms(key ssh.PublicKey) []string {
+	if key.Type() == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	return []string{key.Type()}
 }
 
 // check runs one known_hosts file's callback. A missing file is "not found", not an error: a first
