@@ -58,6 +58,10 @@ func newUpCmd() *cobra.Command {
 				vm = provisioned
 			}
 
+			if err := requireLinux(&vm, "up"); err != nil {
+				return err
+			}
+
 			// 2. Install Docker.
 			var boot bootstrap.Report
 			if err := ui.Step(fmt.Sprintf("installing Docker on %s", vm.Name), func() error {

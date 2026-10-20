@@ -160,6 +160,9 @@ func newStackReleaseCmd() *cobra.Command {
 			if vm == nil {
 				return fmt.Errorf("stack %q references unknown VM %q", args[0], st.VM)
 			}
+			if err := requireLinux(vm, "stack release"); err != nil {
+				return err
+			}
 			manifestPath := config
 			if manifestPath == "" {
 				manifestPath = st.ReleaseFile
@@ -405,6 +408,9 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 	vm := store.Find(st.VM)
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
+	}
+	if err := requireLinux(vm, action); err != nil {
+		return err
 	}
 	var o opOutput
 	err = ui.Step(step, func() error {
@@ -654,6 +660,9 @@ func runStackOpDescribed(name, action, step string, fn func(c sshx.Runner, cs co
 	vm := store.Find(st.VM)
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
+	}
+	if err := requireLinux(vm, action); err != nil {
+		return err
 	}
 
 	var o opOutput
