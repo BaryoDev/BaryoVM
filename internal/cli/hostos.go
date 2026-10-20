@@ -54,3 +54,27 @@ func buildExecRemoteFor(os sshx.OS, sh sshx.Shell, argv []string) (line, shown s
 	line, err = buildExecRemote(argv)
 	return line, line, err
 }
+
+// resolveManualHost reads the --os and --shell flags of `vm add`. An empty OS comes back empty,
+// meaning "detect it". --shell only means something for a Windows host, so it is refused anywhere
+// else rather than ignored; --os windows alone records cmd, the OpenSSH default.
+func resolveManualHost(osName, shellName string) (sshx.OS, sshx.Shell, error) {
+	var os sshx.OS
+	if strings.TrimSpace(osName) != "" {
+		var err error
+		if os, err = sshx.ParseOS(osName); err != nil {
+			return "", "", err
+		}
+	}
+	if os != sshx.Windows {
+		if strings.TrimSpace(shellName) != "" {
+			return "", "", fmt.Errorf("--shell only applies with --os windows")
+		}
+		return os, "", nil
+	}
+	sh, err := sshx.ParseShell(shellName)
+	if err != nil {
+		return "", "", err
+	}
+	return os, sh, nil
+}

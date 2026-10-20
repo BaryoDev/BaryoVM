@@ -27,7 +27,7 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMAddCmd() *cobra.Command {
-	var host, user, key, osName string
+	var host, user, key, osName, shellName string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -35,7 +35,9 @@ func newVMAddCmd() *cobra.Command {
 		Long: strings.TrimSpace(`
 Register an existing VM and record whether it runs Linux or Windows. The OS
 is detected once, over SSH, when the VM is added; pass --os to skip the
-connection or to say it when detection cannot.
+connection or to say it when detection cannot. With --os windows the SSH
+shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
+host's default shell is powershell.exe.
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -45,10 +47,12 @@ connection or to say it when detection cannot.
 				return err
 			}
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
-			if osName != "" {
-				if vm.OS, err = sshx.ParseOS(osName); err != nil {
-					return err
-				}
+			manualOS, manualShell, err := resolveManualHost(osName, shellName)
+			if err != nil {
+				return err
+			}
+			if manualOS != "" {
+				vm.OS, vm.Shell = manualOS, manualShell
 			} else {
 				err = ui.Step(fmt.Sprintf("detecting the OS of %s", host), func() error {
 					c, err := sshx.Dial(vm.Target())
@@ -80,6 +84,7 @@ connection or to say it when detection cannot.
 	cmd.Flags().StringVar(&key, "key", "", "path to the private SSH key (required)")
 	cmd.Flags().IntVar(&port, "port", 22, "SSH port")
 	cmd.Flags().StringVar(&osName, "os", "", "host OS, linux or windows (default: detect over SSH)")
+	cmd.Flags().StringVar(&shellName, "shell", "", "SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)")
 	_ = cmd.MarkFlagRequired("host")
 	_ = cmd.MarkFlagRequired("key")
 	return cmd

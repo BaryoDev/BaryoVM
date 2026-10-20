@@ -232,3 +232,75 @@ func decodeWindowsScript(t *testing.T, line string) string {
 	lit := strings.ReplaceAll(payload[i+len(open):j], "''", "'")
 	return strings.TrimSuffix(lit, "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE")
 }
+
+func TestResolveManualHost(t *testing.T) {
+	cases := []struct {
+		name, os, shell string
+		wantOS          sshx.OS
+		wantShell       sshx.Shell
+		wantErr         string
+	}{
+		{"nothing given means detect", "", "", "", "", ""},
+		{"linux", "linux", "", sshx.Linux, "", ""},
+		{"windows without a shell means cmd", "windows", "", sshx.Windows, sshx.ShellCmd, ""},
+		{"windows with powershell", "windows", "powershell", sshx.Windows, sshx.ShellPowerShell, ""},
+		{"windows with cmd", "Windows", "CMD", sshx.Windows, sshx.ShellCmd, ""},
+		{"shell with linux", "linux", "cmd", "", "", "--shell only applies with --os windows"},
+		{"shell with detection", "", "powershell", "", "", "--shell only applies with --os windows"},
+		{"unknown shell", "windows", "bash", "", "", `unknown shell "bash"`},
+		{"unknown os", "freebsd", "", "", "", `unknown OS "freebsd"`},
+	}
+	for _, c := range cases {
+		gotOS, gotShell, err := resolveManualHost(c.os, c.shell)
+		if c.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("%s: got err %v, want one containing %q", c.name, err, c.wantErr)
+			}
+			continue
+		}
+		if err != nil || gotOS != c.wantOS || gotShell != c.wantShell {
+			t.Errorf("%s: got %q, %q, %v; want %q, %q", c.name, gotOS, gotShell, err, c.wantOS, c.wantShell)
+		}
+	}
+}
+
+func TestVMAddRefusesShellWithoutWindowsBeforeConnecting(t *testing.T) {
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	cmd := newVMAddCmd()
+	cmd.SetArgs([]string{"box", "--host", "10.0.0.9", "--key", "/nonexistent/key", "--shell", "powershell"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--shell only applies with --os windows") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestVMAddOSWindowsStoresTheShell(t *testing.T) {
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	for _, c := range []struct {
+		args []string
+		want sshx.Shell
+	}{
+		{[]string{"--os", "windows"}, sshx.ShellCmd},
+		{[]string{"--os", "windows", "--shell", "powershell"}, sshx.ShellPowerShell},
+	} {
+		cmd := newVMAddCmd()
+		cmd.SetArgs(append([]string{"w", "--host", "10.0.0.9", "--key", "/k"}, c.args...))
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		store, err := fleet.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		vm := store.Find("w")
+		if vm == nil || vm.OS != sshx.Windows || vm.Shell != c.want {
+			t.Errorf("%v: stored %+v, want windows with shell %q", c.args, vm, c.want)
+		}
+	}
+}
