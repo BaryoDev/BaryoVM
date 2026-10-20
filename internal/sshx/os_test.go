@@ -7,6 +7,7 @@ package sshx
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -30,20 +31,9 @@ func TestQuotePowerShell(t *testing.T) {
 		{"all: ' $x `t ;", "'all: '' $x `t ;'"},
 	}
 	for _, c := range cases {
-		if got := Windows.Quote(c.in); got != c.want {
-			t.Errorf("Windows.Quote(%q) = %q, want %q", c.in, got, c.want)
+		if got := quotePowerShell(c.in); got != c.want {
+			t.Errorf("quotePowerShell(%q) = %q, want %q", c.in, got, c.want)
 		}
-	}
-}
-
-func TestQuotePOSIXIsUnchanged(t *testing.T) {
-	for _, in := range []string{"", "a'b", "$HOME; rm -rf /", "a`b`c"} {
-		if got, want := Linux.Quote(in), Quote(in); got != want {
-			t.Errorf("Linux.Quote(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if got, want := OS("").Quote("a'b"), Quote("a'b"); got != want {
-		t.Errorf("an unset OS must quote as POSIX: got %q, want %q", got, want)
 	}
 }
 
@@ -72,17 +62,15 @@ func decodePayload(t *testing.T, line string) string {
 func decodeEncoded(t *testing.T, line string) string {
 	t.Helper()
 	payload := decodePayload(t, line)
-	const open = "FromBase64String('"
+	const open = "[ScriptBlock]::Create('"
+	const closer = "')}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}"
 	i := strings.Index(payload, open)
-	if i < 0 {
+	j := strings.LastIndex(payload, closer)
+	if i < 0 || j < i {
 		t.Fatalf("no script literal in payload: %q", payload)
 	}
-	rest := payload[i+len(open):]
-	raw, err := base64.StdEncoding.DecodeString(rest[:strings.Index(rest, "'")])
-	if err != nil {
-		t.Fatalf("script literal is not base64: %v", err)
-	}
-	return strings.TrimSuffix(string(raw), "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE")
+	lit := strings.NewReplacer("''", "'", "\u2018\u2018", "\u2018", "\u2019\u2019", "\u2019", "\u201a\u201a", "\u201a", "\u201b\u201b", "\u201b").Replace(payload[i+len(open):j])
+	return strings.TrimSuffix(lit, "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE")
 }
 
 func TestWindowsScriptTravelsWithoutAnOuterQuotingLayer(t *testing.T) {
@@ -126,29 +114,32 @@ func TestWindowsPayloadKeepsErrorsAsText(t *testing.T) {
 			t.Errorf("payload does not contain %q:\n%s", want, payload)
 		}
 	}
-	// The script is data, so it cannot end the wrapper's own quoting.
-	if strings.Contains(payload, "Write-Error boom") {
-		t.Errorf("the script must travel encoded, not spliced into the wrapper:\n%s", payload)
+}
+
+// The script sits in a single-quoted literal, so a quote in it must be doubled or it would end the
+// literal and the rest of the script would run as part of the wrapper.
+func TestWindowsPayloadKeepsAQuoteFromEndingTheScriptLiteral(t *testing.T) {
+	scripts := []string{
+		"x' ; Remove-Item C:\\ ; '",
+		"it's a \u2019 and \u2018 and \u201a and \u201b",
+		"line one\nline two\r\n# comment",
+		"')}catch{exit 0}#",
+	}
+	for _, script := range scripts {
+		line := Windows.Script(ShellCmd, script)
+		if got := decodeEncoded(t, line); got != script {
+			t.Errorf("script lost in transit: got %q, want %q", got, script)
+		}
+	}
+	payload := decodePayload(t, Windows.Script(ShellCmd, "x' ; y"))
+	if !strings.Contains(payload, "x'' ; y") {
+		t.Errorf("the quote was not doubled:\n%s", payload)
 	}
 }
 
 func TestLinuxScriptIsTheCommandAsGiven(t *testing.T) {
 	if got := Linux.Script(ShellCmd, "df -h"); got != "df -h" {
 		t.Errorf("got %q", got)
-	}
-}
-
-func TestWindowsCommandQuotesEachWord(t *testing.T) {
-	got := decodeEncoded(t, Windows.Command(ShellCmd, []string{`C:\Program Files\app.exe`, "it's", "$x", "a`b;c"}))
-	want := `& 'C:\Program Files\app.exe' 'it''s' '$x' 'a` + "`" + `b;c'`
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestLinuxCommandQuotesEachWord(t *testing.T) {
-	if got, want := Linux.Command(ShellCmd, []string{"echo", "a'b"}), `'echo' 'a'\''b'`; got != want {
-		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -193,28 +184,6 @@ func TestDetectShell(t *testing.T) {
 	}
 }
 
-func TestAsAdmin(t *testing.T) {
-	if got := Linux.AsAdmin(true, "docker build"); got != "sudo -n docker build" {
-		t.Errorf("linux: got %q", got)
-	}
-	if got := Linux.AsAdmin(false, "docker build"); got != "docker build" {
-		t.Errorf("linux, not asked: got %q", got)
-	}
-	// OpenSSH gives an administrator an elevated session, and there is no sudo to prefix.
-	if got := Windows.AsAdmin(true, "docker build"); got != "docker build" {
-		t.Errorf("windows: got %q", got)
-	}
-}
-
-func TestAsAdminShellLinuxIsSudoShell(t *testing.T) {
-	if got, want := Linux.AsAdminShell(true, "a && b"), SudoShell(true, "a && b"); got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-	if got := Windows.AsAdminShell(true, "a; b"); got != "a; b" {
-		t.Errorf("windows: got %q", got)
-	}
-}
-
 func TestParseOS(t *testing.T) {
 	cases := []struct {
 		in      string
@@ -241,6 +210,31 @@ func TestResolvedDefaultsToLinux(t *testing.T) {
 	}
 }
 
+func TestResolvedNormalisesWhatAHandEditedFleetHolds(t *testing.T) {
+	cases := map[OS]OS{" Windows ": Windows, "WINDOWS": Windows, "Linux": Linux, "  ": Linux, "freebsd": "freebsd"}
+	for in, want := range cases {
+		if got := in.Resolved(); got != want {
+			t.Errorf("OS(%q).Resolved() = %q, want %q", in, got, want)
+		}
+	}
+	// An unknown name stays unknown so a caller can refuse it, rather than being taken for Linux.
+	if OS("freebsd").Known() || !OS("").Known() || !OS("Windows").Known() {
+		t.Error("Known should accept linux and windows in any case, and empty, and nothing else")
+	}
+}
+
+func TestShellResolvedNormalises(t *testing.T) {
+	cases := map[Shell]Shell{"": ShellCmd, " PowerShell ": ShellPowerShell, "CMD": ShellCmd, "zsh": ShellCmd}
+	for in, want := range cases {
+		if got := in.Resolved(); got != want {
+			t.Errorf("Shell(%q).Resolved() = %q, want %q", in, got, want)
+		}
+	}
+	if Windows.Script(" PowerShell ", "exit 3") != Windows.Script(ShellPowerShell, "exit 3") {
+		t.Error("Script should read the shell the same way Resolved does")
+	}
+}
+
 func TestOSFromUname(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -251,9 +245,11 @@ func TestOSFromUname(t *testing.T) {
 		{"MINGW64_NT-10.0-20348\n", Windows, true},
 		{"MSYS_NT-10.0-20348", Windows, true},
 		{"CYGWIN_NT-10.0", Windows, true},
-		{"Darwin\n", "", false},
+		// Everything that is not Windows is reached the same way, over a POSIX shell.
+		{"Darwin\n", Linux, true},
+		{"FreeBSD\n", Linux, true},
 		{"", "", false},
-		{"'uname' is not recognized as an internal or external command", "", false},
+		{"   \n", "", false},
 	}
 	for _, c := range cases {
 		got, ok := osFromUname(c.in)
@@ -330,11 +326,77 @@ func TestDetectOSWindowsWithPOSIXToolsOnPath(t *testing.T) {
 
 func TestDetectOSRefusesWhatItDoesNotRecognise(t *testing.T) {
 	h := &fakeHost{answers: map[string]fakeAnswer{
-		"uname -s":   {out: "Darwin\n"},
+		"uname -s":   {out: ""},
 		"powershell": {err: errors.New("not found")},
 	}}
 	_, err := DetectOS(h)
 	if err == nil || !strings.Contains(err.Error(), "--os") {
 		t.Fatalf("expected an error pointing at --os, got %v", err)
+	}
+}
+
+func TestDetectOSOtherUnixIsRecordedAsLinux(t *testing.T) {
+	h := &fakeHost{answers: map[string]fakeAnswer{"uname -s": {out: "Darwin\n"}}}
+	if got, err := DetectOS(h); err != nil || got != Linux {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(h.ran) != 1 {
+		t.Errorf("a host that answered uname needs no second probe, ran %v", h.ran)
+	}
+}
+
+func TestDetectOSUnreachableHostPointsAtOSFlag(t *testing.T) {
+	h := &fakeHost{answers: map[string]fakeAnswer{
+		"uname -s":   {err: errors.New("connection refused")},
+		"powershell": {err: errors.New("connection refused")},
+	}}
+	if _, err := DetectOS(h); err == nil || !strings.Contains(err.Error(), "pass --os") {
+		t.Fatalf("expected the --os hint, got %v", err)
+	}
+}
+
+func TestScriptLineRefusesWhatTheHostCannotTake(t *testing.T) {
+	// Largest script that still fits, found by search so the test follows the limits and not a guess.
+	fits := func(sh Shell, limit int) int {
+		n := 0
+		for step := 1 << 16; step > 0; step >>= 1 {
+			if n+step > limit {
+				continue
+			}
+			line, err := Windows.ScriptLine(sh, strings.Repeat("a", n+step))
+			if err == nil && len(line) <= limit {
+				n += step
+			}
+		}
+		return n
+	}
+	for _, c := range []struct {
+		sh    Shell
+		limit int
+	}{{ShellCmd, 8191}, {ShellPowerShell, 32767}} {
+		n := fits(c.sh, c.limit)
+		if n < 1000 {
+			t.Fatalf("%s: even a short script is refused (largest fit %d)", c.sh, n)
+		}
+		line, err := Windows.ScriptLine(c.sh, strings.Repeat("a", n))
+		if err != nil || len(line) > c.limit {
+			t.Fatalf("%s: a script of %d should fit: %v", c.sh, n, err)
+		}
+		_, err = Windows.ScriptLine(c.sh, strings.Repeat("a", n+1))
+		if err == nil {
+			t.Fatalf("%s: a script of %d is over the limit and must be refused", c.sh, n+1)
+		}
+		for _, want := range []string{fmt.Sprint(n + 1), fmt.Sprint(c.limit)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: message %q does not name %s", c.sh, err, want)
+			}
+		}
+	}
+}
+
+func TestScriptLineLinuxIsNeverLimited(t *testing.T) {
+	long := strings.Repeat("a", 100000)
+	if line, err := Linux.ScriptLine(ShellCmd, long); err != nil || line != long {
+		t.Errorf("linux: err %v, unchanged %v", err, line == long)
 	}
 }
