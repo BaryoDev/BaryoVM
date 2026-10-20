@@ -163,17 +163,21 @@ const ghTimeout = 60 * time.Second
 var errGHTimeout = errors.New("gh timed out")
 
 func runGH(args ...string) (string, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), ghTimeout)
+	return runWithTimeout("gh", ghTimeout, args...)
+}
+
+func runWithTimeout(name string, d time.Duration, args ...string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	var out, errb bytes.Buffer
-	c := exec.CommandContext(ctx, "gh", args...)
+	c := exec.CommandContext(ctx, name, args...)
 	c.Stdout = &out
 	c.Stderr = &errb
 	if err := c.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", "", errGHTimeout
 		}
-		if _, lookErr := exec.LookPath("gh"); lookErr != nil {
+		if _, lookErr := exec.LookPath(name); lookErr != nil {
 			return "", "", fmt.Errorf("the GitHub CLI is not installed: install gh and run `gh auth login`")
 		}
 		return out.String(), errb.String(), err

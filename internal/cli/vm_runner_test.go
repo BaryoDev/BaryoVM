@@ -2,9 +2,11 @@ package cli
 
 import (
 	"errors"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGHArgvIsASliceNotAShellString(t *testing.T) {
@@ -57,6 +59,16 @@ func TestGHTimeoutHasClearAdvice(t *testing.T) {
 	e := ghError("fetch a registration-token", "acme/app", "", errGHTimeout)
 	if !strings.Contains(e.Error(), "did not answer within 1m0s") || !strings.Contains(e.Error(), "retry") {
 		t.Errorf("timeout error = %v", e)
+	}
+}
+
+func TestRunWithTimeoutKillsASlowCommand(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep")
+	}
+	_, _, err := runWithTimeout("sleep", 50*time.Millisecond, "5")
+	if !errors.Is(err, errGHTimeout) {
+		t.Errorf("err = %v, want the timeout error", err)
 	}
 }
 
