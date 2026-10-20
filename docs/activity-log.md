@@ -14,17 +14,22 @@ processes running at once leave two whole lines.
 | `ts` | UTC, RFC 3339 |
 | `version` | the BaryoVM version that ran |
 | `action` | the command path, for example `stack release` |
-| `vm` | the VM, when the command names one (or the stack's VM, if it is registered) |
-| `stack` | the stack, when the command names one |
+| `vm` | the VM, when the command's name argument is a registered VM (or the stack's VM) |
+| `stack` | the stack, when the command's name argument is a registered stack |
 | `ok` | `true` when the command succeeded |
 | `duration_ms` | wall time of the command |
-| `error` | the error message, on failure only |
+| `error` | on failure only, a fixed string: `remote command failed (exit N)` or `failed` |
 | `host` | the operator's machine name |
 
 The field names are stable. `vm`, `stack` and `error` are left out when empty.
 
-Nothing else is recorded. No flag values, env files, tokens, or arguments. `vm exec` records that it
-ran and on which VM, never the command, and a failed `vm exec` records only the remote exit status.
+Nothing else is recorded. No flag values, env files, tokens, or arguments, and never the text of an
+error (it can carry the remote command, its output or what you typed). `vm exec` records that it ran
+and on which VM, never the command.
+
+Not recorded: a command that fails argument parsing (it never ran), `vm exec` help or with no VM,
+and a VM named by a flag such as `deploy --vm`. A name that is not a registered VM or stack is
+left out of the line.
 
 ## Opt out
 

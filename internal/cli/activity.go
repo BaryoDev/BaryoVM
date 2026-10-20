@@ -14,13 +14,15 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/activity"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
 )
 
 // ranCommand is the command that actually started, with its positional args. Help, usage errors and
 // unknown commands never reach PersistentPreRun, so they are never set here.
 type ranCommand struct {
-	cmd  *cobra.Command
-	args []string
+	cmd    *cobra.Command
+	args   []string
+	before *fleet.Store
 }
 
 var lastRun *ranCommand
@@ -53,20 +55,26 @@ func activityEntry(run *ranCommand, err error, took time.Duration) (activity.Ent
 		DurationMS: took.Milliseconds(),
 	}
 	if err != nil {
-		e.Error = activityError(path, err)
+		e.Error = activityError(err)
 	}
 	name := activityName(run)
-	switch {
-	case name == "":
-	case strings.HasPrefix(path, "stack "):
-		e.Stack = name
-		if s, lerr := fleet.Load(); lerr == nil {
-			if st := s.FindStack(name); st != nil {
-				e.VM = st.VM
-			}
+	if path == "vm exec" && name == "" {
+		return activity.Entry{}, false
+	}
+	after, _ := fleet.Load()
+	for _, s := range []*fleet.Store{run.before, after} {
+		if s == nil || name == "" {
+			continue
 		}
-	default:
-		e.VM = name
+		if strings.HasPrefix(path, "stack ") {
+			if st := s.FindStack(name); st != nil {
+				e.Stack, e.VM = name, st.VM
+				break
+			}
+		} else if s.Find(name) != nil {
+			e.VM = name
+			break
+		}
 	}
 	return e, true
 }
@@ -80,16 +88,18 @@ func recordedAction(path string) bool {
 	return first != "completion" && !strings.HasPrefix(first, "__")
 }
 
-// activityError keeps the message, except for vm exec, whose failure text can carry the remote
-// command's own output.
-func activityError(path string, err error) string {
-	if path == "vm exec" {
-		var ee *exitError
-		if errors.As(err, &ee) {
-			return fmt.Sprintf("remote exit status %d", ee.code)
-		}
+// activityError is a fixed string chosen here, never the error's own text. Error text carries the
+// remote command, its stderr and user input, any of which can hold a secret.
+func activityError(err error) string {
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("remote command failed (exit %d)", ee.code)
 	}
-	return err.Error()
+	var se *ssh.ExitError
+	if errors.As(err, &se) {
+		return fmt.Sprintf("remote command failed (exit %d)", se.ExitStatus())
+	}
+	return "failed"
 }
 
 // activityName is the VM or stack the command was pointed at: the first positional argument of a

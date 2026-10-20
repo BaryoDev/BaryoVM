@@ -126,6 +126,40 @@ func TestRecordReportsAnUnwritableLog(t *testing.T) {
 	}
 }
 
+func TestRecordCreatesTheHomeDirPrivate(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "fresh")
+	t.Setenv("BARYOVM_HOME", home)
+	if err := Record(Entry{Action: "doctor", OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Errorf("dir mode = %v, want 0700", st.Mode().Perm())
+	}
+}
+
+func TestRecordTightensALooseExistingLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BARYOVM_HOME", home)
+	path := filepath.Join(home, "activity.jsonl")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Record(Entry{Action: "doctor", OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := os.Stat(path)
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
+	}
+}
+
 func TestConcurrentAppendsLeaveWholeLines(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BARYOVM_HOME", home)

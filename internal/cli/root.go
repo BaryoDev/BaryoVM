@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -30,7 +31,8 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			lastRun = &ranCommand{cmd: cmd, args: args}
+			before, _ := fleet.Load()
+			lastRun = &ranCommand{cmd: cmd, args: args, before: before}
 			ui.SetJSON(outputFormat == "json")
 			// Only apply the flag when it was actually given, so it overrides the environment
 			// rather than a default false switching strict mode off for a CI job that set it.

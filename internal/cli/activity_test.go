@@ -71,19 +71,10 @@ func TestFailedCommandWritesOneLineWithTheError(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want one line, got %v", got)
 	}
-	for _, want := range []string{"\"action\":\"vm remove\"", "\"vm\":\"ghost\"", "\"ok\":false", "\"error\":"} {
+	for _, want := range []string{"\"action\":\"vm remove\"", "\"ok\":false", "\"error\":"} {
 		if !strings.Contains(got[0], want) {
 			t.Errorf("line lacks %s: %s", want, got[0])
 		}
-	}
-}
-
-func TestStackCommandNamesTheStack(t *testing.T) {
-	home := activityHome(t)
-	_ = runLogged(t, "stack", "remove", "ghost-stack")
-	got := logLines(t, home)
-	if len(got) != 1 || !strings.Contains(got[0], "\"stack\":\"ghost-stack\"") || strings.Contains(got[0], "\"vm\"") {
-		t.Fatalf("want the stack named and no vm, got %v", got)
 	}
 }
 

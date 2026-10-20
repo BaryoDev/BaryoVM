@@ -67,6 +67,9 @@ func Record(e Entry) error {
 	if err != nil {
 		return err
 	}
+	if st, err := f.Stat(); err == nil && st.Mode().Perm()&0o077 != 0 {
+		_ = f.Chmod(0o600)
+	}
 	if _, err := f.Write(b); err != nil {
 		_ = f.Close()
 		return err
