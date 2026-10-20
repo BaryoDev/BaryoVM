@@ -174,7 +174,7 @@ baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy
 
 ### Release: sync source, build, deploy (config-driven)
 
-`stack release` is the full deploy in one command: **back up → rsync source → build
+`stack release` is the full deploy in one command: **back up → sync source → build
 images on the VM → compose up**. It's driven by a JSON manifest in your project, so the
 pipeline is generic (no app-specific logic). The compose dir (with its `.env`) is never in
 the sync list, so secrets can't be wiped by `--delete`.
@@ -215,7 +215,7 @@ Manifest options:
 | `localRoot` | required | local source root, `~` allowed |
 | `remoteRoot` | required | absolute destination on the VM |
 | `sync` | required | paths under `localRoot` to rsync. **A trailing slash follows rsync's own rule** |
-| `exclude` | none | rsync excludes |
+| `exclude` | `bin`, `obj`, `node_modules`, `.next`, `.git` | rsync-style excludes, honoured by both transports (see below) |
 | `builds` | none | images to build on the VM after syncing |
 | `sudo` | `false` | run the release's remote steps as root: the far side of the rsync, the image builds, `preDeploy`, `postDeploy` and the closing `compose up`. A stack registered `--sudo` turns this on for its own release and a manifest cannot turn it back off |
 | `noCompose` | `false` | skip `docker compose up` at the end |
@@ -267,6 +267,39 @@ laptop either fails or, worse, reaches something local and passes.
 One rule worth carrying into any check script: a "must not contain" assertion only means something
 after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
 grep, so assert the status and a minimum size first.
+
+#### Sync transports and excludes
+
+With local `rsync` on your PATH, `sync` entries go through rsync. Without it they go as a tar
+stream over the SSH session (Linux hosts), and `baryovm doctor` names which one a release will
+use. The stream is written with Go's `archive/tar` straight into `tar -x` on the host, never held
+in memory. Once the extract has exited cleanly, files that are on the host and not local are
+removed, so the result matches `rsync --delete`. Two differences: there is no delta transfer, and
+files arrive owned by the SSH user (root under `sudo`) rather than with your local owner.
+Setuid and setgid bits are dropped.
+
+`exclude` follows rsync's matching under both transports:
+
+- A pattern with no `/` matches a name at any depth: `.env`, `*.map`.
+- A pattern with a `/` matches the end of the path at any depth: `secrets/.env` also excludes
+  `a/secrets/.env`.
+- A leading `/` anchors to the transfer root: `/secrets/.env` matches only the top level. With a
+  `sync` entry like `"out"` (no trailing slash) rsync's paths start with `out/`, so anchor as
+  `/out/secrets/.env`.
+- `*` and `?` stop at `/`, `**` crosses it. A trailing `/` matches directories only.
+- Excluded paths are not sent, are not deleted from the host, and a host directory that holds one
+  is not deleted either.
+
+The tar transport supports only that subset. A pattern using character classes (`[ab]`), a
+backslash, `***` or a filter prefix (`!`, `+ `, `- `) is refused with an error before anything
+touches the host; simplify it or install rsync.
+
+Pruning is confined to the entry's destination directory. It is refused when that directory, or
+one between `remoteRoot` and it, is a symlink on the host. Each removal re-checks, on the host
+and just before the delete, that the path's parent still resolves inside the release dir. A
+window of an instant remains between that check and the delete, which POSIX tools cannot close,
+so do not release into a directory that other users can write to. A symlink to a single file
+cannot be a `sync` entry under tar.
 
 #### The trailing slash on `sync` entries
 

@@ -33,7 +33,7 @@ sequenceDiagram
     participant Site as the running site
 
     You->>VM: pg_dump, before anything changes
-    You->>VM: rsync the source (never the compose dir)
+    You->>VM: sync the source (never the compose dir)
     You->>VM: docker build
     You->>VM: docker compose up
     You->>VM: post-deploy: reload nginx, restore SELinux context
