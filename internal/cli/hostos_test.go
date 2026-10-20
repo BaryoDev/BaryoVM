@@ -186,7 +186,7 @@ func TestBuildExecRemoteForWindowsRunsThePowerShellAsGiven(t *testing.T) {
 func TestBuildExecRemoteForRefusesAScriptTheHostCannotTake(t *testing.T) {
 	long := strings.Repeat("a", 3000)
 	_, _, err := buildExecRemoteFor(sshx.Windows, sshx.ShellCmd, []string{long})
-	if err == nil || !strings.Contains(err.Error(), "3000") || !strings.Contains(err.Error(), "8191") {
+	if err == nil || !strings.Contains(err.Error(), "3000") || !strings.Contains(err.Error(), "cmd.exe") || !strings.Contains(err.Error(), "8127") {
 		t.Fatalf("cmd: expected a refusal naming the length and the limit, got %v", err)
 	}
 	if _, _, err := buildExecRemoteFor(sshx.Windows, sshx.ShellPowerShell, []string{long}); err != nil {

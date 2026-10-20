@@ -376,7 +376,7 @@ func TestScriptLineRefusesWhatTheHostCannotTake(t *testing.T) {
 	for _, c := range []struct {
 		sh    Shell
 		limit int
-	}{{ShellCmd, 8191}, {ShellPowerShell, 32767}} {
+	}{{ShellCmd, maxLineCmd - cmdPrefix}, {ShellPowerShell, maxLinePowerShell}} {
 		n := fits(c.sh, c.limit)
 		if n < 1000 {
 			t.Fatalf("%s: even a short script is refused (largest fit %d)", c.sh, n)

@@ -157,9 +157,13 @@ func windowsPayload(script string) string {
 }
 
 // Command line limits for the program the host's SSH shell starts. cmd.exe refuses a line over 8191
-// characters ("The command line is too long."); powershell.exe takes 32767.
+// characters ("The command line is too long."); powershell.exe takes 32767. sshd runs the line as
+// `cmd.exe /c <line>`, so under cmd that prefix counts too: on a real host a line of about 8170
+// characters was already refused. cmdPrefix is the allowance for it, so the check refuses what the
+// host would, with room to spare.
 const (
 	maxLineCmd        = 8191
+	cmdPrefix         = 64
 	maxLinePowerShell = 32767
 )
 
@@ -171,7 +175,7 @@ func (o OS) ScriptLine(sh Shell, script string) (string, error) {
 	if o.Resolved() != Windows {
 		return line, nil
 	}
-	limit, name := maxLineCmd, "cmd.exe"
+	limit, name := maxLineCmd-cmdPrefix, "cmd.exe"
 	if sh.Resolved() == ShellPowerShell {
 		limit, name = maxLinePowerShell, "powershell.exe"
 	}
