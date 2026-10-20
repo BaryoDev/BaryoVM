@@ -104,7 +104,9 @@ the VM. Put `sudo -n` in the remote command when you need root; there is no
 it in `fleet.json` (`--os linux|windows` skips the connection). Entries from before
 this existed are read as Linux. On a Windows VM (OpenSSH Server, administrator
 account) only `vm exec` works so far: the words after `--` run as one PowerShell
-command. Every other command stops with a message naming it and the VM.
+command (the exit code, and errors as plain text, come back under either OpenSSH
+default shell; `vm add` records which one in `fleet.json` as `shell`, so re-add a
+VM if you change its default shell). Every other command stops with a message naming it and the VM.
 
 ## Hardening, and seeing what hits the box
 
