@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -27,8 +28,23 @@ type localHost struct {
 
 func (h *localHost) Run(cmd string) (string, error) { return h.RunStdin(cmd, nil) }
 
+// hostJail is the only directory tree the fake host may touch. A command naming an absolute path
+// outside it is refused, so a broken guard in the code under test cannot reach the checkout or
+// anything else on the machine running the tests.
+var hostJail string
+
+var absPath = regexp.MustCompile(`(^|[\s'"])(/[A-Za-z0-9][^\s'"\\]*)`)
+
 func (h *localHost) RunStdin(cmd string, in io.Reader) (string, error) {
 	h.seen = append(h.seen, cmd)
+	if hostJail == "" {
+		return "", errors.New("test host has no jail")
+	}
+	for _, m := range absPath.FindAllStringSubmatch(cmd, -1) {
+		if p := m[2]; p != "/dev/null" && p != hostJail && !strings.HasPrefix(p, hostJail+"/") {
+			return "", fmt.Errorf("test host refused to touch %s outside its jail %s", p, hostJail)
+		}
+	}
 	if h.failTar && strings.Contains(cmd, "tar -x") {
 		if in != nil {
 			_, _ = io.Copy(io.Discard, in)
@@ -180,7 +196,7 @@ func TestWriteTarSkipsExcludesAndKeepsModes(t *testing.T) {
 	write(t, filepath.Join(src, "deep", "bin", "y"), "y", 0o644)
 
 	var buf bytes.Buffer
-	keep, err := writeTar(&buf, src, []string{"node_modules", "bin"})
+	keep, err := writeTar(&buf, src, mustMatcher(t, "", "node_modules", "bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +264,8 @@ func tarManifest(t *testing.T) (*Manifest, string, string) {
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	hostJail = filepath.Dir(remote)
+	t.Cleanup(func() { hostJail = "" })
 	return &Manifest{LocalRoot: local, RemoteRoot: remote, Sync: []string{"out/"}}, local, remote
 }
 
@@ -391,7 +409,7 @@ func TestTarSyncRefusesToPruneTheFilesystemRoot(t *testing.T) {
 // A host listing that names something outside the release dir must never turn into a delete.
 func TestTarSyncRefusesAHostListingThatEscapes(t *testing.T) {
 	skipWindows(t)
-	for _, bad := range []string{"./../victim\x00", "/etc/passwd\x00", "./a/../../victim\x00", "../victim\x00"} {
+	for _, bad := range []string{"f\x00./../victim\x00", "f\x00/etc/passwd\x00", "d\x00./a/../../victim\x00", "f\x00../victim\x00", "x\x00./a\x00", "f\x00./a\x00f\x00"} {
 		m, local, remote := tarManifest(t)
 		victim := filepath.Join(filepath.Dir(remote), "victim")
 		write(t, victim, "v", 0o644)
@@ -440,30 +458,63 @@ func TestTarSyncQuotesRemotePathsAndHonoursSudo(t *testing.T) {
 	write(t, filepath.Join(local, "out", "a.txt"), "a", 0o644)
 	remote := "/srv/my site's root"
 	m := &Manifest{LocalRoot: local, RemoteRoot: remote, Sync: []string{"out/"}, Sudo: true}
-	rec := &recorder{}
+	rec := &recorder{list: "f\x00./stale.txt\x00"}
 	if err := m.TarSync(rec, "out/"); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.cmds) == 0 {
-		t.Fatal("nothing ran")
-	}
+	sawRemove := false
 	for _, c := range rec.cmds {
 		if !strings.HasPrefix(c, "sudo -n ") {
 			t.Errorf("sudo release ran a command without root: %s", c)
 		}
-		if strings.Contains(c, "my site") && strings.Contains(c, "my site's root") {
-			t.Errorf("remote path is not quoted: %s", c)
+		sawRemove = sawRemove || strings.Contains(c, "rm -rf --")
+	}
+	if !sawRemove {
+		t.Errorf("the remove command never ran, so its sudo is unchecked: %v", rec.cmds)
+	}
+}
+
+func TestTarSyncQuotesTheDestination(t *testing.T) {
+	skipWindows(t)
+	local := t.TempDir()
+	write(t, filepath.Join(local, "out", "a.txt"), "a", 0o644)
+	m := &Manifest{LocalRoot: local, RemoteRoot: "/srv/my site's root", Sync: []string{"out/"}}
+	rec := &recorder{list: "f\x00./stale.txt\x00"}
+	if err := m.TarSync(rec, "out/"); err != nil {
+		t.Fatal(err)
+	}
+	want := `'/srv/my site'\''s root'`
+	if len(rec.cmds) != 3 {
+		t.Fatalf("want list, extract, remove; got %v", rec.cmds)
+	}
+	for _, c := range rec.cmds {
+		if !strings.Contains(c, want) {
+			t.Errorf("destination is not quoted as %s in: %s", want, c)
 		}
 	}
 }
 
-type recorder struct{ cmds []string }
+type recorder struct {
+	cmds   []string
+	stdins []string
+	list   string
+}
 
-func (r *recorder) Run(cmd string) (string, error) { r.cmds = append(r.cmds, cmd); return "", nil }
+func (r *recorder) Run(cmd string) (string, error) {
+	r.cmds = append(r.cmds, cmd)
+	r.stdins = append(r.stdins, "")
+	return r.list, nil
+}
+
 func (r *recorder) RunStdin(cmd string, in io.Reader) (string, error) {
 	r.cmds = append(r.cmds, cmd)
+	var b []byte
 	if in != nil {
-		_, _ = io.Copy(io.Discard, in)
+		b, _ = io.ReadAll(in)
 	}
+	if strings.Contains(cmd, "tar -x") {
+		b = nil
+	}
+	r.stdins = append(r.stdins, string(b))
 	return "", nil
 }

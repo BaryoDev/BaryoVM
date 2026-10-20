@@ -120,6 +120,8 @@ type StdinRunner interface {
 	RunStdin(cmd string, stdin io.Reader) (string, error)
 }
 
+var _ StdinRunner = (*Client)(nil)
+
 // RunStdin runs a command with stdin read from in, and returns its stdout. The reader is copied
 // as the command consumes it. A non-zero exit is an error carrying stderr, as in Run.
 func (c *Client) RunStdin(cmd string, in io.Reader) (string, error) {
