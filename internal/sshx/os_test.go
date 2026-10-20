@@ -69,7 +69,7 @@ func decodeEncoded(t *testing.T, line string) string {
 	if i < 0 || j < i {
 		t.Fatalf("no script literal in payload: %q", payload)
 	}
-	lit := strings.NewReplacer("''", "'", "\u2018\u2018", "\u2018", "\u2019\u2019", "\u2019", "\u201a\u201a", "\u201a", "\u201b\u201b", "\u201b").Replace(payload[i+len(open):j])
+	lit := strings.NewReplacer("''", "'", "\u2018\u2018", "\u2018", "\u2019\u2019", "\u2019", "\u201a\u201a", "\u201a", "\u201b\u201b", "\u201b").Replace(payload[i+len(open) : j])
 	return strings.TrimSuffix(lit, "\n$global:bvmOk=$?;$global:bvmCode=$LASTEXITCODE")
 }
 
