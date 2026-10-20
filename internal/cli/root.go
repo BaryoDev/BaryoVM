@@ -30,6 +30,7 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			lastRun = &ranCommand{cmd: cmd, args: args}
 			ui.SetJSON(outputFormat == "json")
 			// Only apply the flag when it was actually given, so it overrides the environment
 			// rather than a default false switching strict mode off for a CI job that set it.
@@ -66,7 +67,7 @@ func Execute() {
 		}
 	}()
 
-	if err := newRoot().Execute(); err != nil {
+	if err := runRoot(newRoot()); err != nil {
 		code, silent := exitCodeOf(err)
 		if !silent {
 			ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
