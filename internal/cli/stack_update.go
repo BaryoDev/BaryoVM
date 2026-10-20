@@ -64,6 +64,9 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
 	}
+	if err := requireLinux(vm, action); err != nil {
+		return err
+	}
 
 	if len(svcs) == 0 {
 		svcs = st.UpdateServices

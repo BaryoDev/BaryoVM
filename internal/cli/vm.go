@@ -27,12 +27,20 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMAddCmd() *cobra.Command {
-	var host, user, key string
+	var host, user, key, osName, shellName string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Register an existing VM by host + SSH key",
-		Args:  cobra.ExactArgs(1),
+		Long: strings.TrimSpace(`
+Register an existing VM and record whether it runs Linux or Windows. The OS
+is detected once, over SSH, when the VM is added; pass --os to skip the
+connection. If the host cannot be reached it is saved with no OS (read as
+linux) and a warning; a host key mismatch still fails. With --os windows the SSH
+shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
+host's default shell is powershell.exe.
+`),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			store, err := fleet.Load()
@@ -40,11 +48,57 @@ func newVMAddCmd() *cobra.Command {
 				return err
 			}
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
+			var unreached bool
+			var detectErr error
+			manualOS, manualShell, err := resolveManualHost(osName, shellName)
+			if err != nil {
+				return err
+			}
+			if manualOS != "" {
+				vm.OS, vm.Shell = manualOS, manualShell
+			} else {
+				err = ui.Step(fmt.Sprintf("detecting the OS of %s", host), func() error {
+					c, err := sshx.Dial(vm.Target())
+					if err != nil {
+						if sshx.IsUnreachable(err) {
+							unreached = true
+							return nil
+						}
+						return err
+					}
+					defer c.Close()
+					if vm.OS, err = sshx.DetectOS(c); err != nil {
+						vm.OS, detectErr = "", err
+						return nil
+					}
+					if vm.OS != sshx.Windows {
+						return nil
+					}
+					vm.Shell, err = sshx.DetectShell(c)
+					return err
+				})
+				if err != nil {
+					ui.Emit(ui.Result{OK: false, Action: "vm add", Error: err.Error()})
+					return err
+				}
+			}
 			store.Upsert(vm)
 			if err := store.Save(); err != nil {
 				return err
 			}
-			ui.Emit(ui.Result{OK: true, Action: "vm add", Message: fmt.Sprintf("registered %s (%s@%s)", name, user, host), Data: vm})
+			msg := fmt.Sprintf("registered %s (%s@%s, %s)", name, user, host, vm.HostOS())
+			if unreached || detectErr != nil {
+				note := fmt.Sprintf("could not reach %s to detect its OS, recorded it as linux. Run vm add again when it is up, or pass --os windows", host)
+				if detectErr != nil {
+					note = fmt.Sprintf("connected to %s but could not detect its OS (%v), recorded it as linux. Run vm add again or pass --os windows", host, detectErr)
+				}
+				if ui.JSON() {
+					msg += ". " + note
+				} else {
+					ui.Warnf("%s", note)
+				}
+			}
+			ui.Emit(ui.Result{OK: true, Action: "vm add", Message: msg, Data: vm})
 			return nil
 		},
 	}
@@ -52,6 +106,8 @@ func newVMAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&user, "user", "ubuntu", "SSH user")
 	cmd.Flags().StringVar(&key, "key", "", "path to the private SSH key (required)")
 	cmd.Flags().IntVar(&port, "port", 22, "SSH port")
+	cmd.Flags().StringVar(&osName, "os", "", "host OS, linux or windows (default: detect over SSH)")
+	cmd.Flags().StringVar(&shellName, "shell", "", "SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)")
 	_ = cmd.MarkFlagRequired("host")
 	_ = cmd.MarkFlagRequired("key")
 	return cmd
@@ -66,8 +122,14 @@ func newVMListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// An entry written before the OS was recorded reads as linux, here as everywhere.
+			vms := make([]fleet.VM, len(store.VMs))
+			for i, vm := range store.VMs {
+				vm.OS = vm.HostOS()
+				vms[i] = vm
+			}
 			if ui.JSON() {
-				ui.Emit(ui.Result{OK: true, Action: "vm list", Data: store.VMs})
+				ui.Emit(ui.Result{OK: true, Action: "vm list", Data: vms})
 				return nil
 			}
 			if len(store.VMs) == 0 {
@@ -75,8 +137,8 @@ func newVMListCmd() *cobra.Command {
 				return nil
 			}
 			ui.Title(fmt.Sprintf("Fleet (%d)", len(store.VMs)))
-			for _, vm := range store.VMs {
-				fmt.Printf("%s  %s\n", ui.AccentStyle.Render(vm.Name), ui.DimStyle.Render(fmt.Sprintf("%s@%s [%s]", vm.User, vm.Host, vm.Provider)))
+			for _, vm := range vms {
+				fmt.Printf("%s  %s\n", ui.AccentStyle.Render(vm.Name), ui.DimStyle.Render(fmt.Sprintf("%s@%s [%s, %s]", vm.User, vm.Host, vm.Provider, vm.OS)))
 			}
 			return nil
 		},
@@ -115,6 +177,9 @@ func newVMPingCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := requireLinux(&vm, "vm ping"); err != nil {
+				return err
+			}
 			var uname, docker string
 			err = ui.Step(fmt.Sprintf("connecting to %s@%s", vm.User, vm.Host), func() error {
 				c, err := sshx.Dial(vm.Target())
@@ -149,6 +214,9 @@ func newVMBootstrapCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, err := requireVM(args[0])
 			if err != nil {
+				return err
+			}
+			if err := requireLinux(&vm, "vm bootstrap"); err != nil {
 				return err
 			}
 			var rep bootstrap.Report

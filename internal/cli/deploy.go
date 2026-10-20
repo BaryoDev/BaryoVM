@@ -28,6 +28,9 @@ func newDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := requireLinux(&vm, "deploy"); err != nil {
+				return err
+			}
 			env, err := parseEnv(envs)
 			if err != nil {
 				return err

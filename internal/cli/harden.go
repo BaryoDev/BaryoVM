@@ -30,7 +30,7 @@ func newVMHardenCmd() *cobra.Command {
 			"an open session survives a mistake.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			vm, c, err := dialVM(args[0])
+			vm, c, err := dialVM(args[0], "vm harden")
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func newVMThreatsCmd() *cobra.Command {
 			"The successful logins are the part worth reading. The rest is volume.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			vm, c, err := dialVM(args[0])
+			vm, c, err := dialVM(args[0], "vm threats")
 			if err != nil {
 				return err
 			}
@@ -140,9 +140,12 @@ func newVMThreatsCmd() *cobra.Command {
 
 // dialVM is requireVM plus the connection, which both commands in this file need
 // and neither should re-implement.
-func dialVM(name string) (fleet.VM, *sshx.Client, error) {
+func dialVM(name, command string) (fleet.VM, *sshx.Client, error) {
 	vm, err := requireVM(name)
 	if err != nil {
+		return fleet.VM{}, nil, err
+	}
+	if err := requireLinux(&vm, command); err != nil {
 		return fleet.VM{}, nil, err
 	}
 	c, err := sshx.Dial(vm.Target())
