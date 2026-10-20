@@ -25,11 +25,15 @@
 package hostkeys
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -203,6 +207,124 @@ func PlainAlgorithms() []string {
 		}
 	}
 	return out
+}
+
+// Algorithms returns the host key algorithms of the keys recorded for a host, for
+// ssh.ClientConfig.HostKeyAlgorithms. Without it the server offers whichever key type the client
+// prefers, which may not be the one recorded, and a recorded ED25519 key then looks like a changed
+// host key when the server offers ECDSA.
+//
+// The recorded types come first and the rest of the supported ones follow, so the list only
+// reorders preference. A server holding the recorded type offers it. A server without it offers
+// another type, and Callback reports that as a changed key instead of the handshake failing with
+// "no common algorithm". Callback still checks the key itself.
+//
+// BaryoVM's own file wins when it has the host, the same order Callback checks in; the user's file
+// is used only when ours has nothing. A host with no recorded key gets PlainAlgorithms, so a fresh
+// VM can still be learned. Certificate types are never offered: Callback refuses certificates.
+func (s *Store) Algorithms(hostname string) []string {
+	for _, path := range []string{s.path, s.extraPath} {
+		stored := algorithmsIn(path, hostname)
+		if len(stored) == 0 {
+			continue
+		}
+		supported := PlainAlgorithms()
+		var algs []string
+		seen := map[string]bool{}
+		for _, a := range stored {
+			if slices.Contains(supported, a) && !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+		if len(algs) == 0 {
+			return supported // only types Go cannot check as a host key; Callback will report it
+		}
+		for _, a := range supported {
+			if !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+		return algs
+	}
+	return PlainAlgorithms()
+}
+
+// algorithmsIn reads one known_hosts file. Lines it cannot parse, and @revoked and @cert-authority
+// entries (which are not host keys to offer), are skipped. A missing file has no algorithms.
+func algorithmsIn(path, hostname string) []string {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	want := knownhosts.Normalize(hostname)
+	var algs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		marker, hosts, key, _, _, err := ssh.ParseKnownHosts([]byte(line))
+		if err != nil || marker != "" || !hostMatches(hosts, want) {
+			continue
+		}
+		for _, a := range keyAlgorithms(key) {
+			if !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+	}
+	return algs
+}
+
+// hostMatches reports whether any host field of a known_hosts line is the wanted, normalized name.
+// A hashed field (|1|salt|hash) cannot be compared as text, so it is re-hashed with its own salt.
+func hostMatches(hosts []string, want string) bool {
+	for _, h := range hosts {
+		if strings.HasPrefix(h, "|1|") {
+			if hashedMatches(h, want) {
+				return true
+			}
+			continue
+		}
+		if h == want || knownhosts.Normalize(h) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hashedMatches(field, want string) bool {
+	parts := strings.Split(field, "|")
+	if len(parts) != 4 {
+		return false
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	sum, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha1.New, salt)
+	mac.Write([]byte(want))
+	return hmac.Equal(mac.Sum(nil), sum)
+}
+
+// keyAlgorithms maps a stored key to the signature algorithms a server may use for it. An RSA key
+// can be proven with any of three, newest first; every other type has one.
+func keyAlgorithms(key ssh.PublicKey) []string {
+	if key.Type() == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	return []string{key.Type()}
 }
 
 // check runs one known_hosts file's callback. A missing file is "not found", not an error: a first
