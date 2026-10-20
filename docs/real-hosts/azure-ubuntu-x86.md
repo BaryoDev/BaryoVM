@@ -87,7 +87,7 @@ The ping after harden opens a new SSH connection, so key login still works with 
 
 ### Health
 
-`vm health` does not exist yet (issue #41). It prints the `vm` help and exits 0, which is its own problem (draft issue 1). `vm threats` was used as the closest check:
+`vm health` does not exist yet (issue #41). It prints the `vm` help and exits 0, which is its own problem (issue #120). `vm threats` was used as the closest check:
 
 ```
 $ baryovm vm threats azure-x86
@@ -165,7 +165,7 @@ docker exec 'bvm110-db' pg_dump -U 'postgres' -Fc 'bvm110' > "$BK/db-$ts.dump"
 [exit 1]
 ```
 
-Nothing exists on a first release, so the backup cannot work (draft issue 2). Workaround, once:
+Nothing exists on a first release, so the backup cannot work (issue #121). Workaround, once:
 
 ```
 $ baryovm stack release bvm110-ctr --no-backup
@@ -190,7 +190,7 @@ No 502 or name collision on the repeated releases (the #57 case). `stack backups
 
 ## 6. Verify
 
-There is no `stack verify` command. Typing it prints the `stack` help and exits 0. Verification is part of `stack release` and runs the manifest's `verify` commands on the VM. Success prints the same two lines as a release with no plan (draft issue 3), so the failure path was used to prove it runs. The check was pointed at a string the site does not serve:
+There is no `stack verify` command. Typing it prints the `stack` help and exits 0. Verification is part of `stack release` and runs the manifest's `verify` commands on the VM. Success prints the same two lines as a release with no plan (issue #122), so the failure path was used to prove it runs. The check was pointed at a string the site does not serve:
 
 ```
 $ baryovm stack release bvm110-ctr --no-backup
@@ -260,7 +260,7 @@ $ baryovm vm remove azure-x86
 - Login user is `azureuser`, not `opc`. `vm add` needs `--user azureuser`.
 - Ubuntu takes the `apt-get` path in harden. It worked first time. sshd is 9.6, so `PerSourcePenalties` is skipped and harden says so.
 - Bootstrap installs Docker only. nginx for a static site is a manual step (issue #18).
-- `vm health` and `stack verify` are not commands, and an unknown subcommand exits 0 (draft issue 1).
-- The first release of a stack that has a database fails on the pre-release backup (draft issue 2).
-- A passing release does not say whether verify ran (draft issue 3).
+- `vm health` and `stack verify` are not commands, and an unknown subcommand exits 0 (issue #120).
+- The first release of a stack that has a database fails on the pre-release backup (issue #121).
+- A passing release does not say whether verify ran (issue #122).
 - Nothing in the pass needed changes for x86_64 versus arm64.
