@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -36,6 +37,7 @@ type fakeRemote struct {
 	calls   []call
 	probe   string
 	inputEr error
+	runEr   func(cmd string) error
 	closed  bool
 }
 
@@ -43,6 +45,9 @@ func (f *fakeRemote) Run(cmd string) (string, error) {
 	f.calls = append(f.calls, call{kind: "run", cmd: cmd})
 	if strings.Contains(cmd, `echo "arch=`) {
 		return f.probe, nil
+	}
+	if f.runEr != nil {
+		return "", f.runEr(cmd)
 	}
 	return "", nil
 }
@@ -148,13 +153,44 @@ func TestNoScriptEnablesXtrace(t *testing.T) {
 
 func TestInstallChecksDigestBeforeTar(t *testing.T) {
 	s := BuildInstall(validOpts(t), "x64", testDigest)
-	sum := strings.Index(s, "sha256sum -c")
+	check := "printf '%s  %s\\n' " + sshx.Quote(testDigest) + ` "$tmp" | sha256sum -c - >/dev/null`
+	ci := strings.Index(s, check)
 	tar := strings.Index(s, "tar -xzf")
-	if sum < 0 || tar < 0 || sum > tar {
-		t.Fatalf("digest check must come before tar (sha256sum at %d, tar at %d):\n%s", sum, tar, s)
+	if ci < 0 || tar < 0 || ci > tar {
+		t.Fatalf("exact digest check must come before tar (check at %d, tar at %d):\n%s", ci, tar, s)
+	}
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, "sha256sum") && (strings.Contains(l, "||") || strings.Contains(l, "; true")) {
+			t.Errorf("the digest check must not be allowed to fail: %s", l)
+		}
 	}
 	if !strings.Contains(s, "set -eu") {
 		t.Error("a failed digest check must stop the script")
+	}
+}
+
+func TestInstallTimesOutCurlAndLabelsSELinuxAndMarksCompletion(t *testing.T) {
+	s := BuildInstall(validOpts(t), "x64", testDigest)
+	if !strings.Contains(s, "curl -fsSL --connect-timeout 15 --max-time 600 --retry 2") {
+		t.Errorf("curl has no timeouts:\n%s", s)
+	}
+	if strings.Index(s, "restorecon") < strings.Index(s, "tar -xzf") || !strings.Contains(s, "getenforce") {
+		t.Errorf("restorecon must follow tar and be skipped without getenforce:\n%s", s)
+	}
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "touch") || !strings.HasSuffix(last, "/.baryovm-installed") {
+		t.Errorf("the marker must be the last step, got %q", last)
+	}
+	if strings.Index(s, "installdependencies.sh") > strings.Index(s, ".baryovm-installed") {
+		t.Error("the marker must come after installdependencies.sh")
+	}
+}
+
+func TestProbeTrustsTheMarkerNotConfigSh(t *testing.T) {
+	p := BuildProbe(validOpts(t))
+	if !strings.Contains(p, ".baryovm-installed") || strings.Contains(p, "config.sh") {
+		t.Errorf("binary=1 must depend on the marker only:\n%s", p)
 	}
 }
 
@@ -162,18 +198,19 @@ func TestServiceScriptRestoreconBeforeStartAndCarriesLimits(t *testing.T) {
 	o := validOpts(t)
 	s := BuildService(o)
 	rc := strings.Index(s, "restorecon")
+	dr := strings.Index(s, "systemctl daemon-reload")
 	st := strings.Index(s, "systemctl restart")
-	if rc < 0 || st < 0 || rc > st {
-		t.Fatalf("restorecon must run before the unit starts:\n%s", s)
+	if rc < 0 || dr < 0 || st < 0 || rc > st || dr > st {
+		t.Fatalf("restorecon and daemon-reload must run before the restart:\n%s", s)
 	}
 	if !strings.Contains(s, "getenforce") {
 		t.Error("restorecon must be skipped when getenforce is absent")
 	}
-	if !strings.Contains(s, sshx.Quote("3G")) || !strings.Contains(s, sshx.Quote("150%")) {
-		t.Errorf("drop-in does not carry the limits:\n%s", s)
+	if !strings.Contains(s, "\nMemoryMax=3G\nCPUQuota=150%\n") {
+		t.Errorf("drop-in does not carry the exact limits:\n%s", s)
 	}
-	if !strings.Contains(s, "MemoryMax=") || !strings.Contains(s, "CPUQuota=") {
-		t.Errorf("drop-in is missing MemoryMax or CPUQuota:\n%s", s)
+	if !strings.Contains(s, `systemctl is-active --quiet "$unit" ||`) || !strings.Contains(s, "exit 1") {
+		t.Errorf("the active check must fail the script:\n%s", s)
 	}
 	want := "cd " + sshx.Quote(o.Dir()) + " && sudo -n ./svc.sh install github-runner"
 	if !strings.Contains(s, want) {
@@ -182,8 +219,21 @@ func TestServiceScriptRestoreconBeforeStartAndCarriesLimits(t *testing.T) {
 	if !strings.Contains(s, "cat "+sshx.Quote(o.Dir())+"/.service") {
 		t.Error("the unit name must be read from .service")
 	}
-	if strings.Index(s, "daemon-reload") > st {
-		t.Error("daemon-reload must come before the restart")
+}
+
+func TestUnitNameFromServiceFileIsValidatedBeforeRootUse(t *testing.T) {
+	o := validOpts(t)
+	cases := []struct{ name, script, firstUse string }{
+		{"service", BuildService(o), `mkdir -p "$dropin"`},
+		{"start", BuildStart(o), "systemctl start"},
+		{"stop", BuildRemoveStop(o), "./svc.sh stop"},
+	}
+	for _, c := range cases {
+		g := strings.Index(c.script, `*[!A-Za-z0-9_.@-]*) echo`)
+		u := strings.Index(c.script, c.firstUse)
+		if g < 0 || u < 0 || g > u {
+			t.Errorf("%s: the unit guard must come before %q (guard at %d, use at %d):\n%s", c.name, c.firstUse, g, u, c.script)
+		}
 	}
 }
 
@@ -241,6 +291,9 @@ func TestValidationRefusesInjection(t *testing.T) {
 		{VM: "w", Repo: "a/b", CPUQuota: "200"},
 		{VM: "w", Repo: "../b"},
 		{VM: "w", Repo: "a/b/c"},
+		{VM: "w", Repo: "a/b", Name: "-rf"},
+		{VM: "w", Repo: "a/b", Name: ".hidden"},
+		{VM: "w", Repo: "a/b", Labels: []string{"-x"}},
 	} {
 		if err := o.Validate(); err == nil {
 			t.Errorf("%+v was accepted", o)
@@ -256,7 +309,7 @@ func TestValidationDefaults(t *testing.T) {
 	if o.Name != "web-app" || o.MemoryMax != "4G" || o.CPUQuota != "200%" {
 		t.Errorf("defaults wrong: %+v", o)
 	}
-	if o.Dir() != "/opt/github-runner/acme-app" {
+	if o.Dir() != "/opt/github-runner/acme__app" {
 		t.Errorf("dir = %s", o.Dir())
 	}
 }
@@ -267,7 +320,7 @@ func TestScriptsQuoteValuesEvenIfValidationWereBypassed(t *testing.T) {
 	if !strings.Contains(BuildInstall(o, "x64", testDigest), d) {
 		t.Error("install: dir not quoted")
 	}
-	if !strings.Contains(BuildService(o), d) || !strings.Contains(BuildService(o), sshx.Quote(o.MemoryMax)) {
+	if !strings.Contains(BuildService(o), d) || !strings.Contains(BuildService(o), sshx.Quote("[Service]\nMemoryMax=4G'\nCPUQuota=1%';id\n")) {
 		t.Error("service: values not quoted")
 	}
 	if !strings.Contains(BuildInstall(o, "x64", testDigest), sshx.Quote("https://github.com/actions/runner/releases/download/v1.2.3';id/actions-runner-linux-x64-1.2.3';id.tar.gz")) {
@@ -275,6 +328,13 @@ func TestScriptsQuoteValuesEvenIfValidationWereBypassed(t *testing.T) {
 	}
 	if !strings.Contains(BuildRemoveDelete(o), d) {
 		t.Error("delete: dir not quoted")
+	}
+	cfg := BuildConfig(o, "x64")
+	if !strings.Contains(cfg, `--name '\''n$(id)'\''`) {
+		t.Errorf("config: name not quoted inside the sh -c script: %s", cfg)
+	}
+	if !strings.Contains(BuildProbe(o), d) {
+		t.Error("probe: dir not quoted")
 	}
 }
 
@@ -526,5 +586,104 @@ func TestRedact(t *testing.T) {
 	}
 	if got := Redact("keep this", ""); got != "keep this" {
 		t.Errorf("empty secret changed the text: %q", got)
+	}
+}
+
+func TestUnitGuardRejectsBadNamesInAShell(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	for unit, ok := range map[string]bool{"actions.runner.a-b.web.service": true, "x@y.service": true, "": false, "a b": false, "a;rm": false, "$(id)": false, "a/b": false} {
+		cmd := exec.Command("sh", "-c", "unit="+sshx.Quote(unit)+"\n"+unitGuard)
+		err := cmd.Run()
+		if (err == nil) != ok {
+			t.Errorf("unit %q: accepted=%v, want %v", unit, err == nil, ok)
+		}
+	}
+}
+
+func TestInstallIsRepairedWhenOnlyTheMarkerIsMissing(t *testing.T) {
+	// The probe reports binary=0 (no marker) although config.sh is there: a rerun must install again.
+	f := &fakeRemote{probe: "arch=x86_64\nbinary=0\nconfigured=0\nunit=\nactive=0\n"}
+	dials := 0
+	rep, err := Install(opts(), &fakeGH{private: true, release: goodRelease()}, dialer(f, &dials))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Installed || !f.ran("installdependencies.sh") {
+		t.Errorf("an unmarked install was not redone: %+v", rep)
+	}
+}
+
+func TestRemoveFallsBackToLocalWhenTokenRemoveFails(t *testing.T) {
+	f := &fakeRemote{
+		probe:   "arch=x86_64\nbinary=1\nconfigured=1\nunit=u.service\nactive=1\n",
+		inputEr: fmt.Errorf("remote: exit status 1: bad token %s", secretToken),
+	}
+	dials := 0
+	rep, err := Remove(opts(), &fakeGH{private: true}, dialer(f, &dials))
+	if err != nil {
+		t.Fatalf("a failed unregister must not strand the runner: %v", err)
+	}
+	if !rep.Removed || !rep.LocalOnly {
+		t.Errorf("report = %+v", rep)
+	}
+	if !f.ran("remove --local") || !f.ran("rm -rf '/opt") {
+		t.Error("expected remove --local and the directory delete")
+	}
+}
+
+func TestRemoveRedactsTokenFromStderr(t *testing.T) {
+	// The unregister failure is swallowed, but a failure after the token was fetched must still
+	// be scrubbed: make the local fallback echo the token.
+	f := &fakeRemote{
+		probe:   "arch=x86_64\nbinary=1\nconfigured=1\nunit=u.service\nactive=1\n",
+		inputEr: errors.New("boom"),
+		runEr: func(cmd string) error {
+			if strings.Contains(cmd, "remove --local") {
+				return fmt.Errorf("exit 1: token was %s", secretToken)
+			}
+			return nil
+		},
+	}
+	dials := 0
+	rep, err := Remove(opts(), &fakeGH{private: true}, dialer(f, &dials))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	b, _ := json.Marshal(map[string]any{"data": rep, "error": err.Error()})
+	if strings.Contains(err.Error(), secretToken) || strings.Contains(string(b), secretToken) {
+		t.Errorf("token leaked: %v / %s", err, b)
+	}
+}
+
+func TestExplicitLimitsAreAppliedToAReadyRunner(t *testing.T) {
+	ready := "arch=x86_64\nbinary=1\nconfigured=1\nunit=u.service\nactive=1\n"
+	o := opts()
+	o.ApplyLimits = true
+	f := &fakeRemote{probe: ready}
+	dials := 0
+	rep, err := Install(o, &fakeGH{private: true}, dialer(f, &dials))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.AlreadyReady || !rep.LimitsApplied || !f.ran("MemoryMax=3G") {
+		t.Errorf("report = %+v", rep)
+	}
+	if f.ran("curl") || f.ran("config.sh") {
+		t.Error("only the drop-in may change")
+	}
+
+	f = &fakeRemote{probe: ready}
+	rep, err = Install(opts(), &fakeGH{private: true}, dialer(f, &dials))
+	if err != nil || rep.LimitsApplied || len(f.calls) != 1 {
+		t.Errorf("without the flag nothing may change: %+v %v calls=%d", rep, err, len(f.calls))
+	}
+
+	o2 := o
+	f = &fakeRemote{probe: "arch=x86_64\nbinary=1\nconfigured=1\nunit=u.service\nactive=0\n"}
+	rep, err = Install(o2, &fakeGH{private: true}, dialer(f, &dials))
+	if err != nil || !rep.LimitsApplied || !f.ran("MemoryMax=3G") {
+		t.Errorf("a stopped runner with explicit limits: %+v %v", rep, err)
 	}
 }

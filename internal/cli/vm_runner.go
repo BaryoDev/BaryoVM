@@ -6,10 +6,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/ghrunner"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -42,6 +45,7 @@ directly. Containers a job starts through Docker run under dockerd and are not b
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.VM = args[0]
 			o.Labels = splitLabels(labels)
+			o.ApplyLimits = cmd.Flags().Changed("memory-max") || cmd.Flags().Changed("cpu-quota")
 			return runRunner("vm runner", o, false)
 		},
 	}
@@ -154,12 +158,21 @@ func ghReleaseArgs(version string) []string {
 	return []string{"api", "repos/actions/runner/releases/tags/v" + version}
 }
 
+const ghTimeout = 60 * time.Second
+
+var errGHTimeout = errors.New("gh timed out")
+
 func runGH(args ...string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), ghTimeout)
+	defer cancel()
 	var out, errb bytes.Buffer
-	c := exec.Command("gh", args...)
+	c := exec.CommandContext(ctx, "gh", args...)
 	c.Stdout = &out
 	c.Stderr = &errb
 	if err := c.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", "", errGHTimeout
+		}
 		if _, lookErr := exec.LookPath("gh"); lookErr != nil {
 			return "", "", fmt.Errorf("the GitHub CLI is not installed: install gh and run `gh auth login`")
 		}
@@ -173,6 +186,8 @@ func runGH(args ...string) (string, string, error) {
 func ghError(what, repo, stderr string, err error) error {
 	s := strings.TrimSpace(stderr)
 	switch {
+	case errors.Is(err, errGHTimeout):
+		return fmt.Errorf("%s: gh did not answer within %s: check your network and run `gh auth status`, then retry", what, ghTimeout)
 	case strings.Contains(s, "HTTP 403") || strings.Contains(s, "Must have admin rights"):
 		return fmt.Errorf("%s: gh is not allowed to do this on %s: the token needs repo admin, run `gh auth refresh -s repo` or use an account with admin rights", what, repo)
 	case strings.Contains(s, "HTTP 404"):

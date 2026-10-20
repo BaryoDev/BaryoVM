@@ -113,7 +113,7 @@ baryovm vm runner remove oracle --repo acme/app
 `vm runner` installs a self-hosted runner for one repo on a registered VM. It needs the `gh`
 CLI logged in with admin rights on the repo, and Docker on the VM (`vm bootstrap`). It creates a
 `github-runner` user in the docker group, unpacks the runner under
-`/opt/github-runner/<owner>-<repo>`, registers it, installs it as a systemd service and checks
+`/opt/github-runner/<owner>__<repo>` (lowercase), registers it, installs it as a systemd service and checks
 that the service is active.
 
 | Flag | Default | |
@@ -127,7 +127,10 @@ that the service is active.
 
 It is safe to rerun. A configured, running runner is reported as `alreadyReady` and nothing
 changes. A stopped one is started, and one with no service gets the service installed. A rerun
-after a crash continues from the step that failed.
+after a crash continues from the step that failed. If you pass `--memory-max` or `--cpu-quota`
+explicitly, they are applied even to a runner that is otherwise ready: the drop-in is rewritten
+and the service restarted, and the result reports `limitsApplied`. Leave them out and a ready
+runner is not touched.
 
 - A repo whose visibility is not `private` is refused before BaryoVM connects to the VM, because a
   fork pull request could run its code there. That includes enterprise `internal` repos, which

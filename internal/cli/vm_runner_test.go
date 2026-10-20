@@ -53,6 +53,13 @@ func TestParseRunnerRelease(t *testing.T) {
 	}
 }
 
+func TestGHTimeoutHasClearAdvice(t *testing.T) {
+	e := ghError("fetch a registration-token", "acme/app", "", errGHTimeout)
+	if !strings.Contains(e.Error(), "did not answer within 1m0s") || !strings.Contains(e.Error(), "retry") {
+		t.Errorf("timeout error = %v", e)
+	}
+}
+
 func TestSplitLabels(t *testing.T) {
 	got := splitLabels(" docker, gpu ,,x ")
 	if !reflect.DeepEqual(got, []string{"docker", "gpu", "x"}) {

@@ -21,8 +21,8 @@ import (
 
 var (
 	repoRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	nameRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
-	labelRe   = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	nameRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+	labelRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	memoryRe  = regexp.MustCompile(`^[1-9][0-9]*[KMGT]?$`)
 	cpuRe     = regexp.MustCompile(`^[1-9][0-9]*%$`)
@@ -44,6 +44,9 @@ type Options struct {
 	Version   string // empty means the latest release
 	MemoryMax string
 	CPUQuota  string
+	// ApplyLimits is set when the user passed a limit explicitly, so a rerun on a ready runner
+	// rewrites the drop-in instead of ignoring the flag.
+	ApplyLimits bool
 }
 
 // Validate applies defaults and checks every field. Call it before anything else.
@@ -168,6 +171,7 @@ type Report struct {
 	Configured       bool   `json:"configured,omitempty"`
 	ServiceInstalled bool   `json:"serviceInstalled,omitempty"`
 	Started          bool   `json:"started,omitempty"`
+	LimitsApplied    bool   `json:"limitsApplied,omitempty"`
 	// Removed is set by Remove. LocalOnly means the GitHub entry still exists and has to be deleted
 	// by hand, because no remove token could be fetched.
 	Removed   bool `json:"removed,omitempty"`
@@ -253,14 +257,27 @@ func Install(o Options, gh GitHub, dial Dial) (rep Report, err error) {
 
 	if st.Binary && st.Configured && st.Unit != "" && st.Active {
 		rep.AlreadyReady = true
+		if o.ApplyLimits {
+			// The drop-in rewrite and restart are idempotent, and it is the only way a changed
+			// limit reaches a runner that is otherwise left alone.
+			if _, err = r.Run(BuildService(o)); err != nil {
+				return rep, err
+			}
+			rep.LimitsApplied = true
+		}
 		return rep, nil
 	}
 	if st.Binary && st.Configured && st.Unit != "" {
 		// Registered and installed, just stopped.
-		if _, err = r.Run(BuildStart(o)); err != nil {
+		cmd, applied := BuildStart(o), false
+		if o.ApplyLimits {
+			cmd, applied = BuildService(o), true
+		}
+		if _, err = r.Run(cmd); err != nil {
 			return rep, err
 		}
 		rep.Started = true
+		rep.LimitsApplied = applied
 		return rep, nil
 	}
 
@@ -354,13 +371,14 @@ func Remove(o Options, gh GitHub, dial Dial) (rep Report, err error) {
 	}
 
 	if st.Configured {
-		token, err = gh.RemoveToken(o.Repo)
-		if err == nil {
-			if _, err = r.RunInput(BuildRemoveConfig(o, false), token+"\n"); err != nil {
-				return rep, err
-			}
-		} else {
-			token, err = "", nil
+		// Any failure to unregister falls back to a local removal, so a stale or rejected token
+		// cannot leave a half-removed runner that every rerun trips over.
+		var tokErr error
+		token, tokErr = gh.RemoveToken(o.Repo)
+		if tokErr == nil {
+			_, tokErr = r.RunInput(BuildRemoveConfig(o, false), token+"\n")
+		}
+		if tokErr != nil {
 			if _, err = r.Run(BuildRemoveConfig(o, true)); err != nil {
 				return rep, err
 			}
