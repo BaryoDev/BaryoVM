@@ -2,7 +2,7 @@
 
 Hand run for issue #110, mirroring the pass from #79. Date: 2026-10-20.
 
-The host is a throwaway Azure VM ("the VM" below): Ubuntu 24.04.5 LTS, kernel 7.0.0-1017-azure, size Standard_D2als_v6, login user `azureuser`. Azure's network security group allowed 22, 80 and 443 only from the machine running the pass. It is registered as `azure-x86`.
+The host is a throwaway Azure VM ("the VM" below): Ubuntu 24.04.5 LTS, kernel 7.0.0-1017-azure, size Standard_D2als_v6, login user `azureuser`. Azure's network security group allowed 22, 80 and 443 only from the machine running the pass. The VM's own firewall (ufw) was not inspected during the pass, and the VM was deleted after it, so its state is not recorded. Port 80 answered from outside the VM (section 4), so nothing on the host blocked it. Port 443 was not exercised. It is registered as `azure-x86`.
 
 BaryoVM state was kept apart from the real fleet with `BARYOVM_HOME` pointing at an empty directory, so no other VM entry was read or written. The throwaway content (a one-line `index.html`, `traefik/whoami`, `postgres:16-alpine`) lived under `/tmp` on the local machine and was never from a real project. Long output is trimmed. Errors are whole.
 
@@ -263,4 +263,5 @@ $ baryovm vm remove azure-x86
 - `vm health` and `stack verify` are not commands, and an unknown subcommand exits 0 (issue #120).
 - The first release of a stack that has a database fails on the pre-release backup (issue #121).
 - A passing release does not say whether verify ran (issue #122).
+- The `verify it` hint after a new host key passes `<the VM>:22` as the host. `ssh-keyscan` cannot resolve that (`getaddrinfo ... not known`); it needs `-p 22` and the bare host (PR #124).
 - Nothing in the pass needed changes for x86_64 versus arm64.
