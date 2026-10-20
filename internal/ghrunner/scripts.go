@@ -84,7 +84,10 @@ func BuildInstall(o Options, arch, sha256 string) string {
 	line(`trap 'rm -f "$tmp"' EXIT`)
 	line(`curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 -o "$tmp" ` + sshx.Quote(url))
 	line(`printf '%s  %s\n' ` + sshx.Quote(sha256) + ` "$tmp" | sha256sum -c - >/dev/null`)
-	line(sudo("mkdir -p " + d))
+	// Explicit modes: sudo combines the caller's umask with its own, so mkdir under a 077 umask
+	// leaves Root 0700 and github-runner cannot reach its own directory.
+	line(sudo("install -d -m 0755 " + sshx.Quote(Root)))
+	line(sudo("install -d -m 0755 -o " + u + " -g " + u + " " + d))
 	line(sudo(`tar -xzf "$tmp" -C ` + d))
 	line(sudo("chown -R " + u + ":" + u + " " + d))
 	line("if command -v getenforce >/dev/null 2>&1; then " + sudo("restorecon -R "+d) + "; fi")

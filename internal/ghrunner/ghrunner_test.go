@@ -687,3 +687,17 @@ func TestExplicitLimitsAreAppliedToAReadyRunner(t *testing.T) {
 		t.Errorf("a stopped runner with explicit limits: %+v %v", rep, err)
 	}
 }
+
+func TestInstallSetsDirModesInsteadOfTrustingUmask(t *testing.T) {
+	o := validOpts(t)
+	s := BuildInstall(o, "x64", testDigest)
+	root := "sudo -n install -d -m 0755 " + sshx.Quote(Root)
+	dir := "sudo -n install -d -m 0755 -o " + sshx.Quote(RunnerUser) + " -g " + sshx.Quote(RunnerUser) + " " + sshx.Quote(o.Dir())
+	ri, di, ti := strings.Index(s, root), strings.Index(s, dir), strings.Index(s, "tar -xzf")
+	if ri < 0 || di < 0 || ri > di || di > ti {
+		t.Fatalf("Root then the runner dir must be created 0755 before tar (root %d, dir %d, tar %d):\n%s", ri, di, ti, s)
+	}
+	if strings.Contains(s, "mkdir -p") {
+		t.Errorf("mkdir -p under sudo takes the caller's umask, so a 077 umask locks github-runner out:\n%s", s)
+	}
+}
