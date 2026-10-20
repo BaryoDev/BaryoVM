@@ -131,30 +131,32 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		offered := ssh.FingerprintSHA256(key)
 
+		// Only plain keys are recorded and compared. knownhosts answers a certificate with an error
+		// that is neither "absent" nor "changed", which used to fall through to learning it, so any
+		// self-signed certificate replaced the recorded key.
+		if _, ok := key.(*ssh.Certificate); ok {
+			return fmt.Errorf("%s offered a host certificate (%s); BaryoVM checks plain host keys only and will not trust it", hostname, key.Type())
+		}
+
 		// Our own file first. A key we recorded is the one we mean to check against.
 		err := s.check(s.path, hostname, remote, key)
-		switch {
-		case err == nil:
+		if err == nil {
 			return nil
-		case isChanged(err):
-			stored, _ := s.storedFingerprint(s.path, hostname)
-			return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: s.path}
+		}
+		if err := s.refusal(err, s.path, hostname, offered); err != nil {
+			return err
 		}
 
 		// Not in ours. The user's own file is a better source than the network: if they have
 		// SSHed to this box by hand, that key was checked by them, not offered to us now.
 		if s.extraPath != "" {
 			err := s.check(s.extraPath, hostname, remote, key)
-			switch {
-			case err == nil:
+			if err == nil {
 				// Record it in ours too, so the trust does not depend on a file we do not own.
-				if werr := s.add(hostname, key); werr != nil {
-					return werr
-				}
-				return nil
-			case isChanged(err):
-				stored, _ := s.storedFingerprint(s.extraPath, hostname)
-				return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: s.extraPath}
+				return s.add(hostname, key)
+			}
+			if err := s.refusal(err, s.extraPath, hostname, offered); err != nil {
+				return err
 			}
 		}
 
@@ -171,6 +173,36 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		}
 		return nil
 	}
+}
+
+// refusal turns a failed check into the error to return, or nil when the host is simply absent from
+// path. Everything that is not "absent" refuses: a file that cannot be read may hold the very key that
+// would have refused this one, so learning past it fails open.
+func (s *Store) refusal(err error, path, hostname, offered string) error {
+	var re *knownhosts.RevokedError
+	switch {
+	case errors.Is(err, errNotFound):
+		return nil
+	case errors.As(err, &re):
+		return fmt.Errorf("host key %s for %s is marked @revoked in %s", offered, hostname, path)
+	case isChanged(err):
+		stored, _ := s.storedFingerprint(path, hostname)
+		return &ErrChanged{Host: hostname, Stored: stored, Offered: offered, Store: path}
+	}
+	return fmt.Errorf("check the host key for %s against %s: %w; fix or remove the bad line before connecting", hostname, path, err)
+}
+
+// PlainAlgorithms is every host key algorithm the client supports except certificates, for
+// ssh.ClientConfig.HostKeyAlgorithms. Callback refuses certificates, so offering them would make a
+// host that has both a certificate and a plain key unreachable.
+func PlainAlgorithms() []string {
+	var out []string
+	for _, a := range ssh.SupportedAlgorithms().HostKeys {
+		if !strings.Contains(a, "-cert-") {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // check runs one known_hosts file's callback. A missing file is "not found", not an error: a first

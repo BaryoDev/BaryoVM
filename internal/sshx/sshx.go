@@ -92,10 +92,11 @@ func Dial(t Target) (*Client, error) {
 		return nil, fmt.Errorf("parse key %s: %w", t.KeyPath, err)
 	}
 	cfg := &ssh.ClientConfig{
-		User:            t.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostkeys.New(home()).Strict(StrictHostKeys()).Callback(learned),
-		Timeout:         15 * time.Second,
+		User:              t.User,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback:   hostkeys.New(home()).Strict(StrictHostKeys()).Callback(learned),
+		HostKeyAlgorithms: hostkeys.PlainAlgorithms(),
+		Timeout:           15 * time.Second,
 	}
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	c, err := ssh.Dial("tcp", addr, cfg)
