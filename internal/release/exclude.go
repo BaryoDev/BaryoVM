@@ -39,6 +39,10 @@ func newMatcher(patterns []string, prefix string) (*matcher, error) {
 			return nil, fmt.Errorf("exclude %q uses a pattern feature the tar transport does not support "+
 				"(character classes, escapes, ***, filter rules); simplify it or install rsync", p)
 		}
+		if strings.HasPrefix(p, "//") {
+			return nil, fmt.Errorf("exclude %q starts with two slashes, which rsync does not treat as /%s; "+
+				"write it with one", p, strings.TrimLeft(p, "/"))
+		}
 		r := rule{}
 		if strings.HasPrefix(p, "/") {
 			r.anchored = true
@@ -92,11 +96,11 @@ func (r rule) matches(path string, isDir bool) bool {
 	case r.anchored:
 		return glob(r.pattern, path)
 	case r.fullPath:
-		if glob(r.pattern, path) {
+		if globLead(r.pattern, path) {
 			return true
 		}
 		for i := 0; i < len(path); i++ {
-			if path[i] == '/' && glob(r.pattern, path[i+1:]) {
+			if path[i] == '/' && globLead(r.pattern, path[i+1:]) {
 				return true
 			}
 		}
@@ -107,6 +111,20 @@ func (r rule) matches(path string, isDir bool) bool {
 			last = path[i+1:]
 		}
 		return glob(r.pattern, last)
+	}
+}
+
+// globLead is glob, except that a leading "**/" also matches zero directories, so "**/.env"
+// excludes a top-level .env the way rsync does.
+func globLead(p, s string) bool {
+	for {
+		if glob(p, s) {
+			return true
+		}
+		if !strings.HasPrefix(p, "**/") {
+			return false
+		}
+		p = p[3:]
 	}
 }
 

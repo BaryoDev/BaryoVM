@@ -286,12 +286,13 @@ Setuid and setgid bits are dropped.
 - A leading `/` anchors to the transfer root: `/secrets/.env` matches only the top level. With a
   `sync` entry like `"out"` (no trailing slash) rsync's paths start with `out/`, so anchor as
   `/out/secrets/.env`.
-- `*` and `?` stop at `/`, `**` crosses it. A trailing `/` matches directories only.
+- `*` and `?` stop at `/`, `**` crosses it. A leading `**/` also matches zero directories, so
+  `**/.env` excludes the top-level `.env` too. A trailing `/` matches directories only.
 - Excluded paths are not sent, are not deleted from the host, and a host directory that holds one
   is not deleted either.
 
 The tar transport supports only that subset. A pattern using character classes (`[ab]`), a
-backslash, `***` or a filter prefix (`!`, `+ `, `- `) is refused with an error before anything
+backslash, `***`, a leading `//` or a filter prefix (`!`, `+ `, `- `) is refused with an error before anything
 touches the host; simplify it or install rsync.
 
 Pruning is confined to the entry's destination directory. It is refused when that directory, or

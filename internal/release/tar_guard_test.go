@@ -32,7 +32,18 @@ func TestExcludeFollowsRsyncRules(t *testing.T) {
 		{"", "/secrets/.env", "a/secrets/.env", false, false},
 		{"", "/secrets/.env", "secrets/.env", false, true},
 		{"", "**/.env", "a/b/.env", false, true},
-		{"", "**/.env", ".env", false, false},
+		{"", "**/.env", ".env", false, true},
+		{"", "**/node_modules", "node_modules", true, true},
+		{"", "**/node_modules", "node_modules/p/i.js", false, true},
+		{"", "**/*.log", "x.log", false, true},
+		{"", "**/secrets", "secrets/.env", false, true},
+		{"", "**/build/", "build", true, true},
+		{"", "**/build/", "build", false, false},
+		{"", "**/x/**", "x/y", false, true},
+		{"", "**/*", "anything", false, true},
+		{"", "/**/y", "y", false, false},
+		{"", "/**/y", "a/y", false, true},
+		{"out", "**/.env", ".env", false, true},
 		{"", "a/**/c", "a/b/x/c", false, true},
 		{"", "*.map", "a/b/app.js.map", false, true},
 		{"", "a/*", "a/b/c", false, true},
@@ -56,7 +67,7 @@ func TestExcludeFollowsRsyncRules(t *testing.T) {
 
 func TestUnsupportedExcludeIsRefusedBeforeTheHostIsTouched(t *testing.T) {
 	skipWindows(t)
-	for _, p := range []string{"[ab].txt", `a\*b`, "***", "!x", "- x"} {
+	for _, p := range []string{"[ab].txt", `a\*b`, "***", "!x", "- x", "//build"} {
 		m, local, _ := tarManifest(t)
 		m.Exclude = []string{p}
 		write(t, filepath.Join(local, "out", "a.txt"), "a", 0o644)
@@ -112,6 +123,38 @@ func TestPruneKeepsExcludedContentAndItsDirectories(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(remote, "stale")); err == nil {
 		t.Error("fully stale directory survived")
+	}
+}
+
+func TestLeadingDoubleStarCoversTheTopLevel(t *testing.T) {
+	skipWindows(t)
+	m, local, remote := tarManifest(t)
+	m.Exclude = []string{"**/.env", "**/node_modules", "**/*.log", "**/build/"}
+	for _, f := range []string{".env", "node_modules/p.js", "x.log", "build/o", "a/.env", "ok.txt"} {
+		write(t, filepath.Join(local, "out", f), "new", 0o644)
+	}
+	for _, f := range []string{".env", "node_modules/keep.js", "x.log", "build/old", "stale.txt"} {
+		write(t, filepath.Join(remote, f), "host", 0o644)
+	}
+	if err := m.TarSync(&localHost{}, "out/"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a/.env", "node_modules/p.js", "build/o"} {
+		if _, err := os.Lstat(filepath.Join(remote, f)); err == nil {
+			t.Errorf("excluded file shipped: %s", f)
+		}
+	}
+	for _, f := range []string{".env", "node_modules/keep.js", "x.log", "build/old"} {
+		b, err := os.ReadFile(filepath.Join(remote, f))
+		if err != nil || string(b) != "host" {
+			t.Errorf("host file %s was pruned or overwritten: %q %v", f, b, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(remote, "stale.txt")); err == nil {
+		t.Error("stale file survived")
+	}
+	if _, err := os.Lstat(filepath.Join(remote, "ok.txt")); err != nil {
+		t.Errorf("ok.txt not shipped: %v", err)
 	}
 }
 
