@@ -104,6 +104,9 @@ State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written
 owner-only (`0600`). It stores hostnames, users and **SSH key paths, never key
 contents or secrets**. See [SECURITY.md](SECURITY.md).
 
+Each command also appends one line to `~/.baryovm/activity.jsonl` (what ran, on which VM, how it
+ended). Turn it off with `BARYOVM_ACTIVITY=off`. See [docs/activity-log.md](docs/activity-log.md).
+
 `stack release` syncs your source to the VM with local **`rsync`** (and **`ssh`**
 as its transport) when rsync is on your PATH. Without rsync it writes a tar
 archive with Go and streams it over the SSH session, then removes files you
