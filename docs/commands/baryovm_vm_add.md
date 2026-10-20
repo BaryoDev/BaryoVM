@@ -6,7 +6,9 @@ Register an existing VM by host + SSH key
 
 Register an existing VM and record whether it runs Linux or Windows. The OS
 is detected once, over SSH, when the VM is added; pass --os to skip the
-connection or to say it when detection cannot.
+connection or to say it when detection cannot. With --os windows the SSH
+shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
+host's default shell is powershell.exe.
 
 ```
 baryovm vm add <name> [flags]
@@ -15,12 +17,13 @@ baryovm vm add <name> [flags]
 ### Options
 
 ```
-  -h, --help          help for add
-      --host string   public IP or hostname (required)
-      --key string    path to the private SSH key (required)
-      --os string     host OS, linux or windows (default: detect over SSH)
-      --port int      SSH port (default 22)
-      --user string   SSH user (default "ubuntu")
+  -h, --help           help for add
+      --host string    public IP or hostname (required)
+      --key string     path to the private SSH key (required)
+      --os string      host OS, linux or windows (default: detect over SSH)
+      --port int       SSH port (default 22)
+      --shell string   SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)
+      --user string    SSH user (default "ubuntu")
 ```
 
 ### Options inherited from parent commands

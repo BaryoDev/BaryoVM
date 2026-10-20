@@ -100,13 +100,29 @@ the VM. Put `sudo -n` in the remote command when you need root; there is no
 `--sudo` flag. A non-zero remote exit becomes a non-zero CLI exit. Under
 `-o json` the envelope keeps `stdout`, `stderr` and `exitCode` as separate fields.
 
-`vm add` connects once to detect whether the host runs Linux or Windows and records
-it in `fleet.json` (`--os linux|windows` skips the connection). Entries from before
-this existed are read as Linux. On a Windows VM (OpenSSH Server, administrator
-account) only `vm exec` works so far: the words after `--` run as one PowerShell
-command (the exit code, and errors as plain text, come back under either OpenSSH
-default shell; `vm add` records which one in `fleet.json` as `shell`, so re-add a
-VM if you change its default shell). Every other command stops with a message naming it and the VM.
+`vm add` connects once, over SSH, to detect the host's OS and records it in `fleet.json`;
+give `--os linux|windows` and it does not connect at all. Any host with a POSIX shell
+(Linux, macOS, FreeBSD) is recorded as `linux`. If the host cannot be reached or does
+not answer, `vm add` stops and asks for `--os`. Entries from before this existed are
+read as Linux, and an `os` that is neither `linux` nor `windows` is refused by every
+command that uses it.
+
+On a Windows VM (OpenSSH Server, administrator account) only `vm exec` works so far.
+The words after `--` run as one PowerShell command. Pass the command as one quoted
+argument, so your own shell leaves its spaces, quotes and pipes alone:
+
+```sh
+baryovm vm exec win -- 'Get-ChildItem "C:\Program Files" | Select-Object -First 3'
+```
+
+The exit code, and errors as plain text, come back under either OpenSSH default shell
+(cmd or powershell). `vm add` detects which one and records it as `shell`, so re-add a
+VM if you change its default shell. With `--os windows` nothing is detected and the
+shell is recorded as `cmd`; add `--shell powershell` when the host's default is
+powershell.exe. `--shell` is only valid with `--os windows`. A script is sent encoded,
+which makes it about three times longer, so a very long one is refused before connecting
+(cmd.exe takes a command line of 8191 characters, powershell.exe 32767). Every other
+command stops with a message naming it and the VM.
 
 ## Hardening, and seeing what hits the box
 
