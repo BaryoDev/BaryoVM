@@ -84,16 +84,18 @@ func (e *ErrUnknownHost) Error() string {
 			"\n"+
 			"Check that fingerprint against the machine, then record it before this runs:\n"+
 			"\n"+
-			"  ssh-keyscan -t ecdsa,ed25519 %s >> %s\n",
-		e.Host, e.Offered, hostOnly(e.Host), e.Store)
+			"  %s >> %s\n",
+		e.Host, e.Offered, Keyscan(e.Host), e.Store)
 }
 
-// hostOnly strips the port, since ssh-keyscan takes a host and an optional -p.
-func hostOnly(hostport string) string {
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		return h
+// Keyscan is the ssh-keyscan command that fetches a host's ecdsa and ed25519 keys. ssh-keyscan
+// takes the port as -p and cannot resolve host:port.
+func Keyscan(hostport string) string {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return "ssh-keyscan -t ecdsa,ed25519 " + hostport
 	}
-	return hostport
+	return "ssh-keyscan -p " + port + " -t ecdsa,ed25519 " + host
 }
 
 // Store is a known_hosts file BaryoVM owns, plus the user's own file as a read-only second source.

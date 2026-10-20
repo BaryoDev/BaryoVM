@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -62,7 +63,7 @@ func Execute() {
 		for _, l := range learned {
 			host, fp, _ := strings.Cut(l, " ")
 			ui.Warnf("learned the host key for %s: %s", host, fp)
-			ui.Detail("verify it", "ssh-keyscan -t ecdsa,ed25519 "+host+" | ssh-keygen -lf -")
+			ui.Detail("verify it", hostkeys.Keyscan(host)+" | ssh-keygen -lf -")
 		}
 	}()
 
