@@ -103,9 +103,9 @@ func activityError(err error) string {
 }
 
 // activityName is the VM or stack the command was pointed at: the first positional argument of a
-// command whose usage is `<name>`. Flag values are never read.
+// command whose usage is `<name>` or `<vm>`. Flag values are never read.
 func activityName(run *ranCommand) string {
-	if !strings.Contains(run.cmd.Use, "<name") {
+	if !strings.Contains(run.cmd.Use, "<name") && !strings.Contains(run.cmd.Use, "<vm>") {
 		return ""
 	}
 	if run.cmd.DisableFlagParsing {

@@ -155,3 +155,18 @@ func TestUnwritableLogKeepsTheCommandsOwnResult(t *testing.T) {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 }
+
+func TestRunnerCommandsNameTheirVM(t *testing.T) {
+	home := activityHome(t)
+	if err := runLogged(t, "vm", "add", "web1", "--host", "127.0.0.1", "--key", "/k/id"); err != nil {
+		t.Fatal(err)
+	}
+	_ = runLogged(t, "vm", "runner", "remove", "web1")
+	got := logLines(t, home)
+	if len(got) != 2 {
+		t.Fatalf("want two lines, got %v", got)
+	}
+	if !strings.Contains(got[1], "\"action\":\"vm runner remove\"") || !strings.Contains(got[1], "\"vm\":\"web1\"") {
+		t.Errorf("runner remove must name its VM: %s", got[1])
+	}
+}
