@@ -9,6 +9,7 @@ package sshx
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -103,6 +104,19 @@ func Dial(t Target) (*Client, error) {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 	return &Client{c: c}, nil
+}
+
+// IsUnreachable reports whether a Dial error means no connection was made: nothing answered, the
+// address did not resolve, or it timed out. A host key refusal is not that. The host did answer, and
+// with a key that is not the one on record, so it must stay an error for the caller to act on.
+func IsUnreachable(err error) bool {
+	var changed *hostkeys.ErrChanged
+	var unknown *hostkeys.ErrUnknownHost
+	if errors.As(err, &changed) || errors.As(err, &unknown) {
+		return false
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
 }
 
 // Runner runs one command on a VM. *Client is the real one; an engine package takes this rather

@@ -35,7 +35,8 @@ func newVMAddCmd() *cobra.Command {
 		Long: strings.TrimSpace(`
 Register an existing VM and record whether it runs Linux or Windows. The OS
 is detected once, over SSH, when the VM is added; pass --os to skip the
-connection or to say it when detection cannot. With --os windows the SSH
+connection. If the host cannot be reached it is saved with no OS (read as
+linux) and a warning; a host key mismatch still fails. With --os windows the SSH
 shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
 host's default shell is powershell.exe.
 `),
@@ -47,6 +48,7 @@ host's default shell is powershell.exe.
 				return err
 			}
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
+			var unreached bool
 			manualOS, manualShell, err := resolveManualHost(osName, shellName)
 			if err != nil {
 				return err
@@ -57,11 +59,19 @@ host's default shell is powershell.exe.
 				err = ui.Step(fmt.Sprintf("detecting the OS of %s", host), func() error {
 					c, err := sshx.Dial(vm.Target())
 					if err != nil {
+						if sshx.IsUnreachable(err) {
+							unreached = true
+							return nil
+						}
 						return err
 					}
 					defer c.Close()
-					if vm.OS, err = sshx.DetectOS(c); err != nil || vm.OS != sshx.Windows {
-						return err
+					if vm.OS, err = sshx.DetectOS(c); err != nil {
+						vm.OS, unreached = "", true
+						return nil
+					}
+					if vm.OS != sshx.Windows {
+						return nil
 					}
 					vm.Shell, err = sshx.DetectShell(c)
 					return err
@@ -75,7 +85,16 @@ host's default shell is powershell.exe.
 			if err := store.Save(); err != nil {
 				return err
 			}
-			ui.Emit(ui.Result{OK: true, Action: "vm add", Message: fmt.Sprintf("registered %s (%s@%s, %s)", name, user, host, vm.OS), Data: vm})
+			msg := fmt.Sprintf("registered %s (%s@%s, %s)", name, user, host, vm.HostOS())
+			if unreached {
+				note := fmt.Sprintf("could not reach %s to detect its OS, recorded it as linux. Run vm add again when it is up, or pass --os windows", host)
+				if ui.JSON() {
+					msg += ". " + note
+				} else {
+					ui.Warnf("%s", note)
+				}
+			}
+			ui.Emit(ui.Result{OK: true, Action: "vm add", Message: msg, Data: vm})
 			return nil
 		},
 	}

@@ -102,10 +102,12 @@ the VM. Put `sudo -n` in the remote command when you need root; there is no
 
 `vm add` connects once, over SSH, to detect the host's OS and records it in `fleet.json`;
 give `--os linux|windows` and it does not connect at all. Any host with a POSIX shell
-(Linux, macOS, FreeBSD) is recorded as `linux`. If the host cannot be reached or does
-not answer, `vm add` stops and asks for `--os`. Entries from before this existed are
-read as Linux, and an `os` that is neither `linux` nor `windows` is refused by every
-command that uses it.
+(Linux, macOS, FreeBSD) is recorded as `linux`. If the host cannot be reached (refused,
+timed out) or does not answer the probe, `vm add` still saves it, with no OS, which
+reads as Linux, and warns; run `vm add` again when the host is up, or pass `--os windows`.
+A host key that does not match the one on record is not "unreachable": `vm add` fails
+and saves nothing. Entries from before this existed are read as Linux, and an `os` that
+is neither `linux` nor `windows` is refused by every command that uses it.
 
 On a Windows VM (OpenSSH Server, administrator account) only `vm exec` works so far.
 The words after `--` run as one PowerShell command. Pass the command as one quoted

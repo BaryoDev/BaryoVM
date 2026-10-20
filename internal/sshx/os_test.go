@@ -8,9 +8,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 )
 
 func TestQuotePowerShell(t *testing.T) {
@@ -398,5 +401,24 @@ func TestScriptLineLinuxIsNeverLimited(t *testing.T) {
 	long := strings.Repeat("a", 100000)
 	if line, err := Linux.ScriptLine(ShellCmd, long); err != nil || line != long {
 		t.Errorf("linux: err %v, unchanged %v", err, line == long)
+	}
+}
+
+func TestIsUnreachable(t *testing.T) {
+	timeout := &net.OpError{Op: "dial", Err: errors.New("i/o timeout")}
+	refused := fmt.Errorf("ssh dial 10.0.0.1:22: %w", &net.OpError{Op: "dial", Err: errors.New("connection refused")})
+	changed := fmt.Errorf("ssh: handshake failed: %w", &hostkeys.ErrChanged{Host: "h"})
+	unknown := fmt.Errorf("ssh dial: %w", &hostkeys.ErrUnknownHost{Host: "h"})
+	for name, c := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"timeout": {timeout, true}, "refused": {refused, true},
+		"changed key": {changed, false}, "unknown host in strict mode": {unknown, false},
+		"bad key file": {errors.New("read key /k: no such file"), false}, "nil": {nil, false},
+	} {
+		if got := IsUnreachable(c.err); got != c.want {
+			t.Errorf("%s: got %v, want %v", name, got, c.want)
+		}
 	}
 }

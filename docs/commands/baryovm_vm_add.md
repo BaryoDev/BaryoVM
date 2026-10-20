@@ -6,7 +6,8 @@ Register an existing VM by host + SSH key
 
 Register an existing VM and record whether it runs Linux or Windows. The OS
 is detected once, over SSH, when the VM is added; pass --os to skip the
-connection or to say it when detection cannot. With --os windows the SSH
+connection. If the host cannot be reached it is saved with no OS (read as
+linux) and a warning; a host key mismatch still fails. With --os windows the SSH
 shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
 host's default shell is powershell.exe.
 
