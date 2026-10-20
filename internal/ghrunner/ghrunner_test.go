@@ -64,13 +64,22 @@ func (f *fakeRemote) ran(sub string) bool {
 }
 
 type fakeGH struct {
-	private  bool
-	release  Release
-	events   *[]string
-	tokenErr error
+	private    bool
+	visibility string
+	release    Release
+	events     *[]string
+	tokenErr   error
 }
 
-func (g *fakeGH) IsPrivate(string) (bool, error) { return g.private, nil }
+func (g *fakeGH) Visibility(string) (string, error) {
+	if g.visibility != "" {
+		return g.visibility, nil
+	}
+	if g.private {
+		return "private", nil
+	}
+	return "public", nil
+}
 func (g *fakeGH) Release(v string) (Release, error) {
 	return g.release, nil
 }
@@ -286,6 +295,18 @@ func TestPublicRepoRefusedBeforeAnySSHDial(t *testing.T) {
 	}
 	if dials != 0 || len(f.calls) != 0 {
 		t.Errorf("a public repo reached the VM: dials=%d calls=%d", dials, len(f.calls))
+	}
+}
+
+func TestInternalRepoRefusedBeforeAnySSHDial(t *testing.T) {
+	f := &fakeRemote{probe: freshProbe}
+	dials := 0
+	_, err := Install(opts(), &fakeGH{private: true, visibility: "internal", release: goodRelease()}, dialer(f, &dials))
+	if err == nil || !strings.Contains(err.Error(), "internal repo") {
+		t.Fatalf("want an internal repo refusal, got %v", err)
+	}
+	if dials != 0 || len(f.calls) != 0 {
+		t.Errorf("an internal repo reached the VM: dials=%d calls=%d", dials, len(f.calls))
 	}
 }
 

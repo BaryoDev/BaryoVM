@@ -13,7 +13,7 @@ func TestGHArgvIsASliceNotAShellString(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"private", ghPrivateArgs("acme/app"), []string{"api", "repos/acme/app", "--jq", ".private"}},
+		{"visibility", ghVisibilityArgs("acme/app"), []string{"api", "repos/acme/app", "--jq", ".visibility"}},
 		{"registration", ghTokenArgs("acme/app", "registration-token"),
 			[]string{"api", "-X", "POST", "repos/acme/app/actions/runners/registration-token", "--jq", ".token"}},
 		{"remove", ghTokenArgs("acme/app", "remove-token"),

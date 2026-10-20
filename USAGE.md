@@ -38,6 +38,8 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
+baryovm vm runner remove oracle --repo acme/app
 baryovm vm remove oracle         # forget it (does not destroy the machine)
 baryovm vm forget-key oracle     # drop its recorded SSH host key
 ```
@@ -99,6 +101,46 @@ turns it off for one command on a machine where the workflow sets it globally.
 the VM. Put `sudo -n` in the remote command when you need root; there is no
 `--sudo` flag. A non-zero remote exit becomes a non-zero CLI exit. Under
 `-o json` the envelope keeps `stdout`, `stderr` and `exitCode` as separate fields.
+
+### GitHub Actions runner
+
+```sh
+baryovm vm runner oracle --repo acme/app
+baryovm vm runner oracle --repo acme/app --labels docker,gpu --memory-max 6G --cpu-quota 300%
+baryovm vm runner remove oracle --repo acme/app
+```
+
+`vm runner` installs a self-hosted runner for one repo on a registered VM. It needs the `gh`
+CLI logged in with admin rights on the repo, and Docker on the VM (`vm bootstrap`). It creates a
+`github-runner` user in the docker group, unpacks the runner under
+`/opt/github-runner/<owner>-<repo>`, registers it, installs it as a systemd service and checks
+that the service is active.
+
+| Flag | Default | |
+|------|---------|---|
+| `--repo` | required | `owner/name` |
+| `--name` | `<vm>-<repo>` | runner name; reruns use `--replace`, so one registration stays |
+| `--labels` | none | extra labels on top of `self-hosted`, `Linux` and the arch |
+| `--version` | latest release | pin a runner version such as `2.320.0` |
+| `--memory-max` | `4G` | systemd `MemoryMax` for the service |
+| `--cpu-quota` | `200%` | systemd `CPUQuota` for the service |
+
+It is safe to rerun. A configured, running runner is reported as `alreadyReady` and nothing
+changes. A stopped one is started, and one with no service gets the service installed. A rerun
+after a crash continues from the step that failed.
+
+- A repo whose visibility is not `private` is refused before BaryoVM connects to the VM, because a
+  fork pull request could run its code there. That includes enterprise `internal` repos, which
+  every enterprise member can see and fork.
+- Also turn on "Require approval for all outside collaborators" for fork pull request workflows
+  in the repo's Settings, Actions, General page.
+- The runner tarball is checked against the sha256 digest GitHub publishes for the release asset
+  before it is extracted. A release with no digest is refused.
+- The memory and CPU limits cover the runner and what it runs directly. Containers a job starts
+  through Docker (Testcontainers, `docker run`) run under `dockerd` and are not bounded by them.
+- `vm runner remove` stops and uninstalls the service, unregisters the runner and deletes its
+  directory. If no remove token can be fetched it removes the local runner anyway, and you have
+  to delete the entry on the repo's Settings, Actions, Runners page by hand.
 
 ## Hardening, and seeing what hits the box
 

@@ -147,8 +147,8 @@ type Release struct {
 // GitHub is the local side: the gh CLI in production. Tokens come back as plain strings that this
 // package never stores.
 type GitHub interface {
-	// IsPrivate reports whether the repo is private.
-	IsPrivate(repo string) (bool, error)
+	// Visibility is the repo's visibility as GitHub reports it: public, private or internal.
+	Visibility(repo string) (string, error)
 	// Release fetches the latest runner release, or the given version when it is not empty.
 	Release(version string) (Release, error)
 	RegistrationToken(repo string) (string, error)
@@ -216,12 +216,14 @@ func Install(o Options, gh GitHub, dial Dial) (rep Report, err error) {
 	rep = Report{VM: o.VM, Repo: o.Repo, Name: o.Name, Dir: o.Dir()}
 
 	// Before any dial: a public repo's fork PRs would run their code on this VM.
-	private, err := gh.IsPrivate(o.Repo)
+	// Only "private" passes. An enterprise "internal" repo also reports private: true, but every
+	// enterprise member can see and fork it.
+	vis, err := gh.Visibility(o.Repo)
 	if err != nil {
 		return rep, err
 	}
-	if !private {
-		return rep, fmt.Errorf("%s is a public repo: refusing to install a self-hosted runner, since a fork pull request could run its code on %s", o.Repo, o.VM)
+	if vis != "private" {
+		return rep, fmt.Errorf("%s is a %s repo: refusing to install a self-hosted runner, since a fork pull request could run its code on %s", o.Repo, vis, o.VM)
 	}
 
 	r, err := dial()

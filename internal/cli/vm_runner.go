@@ -28,7 +28,7 @@ Install a GitHub Actions self-hosted runner for one private repo on a registered
 It is the one place BaryoVM leaves an agent behind on the VM: GitHub's own runner, outbound
 connections only, and only when you ask for it.
 
-A public repo is refused, because a fork pull request could run its code on your VM.
+A public or internal repo is refused, because a fork pull request could run its code on your VM.
 
 The registration token is fetched locally with gh just before it is used and sent on stdin. It is
 never stored, never on a command line and never in an error. The gh login needs admin rights on
@@ -138,8 +138,8 @@ func runnerMessage(r ghrunner.Report) string {
 // ghCLI is the real ghrunner.GitHub: every call is the gh binary with an argv slice, never a shell.
 type ghCLI struct{}
 
-func ghPrivateArgs(repo string) []string {
-	return []string{"api", "repos/" + repo, "--jq", ".private"}
+func ghVisibilityArgs(repo string) []string {
+	return []string{"api", "repos/" + repo, "--jq", ".visibility"}
 }
 
 // ghTokenArgs builds the call for a registration-token or remove-token.
@@ -186,18 +186,16 @@ func ghError(what, repo, stderr string, err error) error {
 	return fmt.Errorf("%s: %s", what, s)
 }
 
-func (ghCLI) IsPrivate(repo string) (bool, error) {
-	out, errs, err := runGH(ghPrivateArgs(repo)...)
+func (ghCLI) Visibility(repo string) (string, error) {
+	out, errs, err := runGH(ghVisibilityArgs(repo)...)
 	if err != nil {
-		return false, ghError("check the repo", repo, errs, err)
+		return "", ghError("check the repo", repo, errs, err)
 	}
-	switch strings.TrimSpace(out) {
-	case "true":
-		return true, nil
-	case "false":
-		return false, nil
+	v := strings.TrimSpace(out)
+	if v == "" {
+		return "", fmt.Errorf("check the repo: gh returned no visibility for %s", repo)
 	}
-	return false, fmt.Errorf("check the repo: gh answered %q for %s, expected true or false", strings.TrimSpace(out), repo)
+	return v, nil
 }
 
 func (ghCLI) token(repo, kind string) (string, error) {

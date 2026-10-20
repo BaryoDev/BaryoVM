@@ -8,7 +8,7 @@ Install a GitHub Actions self-hosted runner for one private repo on a registered
 It is the one place BaryoVM leaves an agent behind on the VM: GitHub's own runner, outbound
 connections only, and only when you ask for it.
 
-A public repo is refused, because a fork pull request could run its code on your VM.
+A public or internal repo is refused, because a fork pull request could run its code on your VM.
 
 The registration token is fetched locally with gh just before it is used and sent on stdin. It is
 never stored, never on a command line and never in an error. The gh login needs admin rights on
