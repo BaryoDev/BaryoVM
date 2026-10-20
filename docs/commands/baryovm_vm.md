@@ -27,4 +27,5 @@ Manage the VMs in your fleet
 * [baryovm vm ping](baryovm_vm_ping.md)	 - SSH in and report host + Docker status
 * [baryovm vm provision](baryovm_vm_provision.md)	 - Provision a new cloud VM and register it in the fleet
 * [baryovm vm remove](baryovm_vm_remove.md)	 - Remove a VM from the fleet (does not destroy the machine)
+* [baryovm vm runner](baryovm_vm_runner.md)	 - Install a GitHub Actions self-hosted runner on a VM
 * [baryovm vm threats](baryovm_vm_threats.md)	 - Show what a VM is being attacked with

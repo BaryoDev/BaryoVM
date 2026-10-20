@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -31,6 +32,8 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			before, _ := fleet.Load()
+			lastRun = &ranCommand{cmd: cmd, args: args, before: before}
 			ui.SetJSON(outputFormat == "json")
 			// Only apply the flag when it was actually given, so it overrides the environment
 			// rather than a default false switching strict mode off for a CI job that set it.
@@ -42,7 +45,7 @@ func newRoot() *cobra.Command {
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
 		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
-	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd())
+	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newScanCmd())
 	return root
 }
 
@@ -67,7 +70,7 @@ func Execute() {
 		}
 	}()
 
-	if err := newRoot().Execute(); err != nil {
+	if err := runRoot(newRoot()); err != nil {
 		code, silent := exitCodeOf(err)
 		if !silent {
 			ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})

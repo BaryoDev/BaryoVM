@@ -33,7 +33,7 @@ sequenceDiagram
     participant Site as the running site
 
     You->>VM: pg_dump, before anything changes
-    You->>VM: rsync the source (never the compose dir)
+    You->>VM: sync the source (never the compose dir)
     You->>VM: docker build
     You->>VM: docker compose up
     You->>VM: post-deploy: reload nginx, restore SELinux context
@@ -104,15 +104,17 @@ State lives in `~/.baryovm/fleet.json` (override with `BARYOVM_HOME`), written
 owner-only (`0600`). It stores hostnames, users and **SSH key paths, never key
 contents or secrets**. See [SECURITY.md](SECURITY.md).
 
-`stack release` needs local **`rsync`** on your PATH, with **`ssh`** as its
-transport: it syncs your source to the VM by running them, and the built-in Go
-SSH client does not cover that transfer. macOS ships both, and every Linux
-package manager has rsync, though a minimal image may not have it installed
-(`baryovm doctor --fix` installs it). Windows does not ship rsync, so run
-BaryoVM inside WSL, or install the rsync package in Git Bash. Everything else
+Each command also appends one line to `~/.baryovm/activity.jsonl` (what ran, on which VM, how it
+ended). Turn it off with `BARYOVM_ACTIVITY=off`. See [docs/activity-log.md](docs/activity-log.md).
+
+`stack release` syncs your source to the VM with local **`rsync`** (and **`ssh`**
+as its transport) when rsync is on your PATH. Without rsync it writes a tar
+archive with Go and streams it over the SSH session, then removes files you
+deleted locally, so a machine with no rsync (Windows, a minimal image) can
+still release to a Linux host. `baryovm doctor` shows which one a release will
+use, and `baryovm doctor --fix` installs rsync where it can. Everything else
 (`vm add`, `vm ping`, `stack add`, `stack deploy`, `stack backup`) needs
-neither. Run `baryovm doctor` to see what is missing before your first
-release.
+neither.
 
 ## Quickstart
 
@@ -141,11 +143,12 @@ baryovm stack restore app --yes
 
 | Area | Commands |
 |------|----------|
-| **VMs** | `vm add · list · ping · bootstrap · remove` |
+| **VMs** | `vm add · list · ping · bootstrap · remove` · `vm runner [remove]` (GitHub Actions runner, opt-in agent) |
 | **Stacks** | `stack add · list · remove · ps · logs · pull` |
 | **Deploy** | `stack deploy` (compose up) · **`stack release`** (sync → build → deploy) |
 | **Backups** | **`stack backup`** · `stack backups` · **`stack restore --yes`** |
 | **Single container** | `deploy` |
+| **Security** | **`scan`** (OWASP ZAP baseline, passive) |
 | **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
 | **Local** | `doctor [--fix]` · `version` |
 
@@ -229,6 +232,35 @@ Add `-o json` to any command for a stable result envelope:
 
 This is how the planned MAUI desktop/mobile app and **MCP server** will drive
 BaryoVM. The CLI is the single source of truth.
+
+## Scan before you release
+
+`baryovm scan` runs the [OWASP ZAP](https://www.zaproxy.org/) baseline against a
+deployed site and reports what it finds, worst first. The baseline is passive: it
+crawls the target and flags missing headers, weak cookies and information leaks,
+and sends no attack payloads. Scan only sites you are authorised to reach. It
+needs Docker on the machine that runs it, and pulls the official ZAP image.
+
+```sh
+baryovm scan --url https://staging.example.com --fail-on medium
+```
+
+`--fail-on` makes it exit non-zero when a finding is at or above that severity, so
+it gates a release. In a pipeline, deploy to staging, scan, and promote only if it
+passes. The bundled GitHub Action removes the download boilerplate:
+
+```yaml
+- uses: BaryoDev/BaryoVM@v1
+  with:
+    command: scan --url https://staging.example.com --fail-on medium
+```
+
+The `command` input is split on whitespace and not evaluated by a shell, so
+quotes and `$vars` in it are literal.
+
+For any other CI (a CDK pipeline's CodeBuild, GitLab, etc.), install the binary
+from a release archive and call the same command; the archive install is under
+[Install](#install).
 
 ## Where it's going: recipes
 

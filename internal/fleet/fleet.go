@@ -26,10 +26,21 @@ type VM struct {
 	Provider string `json:"provider"`     // "ssh" (registered) | "lightsail" | "oci"
 	ID       string `json:"id,omitempty"` // cloud instance id, when provisioned
 
+	// OS is detected once, when the VM is added. Empty (an entry written before this field) means
+	// linux: use HostOS rather than reading it directly.
+	OS sshx.OS `json:"os,omitempty"`
+
+	// Shell is the program OpenSSH on a Windows host runs commands in, detected with the OS.
+	// Empty means cmd.exe, the OpenSSH default, and is always the value on Linux.
+	Shell sshx.Shell `json:"shell,omitempty"`
+
 	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
 	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
 	rest unknownFields
 }
+
+// HostOS is the VM's operating system, with an entry that has none recorded read as Linux.
+func (v VM) HostOS() sshx.OS { return v.OS.Resolved() }
 
 // Target converts a VM into an SSH dial target.
 func (v VM) Target() sshx.Target {

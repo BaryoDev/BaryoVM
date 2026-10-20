@@ -39,7 +39,19 @@ down.
   single-quote escaped (`internal/sshx.Quote`, covered by tests) to prevent
   command injection.
 
+- **GitHub runner tokens**. `vm runner` fetches a registration or removal token locally with
+  your `gh` login, just before it is used, and sends it to the VM on **stdin**. It is read inside
+  the `github-runner` user's shell and exported there for `config.sh`. It is never on a command
+  line, never written to `fleet.json` or anywhere else by BaryoVM, and is scrubbed from any error
+  or JSON output before it leaves the process.
+
 ## Your responsibilities
+
+- `vm runner` is the one opt-in exception to the agentless design: it leaves GitHub's runner
+  running on the VM, making outbound connections only. It refuses public repos, since a fork pull
+  request could run its code on the VM. The `github-runner` user is in the `docker` group, which
+  is root-equivalent on that VM, so treat anything that can push to the repo as able to run as
+  root there.
 
 - Protect your SSH private keys and `~/.baryovm/fleet.json`.
 - BaryoVM runs commands on hosts you register, so only add machines you control.

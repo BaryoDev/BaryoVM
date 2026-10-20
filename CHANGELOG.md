@@ -12,6 +12,17 @@ previously accepted is called out here rather than left to be discovered.
 
 - Generated Cobra command reference pages under `docs/commands`, with a CI check to keep them
   synchronized with the CLI.
+- **Static release works without rsync.** When local rsync is missing, `stack release` writes a
+  tar archive with Go and streams it into `tar -x` on the host over the SSH session, then removes
+  files deleted locally, only inside the entry's destination directory and only after a clean
+  extract. rsync stays the default when it exists. The transport is printed and is in the JSON
+  result as `data.transport`. Excludes follow rsync's matching under both; a pattern the tar
+  transport cannot match is refused rather than guessed. Linux hosts only. ([#127], [#42])
+
+### Changed
+
+- `doctor` no longer fails a machine for lacking rsync, and has a "release transport" line saying
+  which one a release will use. This supersedes the 0.2.x note below that rsync is required.
 
 ## [0.4.0] - 2026-09-21
 
