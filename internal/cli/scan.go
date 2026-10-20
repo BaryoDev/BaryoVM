@@ -53,7 +53,7 @@ func newScanCmd() *cobra.Command {
 			})
 			if runErr != nil {
 				ui.Emit(ui.Result{OK: false, Action: "scan", Error: runErr.Error()})
-				return runErr
+				return &exitError{code: 1, msg: runErr.Error(), silent: true}
 			}
 
 			renderScanFindings(rep)
@@ -68,10 +68,9 @@ func newScanCmd() *cobra.Command {
 				Error:   gateError(failed, failOn),
 			})
 			if failed {
-				// A gate failure is an expected outcome, not a crash. Return an
-				// error so cobra sets a non-zero exit; the root command sets
-				// SilenceErrors, so it is not reprinted after the envelope.
-				return fmt.Errorf("scan gate: %s", msg)
+				// A gate failure is an expected outcome, not a crash. The
+				// envelope is already out, so exit non-zero without a second one.
+				return &exitError{code: 1, msg: "scan gate: " + msg, silent: true}
 			}
 			return nil
 		},

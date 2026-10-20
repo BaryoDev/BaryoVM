@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// zapImage is the official ZAP image. Pinned to the stable tag rather than
-// latest so a scan is reproducible and a new ZAP release cannot change a gate's
-// result without a deliberate bump here.
-const zapImage = "zaproxy/zap-stable"
+// zapImage is the official ZAP image, pinned to a release tag (not a moving
+// tag, not a digest, so it stays multi-arch and readable). A new ZAP release
+// cannot change a gate's result until someone bumps the tag here on purpose.
+const zapImage = "zaproxy/zap-stable:2.17.0"
 
 // DefaultTimeoutSeconds bounds the whole scan. A baseline spider-and-passive
 // pass on a normal site finishes well inside this; the cap stops a hung target
@@ -28,6 +28,16 @@ type Options struct {
 	URL string
 	// TimeoutSeconds bounds the run. Zero uses DefaultTimeoutSeconds.
 	TimeoutSeconds int
+	// containerName names the container so a timeout can remove it. Set by
+	// Run; empty leaves the container unnamed.
+	containerName string
+}
+
+func (o Options) timeoutSeconds() int {
+	if o.TimeoutSeconds <= 0 {
+		return DefaultTimeoutSeconds
+	}
+	return o.TimeoutSeconds
 }
 
 // command builds the ZAP baseline command line. It runs the container, prints
@@ -39,16 +49,22 @@ type Options struct {
 // It is a package function, not a method, so a test can assert the exact
 // argument vector without Docker present.
 func command(o Options) []string {
-	return []string{
+	argv := []string{"docker", "run", "--rm"}
+	if o.containerName != "" {
+		argv = append(argv, "--name", o.containerName)
+	}
+	return append(argv,
 		// zap-baseline.py refuses file reports unless /zap/wrk exists, so give
 		// it a throwaway tmpfs rather than a host mount.
-		"docker", "run", "--rm", "--tmpfs", "/zap/wrk:rw,mode=1777", zapImage,
+		"--tmpfs", "/zap/wrk:rw,mode=1777", zapImage,
 		"sh", "-c",
+		// Cancelling the docker client does not stop the container, so the
+		// deadline is also enforced inside it.
 		fmt.Sprintf(
-			"zap-baseline.py -t %s -J zap.json -I >/dev/null 2>&1; cat /zap/wrk/zap.json",
-			shellArg(o.URL),
+			"timeout -s KILL %d zap-baseline.py -t %s -J zap.json -I >/dev/null 2>&1; cat /zap/wrk/zap.json",
+			o.timeoutSeconds(), shellArg(o.URL),
 		),
-	}
+	)
 }
 
 // shellArg single-quotes an argument for the container's `sh -c`. The URL is

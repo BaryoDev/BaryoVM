@@ -8,7 +8,7 @@ name: BaryoVM
 description: Download BaryoVM and run a command (deploy, release, or a passive ZAP scan)
 inputs:
   command:
-    description: The baryovm command and flags to run, e.g. "scan --url https://staging.example.com --fail-on medium"
+    description: The baryovm command and flags to run, e.g. "scan --url https://staging.example.com --fail-on medium". It is split on whitespace and not evaluated by a shell, so quotes and $vars in it are literal.
     required: true
   version:
     description: BaryoVM release to use, e.g. "1.2.0". Defaults to the latest release.
@@ -23,6 +23,8 @@ runs:
         BVM_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
+        work=$(mktemp -d "$RUNNER_TEMP/baryovm.XXXXXX")
+        cd "$work"
         os=linux
         arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
         if [ "$BVM_VERSION" = "latest" ]; then
@@ -39,4 +41,9 @@ runs:
         echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
     - name: Run BaryoVM
       shell: bash
-      run: baryovm ${{ inputs.command }}
+      env:
+        BVM_COMMAND: ${{ inputs.command }}
+      run: |
+        set -euo pipefail
+        read -r -a bvm_args <<< "$BVM_COMMAND"
+        baryovm "${bvm_args[@]}"

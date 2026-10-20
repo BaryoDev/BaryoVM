@@ -6,6 +6,7 @@ package scan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -143,6 +144,81 @@ func TestCommandTargetsBaselineAndImage(t *testing.T) {
 	// Without /zap/wrk the baseline exits before writing the report.
 	if !strings.Contains(joined, "/zap/wrk") || !strings.Contains(joined, "cat /zap/wrk/zap.json") {
 		t.Errorf("command must give zap a /zap/wrk and read the report from it: %v", argv)
+	}
+}
+
+func TestCommandEnforcesTimeoutInsideNamedContainer(t *testing.T) {
+	argv := command(Options{URL: "https://example.com", TimeoutSeconds: 90, containerName: "baryovm-scan-ab12"})
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--name baryovm-scan-ab12") {
+		t.Errorf("container is not named: %v", argv)
+	}
+	if !strings.Contains(joined, "timeout -s KILL 90 zap-baseline.py") {
+		t.Errorf("zap is not run under timeout: %v", argv)
+	}
+	if !strings.Contains(strings.Join(command(Options{URL: "https://x"}), " "), "timeout -s KILL 600 ") {
+		t.Error("default timeout not applied")
+	}
+}
+
+func TestZapImageIsPinnedToAVersion(t *testing.T) {
+	i := strings.LastIndex(zapImage, ":")
+	if i < 0 || zapImage[i+1:] == "latest" || zapImage[i+1] < '0' || zapImage[i+1] > '9' {
+		t.Errorf("zapImage must pin a version tag, got %s", zapImage)
+	}
+}
+
+func TestEmptyReportMarshalsFindingsAsArray(t *testing.T) {
+	rep, err := ParseReport("https://example.com", []byte(`{"site": []}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"findings":[]`) {
+		t.Errorf("empty report should serialize findings as [], got %s", b)
+	}
+}
+
+type recordingRunner struct {
+	calls [][]string
+	err   error
+}
+
+func (r *recordingRunner) Run(_ context.Context, argv []string) ([]byte, error) {
+	r.calls = append(r.calls, argv)
+	return nil, r.err
+}
+
+func TestRunRemovesContainerWhenContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := &recordingRunner{err: context.Canceled}
+	if _, err := Run(ctx, r, Options{URL: "https://x"}); err == nil {
+		t.Fatal("want an error")
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("want run then rm, got %v", r.calls)
+	}
+	name := ""
+	for i, a := range r.calls[0] {
+		if a == "--name" {
+			name = r.calls[0][i+1]
+		}
+	}
+	rm := strings.Join(r.calls[1], " ")
+	if name == "" || rm != "docker rm -f "+name {
+		t.Errorf("want docker rm -f %q, got %q", name, rm)
+	}
+}
+
+func TestRunDoesNotRemoveContainerOnPlainFailure(t *testing.T) {
+	r := &recordingRunner{err: errors.New("docker: not found")}
+	_, _ = Run(context.Background(), r, Options{URL: "https://x"})
+	if len(r.calls) != 1 {
+		t.Errorf("want only the run, got %v", r.calls)
 	}
 }
 

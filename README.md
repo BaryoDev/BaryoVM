@@ -252,6 +252,9 @@ passes. The bundled GitHub Action removes the download boilerplate:
     command: scan --url https://staging.example.com --fail-on medium
 ```
 
+The `command` input is split on whitespace and not evaluated by a shell, so
+quotes and `$vars` in it are literal.
+
 For any other CI (a CDK pipeline's CodeBuild, GitLab, etc.), install the binary
 from a release archive and call the same command; the archive install is under
 [Install](#install).

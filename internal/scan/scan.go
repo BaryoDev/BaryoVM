@@ -139,7 +139,7 @@ func ParseReport(target string, raw []byte) (Report, error) {
 		return Report{}, fmt.Errorf("parse zap report: %w", err)
 	}
 
-	rep := Report{Target: target, Counts: map[string]int{}}
+	rep := Report{Target: target, Findings: []Finding{}, Counts: map[string]int{}}
 	for _, site := range zr.Site {
 		for _, a := range site.Alerts {
 			sev, ok := severityByRiskcode[a.Riskcode]
