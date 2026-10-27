@@ -204,3 +204,17 @@ func TestBackupRefusesABadEnvFile(t *testing.T) {
 		t.Fatal("a shell metacharacter in the env file must be refused")
 	}
 }
+
+func TestBackupScriptIsOwnerOnly(t *testing.T) {
+	script, err := Backup(scriptOnly{}, Config{Name: "app", DBContainer: "pg", DBName: "appdb", Dir: "/opt/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, d, m := strings.Index(script, "umask 077\n"), strings.Index(script, "pg_dump"), strings.Index(script, "mkdir -p")
+	if u < 0 || u > m || u > d {
+		t.Errorf("umask 077 must come before the backup dir and the dump are created:\n%s", script)
+	}
+	if !strings.Contains(script, `chmod 700 "$BK"`) {
+		t.Errorf("the backup dir must be 0700:\n%s", script)
+	}
+}

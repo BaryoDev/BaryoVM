@@ -98,8 +98,10 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
+	// Dumps hold the whole database: create everything owner-only, whatever the host's default umask.
+	b.WriteString("umask 077\n")
 	b.WriteString(cfg.bkVar())
-	b.WriteString("mkdir -p \"$BK\"\n")
+	b.WriteString("mkdir -p \"$BK\" && chmod 700 \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
 	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
