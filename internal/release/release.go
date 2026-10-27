@@ -136,6 +136,22 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 // with --delete scoped to that subdir, so the compose dir (with its .env) is never
 // in the sync list, so secrets can't be wiped.
 func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.Cmd {
+	return m.RsyncCmdKnownHosts(sub, user, host, port, key, "")
+}
+
+// RsyncSSHOptions is the host key part of rsync's ssh command. rsync's ssh checks against
+// knownHostsFile, which holds the keys BaryoVM already trusts for the host, and refuses anything
+// else. With no file it still refuses to learn: it falls back to ssh's own known_hosts, strictly.
+func RsyncSSHOptions(knownHostsFile string) string {
+	opts := "-o StrictHostKeyChecking=yes"
+	if knownHostsFile != "" {
+		opts += " -o UserKnownHostsFile=" + quoteRsync(knownHostsFile)
+	}
+	return opts
+}
+
+// RsyncCmdKnownHosts is RsyncCmd with the known_hosts file rsync's ssh verifies the host against.
+func (m *Manifest) RsyncCmdKnownHosts(sub, user, host string, port int, key, knownHostsFile string) *exec.Cmd {
 	// The VM's port, not rsync's default of 22. Every other path to the VM goes through
 	// VM.Target() and sshx.Dial, which honour it, so a VM on 2222 used to have its commands go to
 	// 2222 and its file transfer go to 22: a failure at best, and the wrong machine at worst.
@@ -146,8 +162,8 @@ func (m *Manifest) RsyncCmd(sub, user, host string, port int, key string) *exec.
 	// directly, with no shell anywhere in the chain. Unquoted, a key path with a space in it becomes
 	// two arguments. expand() resolves a leading ~ here so the path that gets quoted is the path that
 	// gets opened, rather than depending on ssh's own tilde handling for -i.
-	ssh := fmt.Sprintf("ssh -i %s -p %d -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
-		quoteRsync(expand(key)), port)
+	ssh := fmt.Sprintf("ssh -i %s -p %d %s -o BatchMode=yes",
+		quoteRsync(expand(key)), port, RsyncSSHOptions(knownHostsFile))
 	args := []string{"-az", "--delete", "-e", ssh}
 	if m.Sudo {
 		// The remote end, not the local one. rsync runs a copy of itself on the far side and

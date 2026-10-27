@@ -458,3 +458,39 @@ func (s *Store) Forget(hostname string) (int, error) {
 
 // Path is where BaryoVM records the keys it has learned.
 func (s *Store) Path() string { return s.path }
+
+// KnownHostsFor returns the known_hosts lines recorded for one host:port, ready to write to a file
+// another tool (rsync's ssh) will read. BaryoVM's own file wins; the user's file is used only when
+// ours has nothing, the same order Callback checks in. Only plain keys are returned, never
+// @revoked or @cert-authority entries. An empty result means the host is not known yet.
+func (s *Store) KnownHostsFor(hostport string) (string, error) {
+	for _, path := range []string{s.path, s.extraPath} {
+		if path == "" {
+			continue
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		want := knownhosts.Normalize(hostport)
+		var out strings.Builder
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			marker, hosts, _, _, _, err := ssh.ParseKnownHosts([]byte(line))
+			if err != nil || marker != "" || !hostMatches(hosts, want) {
+				continue
+			}
+			out.WriteString(line + "\n")
+		}
+		if out.Len() > 0 {
+			return out.String(), nil
+		}
+	}
+	return "", nil
+}

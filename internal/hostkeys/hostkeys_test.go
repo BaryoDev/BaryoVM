@@ -303,3 +303,24 @@ func TestKeyscanPassesThePortAsAFlag(t *testing.T) {
 		t.Errorf("strict-mode error must keep the port: %s", err)
 	}
 }
+
+func TestKnownHostsForReturnsOnlyTheRecordedKeyOfThatHost(t *testing.T) {
+	s := newStore(t)
+	key := newKey(t)
+	if err := s.add("192.0.2.10:22", key); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.add("192.0.2.11:22", newKey(t)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.KnownHostsFor("192.0.2.10:22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got, "\n") != 1 || !strings.HasPrefix(got, "192.0.2.10 ") {
+		t.Errorf("want exactly the one line for 192.0.2.10, got %q", got)
+	}
+	if none, _ := s.KnownHostsFor("192.0.2.99:22"); none != "" {
+		t.Errorf("an unknown host must give no keys, got %q", none)
+	}
+}
