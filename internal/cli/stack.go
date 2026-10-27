@@ -58,6 +58,9 @@ func newStackAddCmd() *cobra.Command {
 				verb = "updated"
 			}
 			st.VM, st.Dir = vm, path
+			if err := backup.ValidateEnvFile(envFile); err != nil {
+				return err
+			}
 			f := cmd.Flags()
 			for name, apply := range map[string]func(){
 				"file":         func() { st.File = file },
