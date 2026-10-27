@@ -2,6 +2,8 @@ module github.com/BaryoDev/BaryoVM
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.30
