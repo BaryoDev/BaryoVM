@@ -7,13 +7,17 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -58,6 +62,9 @@ func newStackAddCmd() *cobra.Command {
 				verb = "updated"
 			}
 			st.VM, st.Dir = vm, path
+			if err := backup.ValidateEnvFile(envFile); err != nil {
+				return err
+			}
 			f := cmd.Flags()
 			for name, apply := range map[string]func(){
 				"file":         func() { st.File = file },
@@ -141,6 +148,51 @@ func syncTar(m *release.Manifest, vm *fleet.VM, sub string) error {
 }
 
 // remoteSession is what a release needs from a connection: run commands, then hang up.
+// knownHostsFileFor writes the host keys BaryoVM trusts for a VM to a private temp file, so rsync's
+// ssh checks the same keys the rest of the command does instead of ~/.ssh/known_hosts. A host with
+// no recorded key is dialled once first, which records it (or refuses it) the normal way. The
+// caller removes the file with cleanup. A variable so tests do not need a real host.
+var knownHostsFileFor = func(vm *fleet.VM) (string, func(), error) {
+	port := vm.Port
+	if port <= 0 {
+		port = 22
+	}
+	addr := net.JoinHostPort(vm.Host, strconv.Itoa(port))
+	store := hostkeys.New(baryovmHome())
+	keys, err := store.KnownHostsFor(addr)
+	if err != nil {
+		return "", func() {}, err
+	}
+	if keys == "" {
+		c, err := dialRelease(vm)
+		if err != nil {
+			return "", func() {}, err
+		}
+		c.Close()
+		if keys, err = store.KnownHostsFor(addr); err != nil {
+			return "", func() {}, err
+		}
+	}
+	if keys == "" {
+		return "", func() {}, fmt.Errorf("no recorded host key for %s: rsync will not learn one", addr)
+	}
+	f, err := os.CreateTemp("", "baryovm-known-hosts-*") // created 0600
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { os.Remove(f.Name()) }
+	if _, err := f.WriteString(keys); err != nil {
+		f.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return f.Name(), cleanup, nil
+}
+
 type remoteSession interface {
 	sshx.Runner
 	Close() error
@@ -246,7 +298,12 @@ func newStackReleaseCmd() *cobra.Command {
 					if transport == release.TransportTar {
 						return syncTar(m, vm, sub)
 					}
-					out, e := runLocal(m.RsyncCmd(sub, vm.User, vm.Host, vm.Port, vm.KeyPath))
+					khFile, cleanup, e := knownHostsFileFor(vm)
+					if e != nil {
+						return e
+					}
+					defer cleanup()
+					out, e := runLocal(m.RsyncCmdKnownHosts(sub, vm.User, vm.Host, vm.Port, vm.KeyPath, khFile))
 					if e != nil {
 						return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
 					}

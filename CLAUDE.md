@@ -110,8 +110,9 @@ hand is better than one offered to us now. There is deliberately no flag that
 skips the check for every host, because the moment one exists it ends up in a
 CI script; `baryovm vm forget-key <host>` drops one recorded key on purpose.
 
-`internal/release` passes `-o StrictHostKeyChecking=accept-new` to rsync, which
-is the same trust model on the other transport. Keep them agreeing: two
+`internal/release` runs rsync's ssh with `-o StrictHostKeyChecking=yes` against
+a temp known_hosts file holding the keys BaryoVM already trusts for that host,
+so both transports answer "is this the right machine" from one store. Keep them agreeing: two
 transports in one command with two answers to "is this the right machine" is
 how the gap lasted as long as it did.
 

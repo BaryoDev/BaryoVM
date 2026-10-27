@@ -31,7 +31,9 @@ func withLookPath(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
 	prev := lookPath
 	lookPath = fn
-	t.Cleanup(func() { lookPath = prev })
+	prevKH := knownHostsFileFor
+	knownHostsFileFor = func(*fleet.VM) (string, func(), error) { return "/tmp/kh", func() {}, nil }
+	t.Cleanup(func() { lookPath, knownHostsFileFor = prev, prevKH })
 }
 
 func noRsync(string) (string, error)  { return "", exec.ErrNotFound }

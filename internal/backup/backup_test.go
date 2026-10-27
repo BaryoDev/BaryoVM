@@ -169,3 +169,52 @@ func TestASudoBackupElevatesTheDockerExecAndTheEnvCopy(t *testing.T) {
 		t.Errorf("a stack that did not ask for root must not get it:\n%s", plain)
 	}
 }
+
+// The env file name used to reach the remote shell raw while Dir was quoted.
+func TestTheEnvFilePathIsQuotedAsOneWord(t *testing.T) {
+	script, err := Backup(scriptOnly{}, Config{Name: "app", DBContainer: "pg", DBName: "appdb", EnvFile: "conf/.env", Dir: "/opt/my app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "'/opt/my app/conf/.env'"
+	if strings.Count(script, want) != 2 {
+		t.Errorf("the joined env path must be quoted in the test and the copy, got:\n%s", script)
+	}
+	if strings.Contains(script, "/conf/.env ") || strings.Contains(script, "' /") {
+		t.Errorf("env file name must not sit outside the quotes:\n%s", script)
+	}
+}
+
+func TestValidateEnvFile(t *testing.T) {
+	for _, ok := range []string{"", ".env", "conf/app.env", "a_b-c.1"} {
+		if err := ValidateEnvFile(ok); err != nil {
+			t.Errorf("%q should be accepted: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"/etc/passwd", "../x", "a/../b", ".env; rm -rf /", "$(id)", "a b", "`id`", ".env\nx", "a'b", "a|b", "a&b", "a*"} {
+		if err := ValidateEnvFile(bad); err == nil {
+			t.Errorf("%q should be refused", bad)
+		}
+	}
+}
+
+func TestBackupRefusesABadEnvFile(t *testing.T) {
+	_, err := Backup(scriptOnly{}, Config{Name: "app", DBContainer: "pg", DBName: "appdb", EnvFile: ".env; id", Dir: "/opt/app"})
+	if err == nil {
+		t.Fatal("a shell metacharacter in the env file must be refused")
+	}
+}
+
+func TestBackupScriptIsOwnerOnly(t *testing.T) {
+	script, err := Backup(scriptOnly{}, Config{Name: "app", DBContainer: "pg", DBName: "appdb", Dir: "/opt/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, d, m := strings.Index(script, "umask 077\n"), strings.Index(script, "pg_dump"), strings.Index(script, "mkdir -p")
+	if u < 0 || u > m || u > d {
+		t.Errorf("umask 077 must come before the backup dir and the dump are created:\n%s", script)
+	}
+	if !strings.Contains(script, `chmod 700 "$BK"`) {
+		t.Errorf("the backup dir must be 0700:\n%s", script)
+	}
+}

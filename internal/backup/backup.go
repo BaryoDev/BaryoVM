@@ -64,13 +64,44 @@ func (c Config) bkVar() string {
 	return fmt.Sprintf("BK=\"$HOME/%s-backups\"\n", c.Name)
 }
 
+// ValidateEnvFile accepts an empty name (no config copy) or a relative path made of letters,
+// digits, dot, dash, underscore and slash, with no ".." and no leading "/". Anything else is refused
+// before it can reach a remote shell.
+func ValidateEnvFile(name string) error {
+	if name == "" {
+		return nil
+	}
+	bad := func(why string) error {
+		return fmt.Errorf("invalid env file %q: %s (use a plain relative name such as .env)", name, why)
+	}
+	if strings.HasPrefix(name, "/") {
+		return bad("must be relative to the project dir, not start with /")
+	}
+	if strings.Contains(name, "..") {
+		return bad("must not contain ..")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_', r == '/':
+		default:
+			return bad("only letters, digits, . - _ and / are allowed")
+		}
+	}
+	return nil
+}
+
 // Backup dumps the DB (custom format) + copies the config, then prunes old ones.
 func Backup(c sshx.Runner, cfg Config) (string, error) {
+	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
+		return "", err
+	}
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
+	// Dumps hold the whole database: create everything owner-only, whatever the host's default umask.
+	b.WriteString("umask 077\n")
 	b.WriteString(cfg.bkVar())
-	b.WriteString("mkdir -p \"$BK\"\n")
+	b.WriteString("mkdir -p \"$BK\" && chmod 700 \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
 	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
@@ -84,8 +115,9 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 			cp = sshx.Sudo(cfg.Sudo, "cp")
 			chown = " && " + sshx.Sudo(cfg.Sudo, `chown "$(id -u):$(id -g)" "$BK/env-$ts"`)
 		}
-		b.WriteString(fmt.Sprintf("if [ -f %s/%s ]; then %s %s/%s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
-			q(cfg.Dir), cfg.EnvFile, cp, q(cfg.Dir), cfg.EnvFile, chown))
+		envPath := q(cfg.Dir + "/" + cfg.EnvFile)
+		b.WriteString(fmt.Sprintf("if [ -f %s ]; then %s %s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
+			envPath, cp, envPath, chown))
 	}
 	// Retention: keep the newest N of each kind.
 	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))

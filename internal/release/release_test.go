@@ -443,3 +443,19 @@ func TestAManifestCannotTurnOffAStackRegisteredSudo(t *testing.T) {
 		t.Fatal("a manifest asking for root gets it without the stack being registered --sudo")
 	}
 }
+
+// rsync's ssh must verify against the keys BaryoVM trusts, and must never learn one itself.
+func TestRsyncCmdVerifiesAgainstTheGivenKnownHosts(t *testing.T) {
+	m := &Manifest{LocalRoot: "/local/src", RemoteRoot: "/srv/app"}
+	args := strings.Join(m.RsyncCmdKnownHosts("api", "opc", "h", 22, "/k", "/tmp/kh file").Args, " ")
+	for _, want := range []string{"-o StrictHostKeyChecking=yes", "-o UserKnownHostsFile='/tmp/kh file'"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("rsync ssh options missing %q in: %s", want, args)
+		}
+	}
+	for _, c := range []string{args, strings.Join(m.RsyncCmd("api", "opc", "h", 22, "/k").Args, " ")} {
+		if strings.Contains(c, "accept-new") {
+			t.Errorf("rsync must not learn host keys: %s", c)
+		}
+	}
+}
