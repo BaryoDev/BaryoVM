@@ -127,7 +127,7 @@ func TestStaticVhostDeniesDotFiles(t *testing.T) {
 	out := tl.Vhost("/var/www/x", bothSSL)
 	wk := strings.Index(out, "location ^~ /.well-known/")
 	dot := strings.Index(out, `location ~ /\. {`)
-	root := strings.Index(out, "location / {")
+	root := strings.LastIndex(out, "location / {")
 	if wk < 0 || dot < 0 || !(wk < dot && dot < root) {
 		t.Fatalf("want .well-known, then the dot rule, then location /:\n%s", out)
 	}
