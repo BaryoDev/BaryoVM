@@ -5,7 +5,9 @@
 package release
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -70,7 +72,6 @@ var (
 	emailRe    = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
 	sizeRe     = regexp.MustCompile(`^[0-9]+[kKmMgG]?$`)
 	safePathRe = regexp.MustCompile(`^/[A-Za-z0-9._/-]*$`)
-	slugRe     = regexp.MustCompile(`[^a-z0-9]`)
 )
 
 // validHost accepts a plain DNS name and nothing else. Host names are pasted straight into an
@@ -210,6 +211,15 @@ func (t *TLS) port80() string {
 		"}\n"
 }
 
+// upgradeVar names the site's websocket upgrade map. Map names are global across every file in
+// conf.d, so it comes from the canonical host; nginx -t fails with "could not build variables_hash"
+// once a name outgrows variables_hash_bucket_size (64 by default), so it is a short hash of the
+// host rather than the host itself.
+func (t *TLS) upgradeVar() string {
+	sum := sha256.Sum256([]byte(t.canon()))
+	return "$baryovm_up_" + hex.EncodeToString(sum[:4])
+}
+
 // ACMEVhost is the stage-one config: port 80 only, so nginx can start and serve the challenge
 // before any certificate exists. A 443 block pointing at a missing certificate fails nginx -t.
 func (t *TLS) ACMEVhost() string {
@@ -240,7 +250,7 @@ func (t *TLS) Vhost(remoteRoot string, f SSLFiles) string {
 	if t.Proxy != nil {
 		// A map per site, named from the canonical host: map names are global across every file in
 		// conf.d, so a shared name would collide with a second site's file.
-		upgrade = "$baryovm_connection_upgrade_" + slugRe.ReplaceAllString(t.canon(), "_")
+		upgrade = t.upgradeVar()
 		b.WriteString("map $http_upgrade " + upgrade + " {\n    default upgrade;\n    ''      close;\n}\n\n")
 	}
 

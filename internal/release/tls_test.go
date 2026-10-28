@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -352,5 +353,32 @@ func TestTLSDryRunMentionsEveryStepAndNeverNeedsAHost(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry run lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// nginx hashes variable names into buckets of variables_hash_bucket_size (64 by default), and a
+// long name fails nginx -t with "could not build variables_hash". The upgrade map is named from
+// the host, so a long host must still give a short name. Found on a real host with
+// umbraco.playground.baryo.dev.
+func TestUpgradeMapNameStaysShortForALongHost(t *testing.T) {
+	long := strings.Repeat("a", 60) + "." + strings.Repeat("b", 60) + ".example.com"
+	for _, h := range []string{"umbraco.playground.baryo.dev", long} {
+		tl := TLS{Hosts: []string{h}, Email: "ops@example.com", Proxy: &Proxy{Port: 8080}}
+		out := tl.Vhost("", bothSSL)
+		m := regexp.MustCompile(`map \$http_upgrade (\$\S+) \{`).FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("%s: no upgrade map in:\n%s", h, out)
+		}
+		if len(m[1]) > 24 {
+			t.Errorf("%s: map variable %s is %d characters, want 24 or fewer", h, m[1], len(m[1]))
+		}
+		if !strings.Contains(out, "proxy_set_header Connection "+m[1]+";") {
+			t.Errorf("%s: Connection header does not use %s", h, m[1])
+		}
+	}
+	a := TLS{Hosts: []string{"a.example.com"}, Email: "ops@example.com", Proxy: &Proxy{Port: 1}}
+	b := TLS{Hosts: []string{"b.example.com"}, Email: "ops@example.com", Proxy: &Proxy{Port: 1}}
+	if a.upgradeVar() == b.upgradeVar() {
+		t.Error("two hosts share one map name, and map names are global across conf.d")
 	}
 }
