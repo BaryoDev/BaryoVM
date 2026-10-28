@@ -8,6 +8,13 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- **`stack env set | list | unset`.** Edit a stack's env file on the VM without ssh. The value comes
+  from a no-echo prompt or piped stdin and travels on the ssh session's stdin, never on a command
+  line. The file is created if missing and kept at mode 600. `--recreate` runs
+  `compose up -d --force-recreate` after a write. `-o json` carries keys, never values. ([#147])
+
 ## [0.5.0] - 2026-10-20
 
 BaryoVM can now tell a Windows host from a Linux one, install a GitHub Actions runner, scan a
@@ -321,6 +328,7 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#23]: https://github.com/BaryoDev/BaryoVM/issues/23
 [#12]: https://github.com/BaryoDev/BaryoVM/issues/12
 [#111]: https://github.com/BaryoDev/BaryoVM/issues/111
+[#147]: https://github.com/BaryoDev/BaryoVM/issues/147
 [#116]: https://github.com/BaryoDev/BaryoVM/issues/116
 [#118]: https://github.com/BaryoDev/BaryoVM/issues/118
 [#126]: https://github.com/BaryoDev/BaryoVM/issues/126
