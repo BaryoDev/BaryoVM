@@ -122,6 +122,43 @@ func TestTLSRejectsOtherBadFields(t *testing.T) {
 	}
 }
 
+func TestStaticVhostDeniesDotFiles(t *testing.T) {
+	tl := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com"}
+	out := tl.Vhost("/var/www/x", bothSSL)
+	wk := strings.Index(out, "location ^~ /.well-known/")
+	dot := strings.Index(out, `location ~ /\. {`)
+	root := strings.Index(out, "location / {")
+	if wk < 0 || dot < 0 || !(wk < dot && dot < root) {
+		t.Fatalf("want .well-known, then the dot rule, then location /:\n%s", out)
+	}
+	proxy := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com", Proxy: &Proxy{Port: 80}}
+	if strings.Contains(proxy.Vhost("/x", bothSSL), `location ~ /\.`) {
+		t.Fatal("a proxy vhost serves no files, it should not carry the dot rule")
+	}
+}
+
+func TestTLSRefusesRootsThatExposeTheHost(t *testing.T) {
+	for _, r := range []string{"/", "/etc", "/root", "/home", "/var", "/usr", "/opt", "/etc/", "/srv/../etc", "/srv/site/..", "/../x"} {
+		tl := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com", Root: r}
+		if err := tl.Validate("/var/www/x"); err == nil {
+			t.Errorf("root %q was accepted", r)
+		}
+	}
+	tl := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com"}
+	if err := tl.Validate("/etc"); err == nil {
+		t.Error("remoteRoot /etc was accepted as the fallback root")
+	}
+}
+
+func TestTLSAcceptsASubdirectoryOfASystemRoot(t *testing.T) {
+	for _, r := range []string{"/opt/site/out", "/var/www/example", "/srv/site"} {
+		tl := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com", Root: r}
+		if err := tl.Validate("/unused"); err != nil {
+			t.Errorf("root %q refused: %v", r, err)
+		}
+	}
+}
+
 func TestLoadValidatesTLS(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.json")
