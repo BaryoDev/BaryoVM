@@ -138,6 +138,17 @@ func (t *TLS) Validate(remoteRoot string) error {
 	if !safePathRe.MatchString(root) {
 		return fmt.Errorf("tls: root %q must be an absolute path of plain characters", root)
 	}
+	for _, seg := range strings.Split(root, "/") {
+		if seg == ".." {
+			return fmt.Errorf("tls: root %q must not contain a .. segment", root)
+		}
+	}
+	// A system directory as a web root publishes the host. The fallback to remoteRoot makes this
+	// easy to hit by accident, so name the value and the way out.
+	switch strings.TrimRight(root, "/") {
+	case "", "/etc", "/root", "/home", "/var", "/usr", "/opt":
+		return fmt.Errorf("tls: root %q would publish a system directory: set tls.root to the site's own directory", root)
+	}
 	return nil
 }
 
@@ -254,6 +265,11 @@ func (t *TLS) Vhost(remoteRoot string, f SSLFiles) string {
 
 	if t.Proxy == nil {
 		b.WriteString("    root " + t.staticRoot(remoteRoot) + ";\n    index index.html;\n\n")
+		// The root defaults to remoteRoot, which for a compose stack is the compose directory and
+		// holds its .env. Dot files are never served; /.well-known/ stays reachable (ACME,
+		// security.txt) and is matched first with ^~ so the regex rule below cannot catch it.
+		b.WriteString("    location ^~ /.well-known/ {\n        try_files $uri =404;\n    }\n\n")
+		b.WriteString("    location ~ /\\. {\n        deny all;\n        return 404;\n    }\n\n")
 		b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n}\n")
 		return b.String()
 	}
