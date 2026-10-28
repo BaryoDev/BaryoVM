@@ -36,6 +36,10 @@ type Manifest struct {
 	Exclude    []string `json:"exclude,omitempty"` // rsync excludes (bin, obj, node_modules, .next, .git…)
 	Builds     []Build  `json:"builds"`            // images to build after syncing
 
+	// TLS, when set, makes `stack release` (and `stack tls`) write the site's nginx vhost and get
+	// its certificate. See TLS.
+	TLS *TLS `json:"tls,omitempty"`
+
 	// Sudo runs this release's remote steps as root: the rsync on the far side, the image builds,
 	// the preDeploy and postDeploy hooks, and the compose up. Needed when remoteRoot is a
 	// root-owned path such as a webroot; without it rsync fails on the first write and the deploy
@@ -124,6 +128,11 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 	}
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
+	}
+	if m.TLS != nil {
+		if err := m.TLS.Validate(m.RemoteRoot); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	if len(m.Exclude) == 0 {
 		m.Exclude = []string{"bin", "obj", "node_modules", ".next", ".git"}

@@ -8,6 +8,14 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- **`tls` block in the release manifest, and `stack tls <name>`.** Writes the site's nginx vhost
+  (static root or a proxy to a local port) and gets the certificate with certbot, then runs
+  `nginx -t` and reloads. Safe to rerun. A vhost not written by BaryoVM is refused unless `--adopt`,
+  and a config that fails `nginx -t` is rolled back without a reload. `--dry-run` prints the configs
+  and commands. ([#49])
+
 ## [0.5.0] - 2026-10-20
 
 BaryoVM can now tell a Windows host from a Linux one, install a GitHub Actions runner, scan a
@@ -325,3 +333,4 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#118]: https://github.com/BaryoDev/BaryoVM/issues/118
 [#126]: https://github.com/BaryoDev/BaryoVM/issues/126
 [#127]: https://github.com/BaryoDev/BaryoVM/issues/127
+[#49]: https://github.com/BaryoDev/BaryoVM/issues/49
