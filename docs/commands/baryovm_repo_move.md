@@ -70,4 +70,4 @@ baryovm repo move <stack> [flags]
 
 ### SEE ALSO
 
-* [baryovm repo](baryovm_repo.md)	 - Move a stack's source repository to another Git host
+* [baryovm repo](baryovm_repo.md)	 - Move a repository, scaffold its release CI, and verify trusted publishing

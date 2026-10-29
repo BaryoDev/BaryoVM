@@ -1,0 +1,2 @@
+# Code owners are asked for review on every pull request. Branch protection can require it.
+* @@CODEOWNER@@

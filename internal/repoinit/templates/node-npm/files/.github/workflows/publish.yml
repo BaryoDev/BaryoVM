@@ -1,0 +1,115 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check trusted publishing and publish nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Deny by default for the whole file. The job below grants itself exactly what it needs.
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm trusted publishing: lets the runner mint the OIDC token npm exchanges
+      # for short-lived publish credentials. No NPM_TOKEN secret exists in this repository.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No `cache: npm`: that path also writes `always-auth`, which npm 11 rejects.
+
+      # Trusted publishing needs npm 11.5.1 or newer. Pinned, because this job holds the OIDC
+      # publish right and should not run whatever `latest` points at on the day. Bump it by hand.
+      - name: Use a trusted-publishing-capable npm
+        run: |
+          npm install -g npm@12.0.2
+          echo "node $(node --version) / npm $(npm --version)"
+
+      - run: npm ci
+
+      - run: npm run build --if-present
+
+      - run: npm test --if-present
+
+      - name: Confirm tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match package.json version $VERSION" && exit 1
+          fi
+
+      # npm's publish path collapses every trusted-publishing problem into ENEEDAUTH without
+      # naming the cause. This asks the registry directly, so a dry run proves the setup.
+      # It runs on every run, dry or not: obtaining a token publishes nothing, and it fails a
+      # real release early instead of at the publish step.
+      #   HTTP 201  token issued, trusted publishing is configured
+      #   HTTP 404  no trusted publisher record for that package
+      # `baryovm repo verify` reads the result of this step.
+      - name: Check the npm trusted publisher (OIDC exchange)
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" \
+            | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).value')
+
+          echo "=== OIDC claims this run presents ==="
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
+            | node -pe 'const c=JSON.parse(require("fs").readFileSync(0,"utf8"));JSON.stringify({repository:c.repository,job_workflow_ref:c.job_workflow_ref,ref:c.ref,environment:c.environment},null,2)'
+
+          # Every publishable package is asked. For a workspace repository, list the workspace
+          # package names here as well.
+          PACKAGES=$(node -pe 'const p=require("./package.json");p.private?"":p.name')
+          test -n "$PACKAGES" || { echo "::error::No publishable package in package.json"; exit 1; }
+          MISSING=""
+
+          for PKG in $PACKAGES; do
+            echo "=== $PKG ==="
+            CODE=$(curl -sS -o /tmp/body -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$(node -pe 'encodeURIComponent(process.argv[1])' "$PKG")")
+            echo "HTTP $CODE"
+            if [ "$CODE" = "201" ]; then
+              echo "token issued"
+            else
+              head -c 600 /tmp/body; echo
+              MISSING="$MISSING $PKG"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::No working trusted publisher for:$MISSING" && exit 1
+          fi
+
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
+        run: |
+          # npm only tries the OIDC exchange when NO credential is configured for the registry.
+          # A registry-url in setup-node writes an npmrc with an empty auth token, which skips
+          # OIDC, so the line has to be absent. A bare registry line is all that is needed.
+          printf 'registry=https://registry.npmjs.org/\n' > "$RUNNER_TEMP/.npmrc"
+          npm publish --access public
+        env:
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc

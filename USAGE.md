@@ -1518,6 +1518,45 @@ The old repository is never deleted or archived. After the checks pass the comma
 
 Not covered: importing issues into Azure Boards, and rewriting CI workflow files.
 
+## Scaffolding release CI and checking trusted publishing
+
+```sh
+baryovm repo init acme/widgets --template dotnet-nuget --path ~/src/widgets          # plan only
+baryovm repo init acme/widgets --template dotnet-nuget --path ~/src/widgets --yes    # do it
+baryovm repo verify acme/widgets --template dotnet-nuget
+```
+
+`repo init <owner/repo> --template <name>` writes the release workflows and the repository furniture (CODEOWNERS, issue templates, CONTRIBUTING) into a local checkout (`--path`, default `.`), applies branch protection through the GitHub API, and prints the four values to enter for trusted publishing: owner, repository, workflow file, environment. Without `--yes`, or with `--dry-run`, it prints that plan and writes nothing, makes no GitHub call and reads no token. `-o json` gives the plan or the result as data.
+
+| Flag | Default | |
+|---|---|---|
+| `--template` | required | `dotnet-nuget` (nuget.org) or `node-npm` (npmjs.com), or one from `--templates-dir` |
+| `--templates-dir` | none | a directory of your own templates; one named like a built-in replaces it |
+| `--path` | `.` | the local checkout to write into |
+| `--codeowner` | `@<owner>` | the CODEOWNERS handle, `@user` or `@org/team` |
+| `--branch` | the default branch | the branch to protect |
+| `--checks` | the template's | required status checks, repeatable; replaces the template's |
+| `--approvals` | `0` | approving reviews required, besides the code owner review |
+| `--token-ref` | none | GitHub token reference (`env:NAME`, `file:PATH`, `cmd:<command>`); without it `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token` |
+| `--replace-protection` | off | replace branch protection that already exists |
+| `--force` | off | overwrite files that already exist |
+| `--yes` | off | write the files and call GitHub |
+
+A file that already exists is never overwritten without `--force`. It is listed as `exists` and left alone, so a rerun is safe, and a symlink is never written through. Branch protection requires the template's checks and an up to date branch, requires a code owner review, and leaves admins able to push. A branch that already has protection is left alone and reported as `protection exists, not changed`, because the API call replaces the whole rule and would reset hand-set options (admin enforcement, push restrictions, signatures, linear history); `--replace-protection` replaces it. A template path that leaves the checkout (a symlinked folder, for example) is shown as `refused` in the plan, and nothing is written. A custom template may not write under `.git`, and `--codeowner` takes one handle with no spaces or line breaks. The files are written first: if the GitHub call fails they stay, and a rerun skips them and retries the call. Every GitHub call has a 30 second timeout.
+
+BaryoVM does not create the trusted publishing policy and never claims to. nuget.org and npm create it through their web pages and have no API for it, so you do it once, by hand. The order that works, which `repo init` prints:
+
+1. `repo init --yes` writes the workflow and protects the branch.
+2. Commit and push the files, so the workflow exists on the default branch.
+3. Create the policy on nuget.org or npmjs.com with the values `repo init` printed.
+4. `repo verify` says whether it took.
+
+Creating the policy before step 2 names a workflow file that is not there yet, and nothing complains until the first publish.
+
+`repo verify <owner/repo>` starts the publish workflow's dry run (`workflow_dispatch` with `dry_run` on), waits for the run, and reads whether the OIDC exchange step succeeded. The exchange runs on dry runs too and publishes nothing. `--template` gives the workflow file and step names; `--workflow` and `--step` (repeatable) override them. `--ref` picks the branch, `--timeout` (default 15 minutes) how long to wait. The verdict is `took` when every OIDC step succeeded, `did-not-take` when one failed (the values to check are printed again), and `inconclusive` when the run stopped before the step or did not finish in time. It reads only a run that is a `workflow_dispatch` on the ref, created at or after the dispatch (10 seconds of clock skew allowed). It is `inconclusive` when more than one run matches (it will not guess) or when no OIDC step is named. Only `took` exits zero. It needs a token with the actions write permission.
+
+A template is a directory with a `template.json` (registry, workflow file name, environment, the OIDC step names, required checks, notes) and a `files/` tree. Text in the files may use `@@OWNER@@`, `@@REPO@@`, `@@FULL_NAME@@` and `@@CODEOWNER@@`. The built-in templates pin every action to a full commit sha and keep `id-token: write`. Whoever can push a `v*` tag can publish, so both templates and the output say to protect `v*` tags with a repository ruleset or limit who can push tags.
+
 ## Guarding commits, pushes and PR text
 
 `baryovm git` and `baryovm gh` run the real tool after checking for keys. Agents
@@ -1647,6 +1686,53 @@ export BARYOVM_ALLOWED_REGISTRIES=registry.npmjs.org,api.nuget.org   # alternati
 
 A refusal exits 1, names `file:line (rule)` and never prints the value. Flags belong to npm and dotnet;
 set `BARYOVM_OUTPUT=json` for a JSON refusal. OTP and Trusted Publishing stay with you.
+
+### Shipping a release
+
+`baryovm ship <name>` runs the release gate, tags, watches the publish run, checks the registry and
+creates the GitHub release. `baryovm stack publish <name>` runs the same gate, then tags and pushes the
+tag and stops. BaryoVM never publishes and never holds a registry credential: the repository's own
+workflow publishes, and BaryoVM only reads the registry. The GitHub token comes from `--token-ref`
+(default `cmd:gh auth token`; `env:` and `file:` work too) and is used for the run reads and the release.
+
+```sh
+baryovm ship shop --dry-run          # every check, no tag, no push, no token needed
+baryovm ship shop --yes              # tag, push, watch, verify, release
+baryovm stack publish shop --yes     # gate, tag, push the tag
+baryovm stack set-publish shop --file publish.json
+```
+
+The spec comes from `--file`, then the stack's `publish` setting (also valid in a project file), then
+`baryovm.publish.json` in the repository:
+
+```json
+{"registry": "nuget", "versionFrom": "src/Lib/Lib.csproj", "changelog": "CHANGELOG.md",
+ "requireDeployed": "shop", "assert": ["Microsoft.EntityFrameworkCore\" version=\"8.0.30\""]}
+```
+
+`registry` is `nuget` or `npm`. Optional: `tag` (default `v{version}`), `packages`, `registryUrl`,
+`remote`, `branch`, `repo`, `workflow`, `publishStep` (default `publish`), `publishJob`.
+
+`publishStep` is the exact name of the workflow step that publishes (case does not matter). Every step
+with that name must have succeeded, so a skipped leg of a matrix refuses, and no match refuses.
+`publishJob` limits the match to one job. The version read from the project file must be a plain
+version (`1.3.0`, `1.3.0-beta.1`); anything with `/`, `..` or a leading `-` is refused.
+
+The gate reports every check and refuses with each cause named: the tree is not clean, the branch is not
+the default branch, the branch is not synced with the remote, the tag exists at another commit, the
+changelog has no section for that exact version (`1.2.4-beta` and `1.2.40` do not count), the NuGet
+`PackageReleaseNotes` does not mention the version, a package is already published at the version, or
+the `requireDeployed` stack last released a different commit.
+
+After the tag is pushed, `ship` finds the run for it and waits for success. A green run whose publish
+step was skipped is a failure. It then polls the registry until every package resolves, reads the
+published artifact's metadata and checks its version and each `assert` line, and only then creates the
+release, with the changelog section as its notes.
+
+A rerun after an interrupted watch finds the tag already at HEAD and picks up from the watch, without a
+second tag. Without a terminal, or under `-o json`, a real run needs `--yes`. Every outbound call has a
+timeout; `--timeout` bounds the run watch. What was checked and the values seen are saved to
+`$BARYOVM_HOME/ship/<name>/<version>.json`, and `-o json` returns the same record.
 
 ### Deploying to the cloud
 
