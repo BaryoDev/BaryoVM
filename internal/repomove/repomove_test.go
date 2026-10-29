@@ -97,7 +97,7 @@ func TestRemoteCommandsQuoteEveryValue(t *testing.T) {
 	dir := "/opt/it's here; rm -rf x"
 	for _, c := range []string{GetURLCmd(true, "app", dir), StatusCmd(true, "app", dir), SetURLCmd(true, "app", dir, "https://h/o/r'; id #"), ReferencesCmd(true, dir), OwnerCmd(true, dir), FindCmd(true, []string{dir})} {
 		if !strings.HasPrefix(c, "sudo -n ") {
-			t.Errorf("not elevated: %s", c)
+			t.Errorf("not run with sudo: %s", c)
 		}
 		if strings.Contains(c, "it's here") {
 			t.Errorf("unquoted value in %s", c)
@@ -145,6 +145,18 @@ func TestCredentialHelperValueQuotesAHostilePath(t *testing.T) {
 	ap, _ := CredApproveCmd(false, "app", "/opt/app")
 	if !strings.Contains(ap, "-L ") || !strings.Contains(ap, "umask 077") {
 		t.Errorf("approve does not refuse a symlink under umask 077: %s", ap)
+	}
+}
+
+func TestParseFindsSplitsOnNULAndDropsTrickyNames(t *testing.T) {
+	out := "/opt/app/.git\x00/opt/evil\n/etc/.git\x00/opt/../etc/x/.git\x00/opt/a/../b/.git\x00/opt/ok two/.git\x00/opt/bell\x07/.git\x00/opt/app/.git\x00"
+	got := ParseFinds(out)
+	want := []string{"/opt/app", "/opt/ok two"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if !strings.Contains(FindCmd(false, []string{"/opt"}), "-print0") {
+		t.Error("find does not use -print0")
 	}
 }
 

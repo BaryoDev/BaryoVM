@@ -362,6 +362,10 @@ func discover(o Options, d Deps) ([]Checkout, []Reference, error) {
 				checkouts = append(checkouts, Checkout{VM: v.Name, Dir: dir, Skipped: "refused, no git command was run: " + oerr.Error()})
 				continue
 			}
+			if owner != "root" && owner != v.User {
+				checkouts = append(checkouts, Checkout{VM: v.Name, Dir: dir, Owner: owner, Skipped: "needs attention, no git command was run: owned by " + owner + ", not root or the SSH user " + v.User})
+				continue
+			}
 			url, err := r.Run(GetURLCmd(v.Sudo, owner, dir))
 			if err != nil {
 				continue // a .git with no origin is not ours

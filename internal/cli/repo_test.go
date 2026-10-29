@@ -193,7 +193,7 @@ func (v *fakeCheckoutVM) Run(cmd string) (string, error) {
 		sort.Strings(dirs)
 		var b strings.Builder
 		for _, d := range dirs {
-			b.WriteString(d + "/.git\n")
+			b.WriteString(d + "/.git\x00")
 		}
 		return b.String(), nil
 	}
@@ -203,7 +203,7 @@ func (v *fakeCheckoutVM) Run(cmd string) (string, error) {
 				if o, ok := v.owners[d]; ok {
 					return o, nil
 				}
-				return "app\napp\n", nil
+				return "opc\nopc\n", nil
 			}
 		}
 	}
@@ -348,7 +348,7 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 			t.Fatalf("missing call %s in %v", name, w.calls)
 		}
 	}
-	if !(iSrc < iExport && iExport < iCreate && iCreate < iClone && iClone < iPush && iPush < iRename && iRename < iAdd) {
+	if iSrc >= iExport || iExport >= iCreate || iCreate >= iClone || iClone >= iPush || iPush >= iRename || iRename >= iAdd {
 		t.Fatalf("calls out of order: %v", w.calls)
 	}
 	if strings.Contains(strings.Join(w.calls, "\n"), "--mirror "+newURL) || strings.Contains(strings.Join(w.calls, "\n"), "--force") || strings.Contains(strings.Join(w.calls, "\n"), " -f ") {
@@ -361,7 +361,7 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 			setURL = c
 		}
 	}
-	want := "sudo -n -u 'app' env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor= -c core.hooksPath=/dev/null -C '/opt/deploy/app' remote set-url origin '" + newURL + "'"
+	want := "sudo -n -u 'opc' env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor= -c core.hooksPath=/dev/null -C '/opt/deploy/app' remote set-url origin '" + newURL + "'"
 	if setURL != want {
 		t.Errorf("set-url command: %q", setURL)
 	}
@@ -528,9 +528,17 @@ func TestRepoMoveFailureMidwayLeavesTheOldRemoteInPlace(t *testing.T) {
 		cron:       map[string]string{},
 	}
 	w.vms["vm2"] = v2
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Stacks = append(store.Stacks, fleet.Stack{Name: "dev", VM: "vm2", Dir: "/srv"})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
 	args, _ := withExport(t, []string{"app", "--to", newURL, "--local", "/work/app", "--export-dir", "", "--yes"})
 	w.hosts[newURL] = map[string]string{}
-	_, _, _, err := runMove(t, args...)
+	_, _, _, err = runMove(t, args...)
 	if err == nil || !strings.Contains(err.Error(), "repoint vm2:/srv/dev-stack") {
 		t.Fatalf("got %v", err)
 	}
@@ -543,7 +551,8 @@ func TestRepoMoveFailureMidwayLeavesTheOldRemoteInPlace(t *testing.T) {
 	if w.localRemotes["origin"] != oldURL+".git" || w.localRemotes["old-origin"] != "" {
 		t.Errorf("local clone changed: %v", w.localRemotes)
 	}
-	if reloadStack(t, "app").Source != oldURL {
+	after, _ := fleet.Load()
+	if st := after.FindStack("app"); st == nil || st.Source != oldURL {
 		t.Error("source recorded after a failed move")
 	}
 }
@@ -587,7 +596,7 @@ func TestRepoMoveRerunAfterAFinishedMoveChangesNothing(t *testing.T) {
 	// no --from: the stack already records the new source, so nothing is even read
 	before = len(w.calls)
 	noFrom, _ := withExport(t, []string{"app", "--to", newURL, "--local", "/work/app", "--vm", "vm1", "--export-dir", dir, "--yes"})
-	rep, out, _, err = runMove(t, noFrom...)
+	rep, _, _, err = runMove(t, noFrom...)
 	if err != nil || !rep.AlreadyMoved || len(w.calls) != before {
 		t.Fatalf("second rerun: %v %+v calls %v", err, rep, w.calls[before:])
 	}
@@ -678,8 +687,39 @@ func TestRepoMoveRefusesACheckoutOwnedByTheWrongUserBeforeAnyGitCommand(t *testi
 	}
 }
 
+func TestRepoMoveRefusesAnOwnerThatIsNeitherRootNorTheSSHUser(t *testing.T) {
+	const token = "tok-owner-test-1"
+	t.Setenv("BARYOVM_RM_TOKEN", token)
+	w, vm := repoFixture(t)
+	w.hosts[newURL] = map[string]string{}
+	vm.owners = map[string]string{"/opt/deploy/app": "mallory\nmallory\n"}
+	args, _ := withExport(t, moveArgs("--yes", "--read-cred", "env:BARYOVM_RM_TOKEN"))
+	rep, stdout, stderr, err := runMove(t, args...)
+	if err != nil {
+		t.Fatalf("%v %s %s", err, stdout, stderr)
+	}
+	for _, c := range vm.cmds {
+		if strings.Contains(c, "git ") && strings.Contains(c, "/opt/deploy/app'") {
+			t.Errorf("git ran on a checkout owned by another user: %s", c)
+		}
+	}
+	if len(vm.stdin) != 0 {
+		t.Errorf("a credential was written: %q", vm.stdin)
+	}
+	var flagged bool
+	for _, c := range rep.Checkouts {
+		if c.Dir == "/opt/deploy/app" && strings.Contains(c.Skipped, "needs attention") && !c.Repointed {
+			flagged = true
+		}
+	}
+	if !flagged {
+		t.Errorf("not reported: %+v", rep.Checkouts)
+	}
+}
+
 func TestRepoMoveOnlyLooksUnderTheDirectoriesOfRegisteredStacks(t *testing.T) {
-	_, vm := repoFixture(t)
+	w, vm := repoFixture(t)
+	w.hosts[newURL] = map[string]string{}
 	vm.origins["/srv/elsewhere"] = oldURL + ".git"
 	args, _ := withExport(t, moveArgs("--from", oldURL, "--yes"))
 	if _, _, _, err := runMove(t, args...); err != nil {
