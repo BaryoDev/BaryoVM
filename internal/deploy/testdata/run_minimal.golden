@@ -1,0 +1,1 @@
+docker run -d --name 'web' --restart unless-stopped 'example/app:1'

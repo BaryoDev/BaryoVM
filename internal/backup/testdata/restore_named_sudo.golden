@@ -1,0 +1,10 @@
+set -e
+BK='/srv/bk'
+f='db-1.dump'
+case "$f" in /*) ;; *) f="$BK/$f" ;; esac
+[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }
+echo "restoring $f"
+sudo -n docker exec -i 'app-postgres-1' dropdb -U 'app' --force --if-exists 'appdb'
+sudo -n docker exec -i 'app-postgres-1' createdb -U 'app' 'appdb'
+sudo -n docker exec -i 'app-postgres-1' pg_restore -U 'app' -d 'appdb' < "$f"
+echo "restored from $f"

@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "action": "vm ping",
+  "message": "pong",
+  "data": {
+    "rtt": 12
+  }
+}

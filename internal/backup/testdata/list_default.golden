@@ -1,0 +1,5 @@
+BK="$HOME/app-backups"
+if [ ! -e "$BK" ]; then echo '(no backups yet)'
+elif [ ! -r "$BK" ] || [ ! -x "$BK" ]; then echo "cannot read $BK" >&2; exit 1
+else ls -1t "$BK"/db-*.dump 2>/dev/null || echo '(no backups yet)'
+fi
