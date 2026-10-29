@@ -19,7 +19,8 @@ owner-only (0600) and references SSH key paths, not key contents.
 - Install Docker on a VM (idempotent).
 - Deploy single containers, and manage docker compose stacks (the day-to-day path).
 - `doctor` checks the local tools a release actually runs, and installs what it can with `--fix`.
-- Every command supports `-o json` for machine consumers (MAUI/MCP/agents).
+- Every command supports `-o json` for machine consumers (MAUI/MCP/agents). One JSON document per run, success or failure, with the
+  command name in `action`, even for a bad flag. The shape is in [docs/JSON.md](docs/JSON.md).
 
 ## What is built but untested
 

@@ -31,8 +31,12 @@ var lastRun *ranCommand
 // write the line prints one warning and never changes the returned error.
 func runRoot(root *cobra.Command) error {
 	lastRun = nil
+	failedPath = ""
 	start := time.Now()
-	_, err := root.ExecuteC()
+	ran, err := root.ExecuteC()
+	if ran != nil {
+		failedPath = ran.CommandPath()
+	}
 	if run := lastRun; run != nil {
 		if e, ok := activityEntry(run, err, time.Since(start)); ok {
 			if werr := activity.Record(e); werr != nil {

@@ -159,14 +159,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	})
 
 	if ui.JSON() {
-		data := map[string]string{
-			"updated":    fmt.Sprint(res.Updated),
-			"rolledBack": fmt.Sprint(res.RolledBack),
-			"services":   strings.Join(res.Services, ","),
-			"checked":    strings.Join(res.Checked, ","),
-			"health":     res.Health,
-			"skipped":    res.Skipped,
-		}
+		data := updateData(res)
 		if runErr != nil {
 			ui.Emit(ui.Result{OK: false, Action: action, Message: name, Error: runErr.Error(), Data: data})
 			return runErr
@@ -287,4 +280,19 @@ func newStackSetUpdateCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit updates to these services")
 	cmd.Flags().BoolVar(&noDB, "no-database", false, "this stack has no database, so --auto may update it with no backup (--no-database=false to undo)")
 	return cmd
+}
+
+// updateData is the envelope data of `stack update`. The string fields are the published shape and
+// stay as they are, "true" and a comma-joined list included. "result" is the same outcome with real
+// booleans and lists, which is what new consumers should read.
+func updateData(res update.Result) map[string]any {
+	return map[string]any{
+		"result":     res,
+		"updated":    fmt.Sprint(res.Updated),
+		"rolledBack": fmt.Sprint(res.RolledBack),
+		"services":   strings.Join(res.Services, ","),
+		"checked":    strings.Join(res.Checked, ","),
+		"health":     res.Health,
+		"skipped":    res.Skipped,
+	}
 }
