@@ -635,6 +635,10 @@ func TestGhBypassesAreRefused(t *testing.T) {
 		{"gh", "api", "repos/o/r/issues", "--field", "title=x"},
 		{"gh", "api", "graphql", "-F", "query=@q.graphql"},
 		{"gh", "api", "repos/o/r", "--input", "body.json"},
+		{"gh", "api", "-iXDELETE", "repos/o/r"},
+		{"gh", "api", "-iX", "DELETE", "repos/o/r"},
+		{"gh", "api", "repos/o/r/issues", "-iftitle=x"},
+		{"gh", "api", "repos/o/r", "-zXDELETE"},
 	} {
 		ran, err := runRule(t, rulesRunner("", nil), args...)
 		ruleRefused(t, ran, err, "baryovm.rules.off")
@@ -644,6 +648,9 @@ func TestGhBypassesAreRefused(t *testing.T) {
 	for _, args := range [][]string{
 		{"gh", "api", "repos/o/r"},
 		{"gh", "api", "-X", "GET", "search/issues", "-f", "q=x"},
+		{"gh", "api", "-iXGET", "repos/o/r"},
+		{"gh", "api", "repos/o/r", "-H", "-XDELETE"},
+		{"gh", "api", "repos/o/r", "-q", ".name"},
 		{"gh", "alias", "list"},
 	} {
 		ran, err := runRule(t, rulesRunner("", nil), args...)
