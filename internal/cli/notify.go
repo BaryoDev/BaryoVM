@@ -27,7 +27,6 @@ const (
 	// show up in process listings.
 	notifyEnvVar = "BARYOVM_NOTIFY_URL"
 
-	notifyTimeout  = 10 * time.Second
 	notifyMaxBody  = 64 << 10
 	notifyMaxError = 2 << 10
 )
@@ -50,6 +49,7 @@ type notifyResult struct {
 var (
 	sendWebhook      = postWebhook
 	notifyRetryDelay = 2 * time.Second
+	notifyTimeout    = 10 * time.Second
 )
 
 // resolveNotify turns the flags and the environment into options, refusing a bad URL before any

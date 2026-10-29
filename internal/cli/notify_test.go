@@ -172,3 +172,50 @@ func TestOversizedEnvelopeIsBounded(t *testing.T) {
 		t.Fatalf("body is %d bytes", len(b))
 	}
 }
+
+func TestARedirectIsNotFollowed(t *testing.T) {
+	noRetryWait(t)
+	var elsewhere int32
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&elsewhere, 1)
+	}))
+	defer second.Close()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	defer first.Close()
+
+	res := sendNotify(first.URL+"/hook/token", ui.Result{OK: false, Action: "stack update"})
+
+	if n := atomic.LoadInt32(&elsewhere); n != 0 {
+		t.Errorf("the redirect target got %d requests, want 0", n)
+	}
+	if res.OK || !strings.Contains(res.Error, "307") {
+		t.Errorf("a redirect must fail the send, got %+v", res)
+	}
+}
+
+func TestASlowEndpointTimesOut(t *testing.T) {
+	noRetryWait(t)
+	old := notifyTimeout
+	notifyTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { notifyTimeout = old })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	start := time.Now()
+	res := sendNotify(srv.URL+"/x", ui.Result{Action: "stack update"})
+	if res.OK || res.Error == "" {
+		t.Errorf("a slow endpoint must fail the send, got %+v", res)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("the send waited %s, the timeout was not applied", time.Since(start))
+	}
+}
