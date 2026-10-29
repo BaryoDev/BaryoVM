@@ -119,3 +119,22 @@ func TestAddingANewStackTakesOnlyItsFlags(t *testing.T) {
 		t.Errorf("new stack picked up settings it was not given: %+v", *got)
 	}
 }
+
+// The name ends up in file names on the host (the release record) and in the container-name
+// check, so a slash, space or leading dot must be refused before anything is stored.
+func TestStackAddRefusesUnsafeNames(t *testing.T) {
+	configuredStackFixture(t)
+	for _, name := range []string{"a/b", "a b", ".hidden", "../x", "a;b", "a'b"} {
+		cmd := newStackAddCmd()
+		cmd.SilenceUsage, cmd.SilenceErrors = true, true
+		cmd.SetArgs([]string{name, "--vm", "vm1", "--path", "/opt/x"})
+		if err := cmd.Execute(); err == nil {
+			t.Errorf("%q should be refused", name)
+		}
+	}
+	store, _ := fleet.Load()
+	if len(store.Stacks) != 1 {
+		t.Errorf("a refused name was stored: %+v", store.Stacks)
+	}
+	runCmd(t, newStackAddCmd(), nil, true, "ok-name_1.2", "--vm", "vm1", "--path", "/opt/ok")
+}

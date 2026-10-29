@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,17 @@ func newStackCmd() *cobra.Command {
 	return cmd
 }
 
+var stackNameRe = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
+
+// validStackName keeps the name safe to use in a file name on the host (the release record) and
+// in messages. Names already stored are not checked again.
+func validStackName(name string) error {
+	if !stackNameRe.MatchString(name) {
+		return fmt.Errorf("stack name %q is not allowed: use letters, digits, '-', '_' and '.', and do not start with '.'", name)
+	}
+	return nil
+}
+
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
 	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile string
@@ -47,6 +59,9 @@ func newStackAddCmd() *cobra.Command {
 		Short: "Register a compose stack (a project dir on a VM)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validStackName(args[0]); err != nil {
+				return err
+			}
 			store, err := fleet.Load()
 			if err != nil {
 				return err
