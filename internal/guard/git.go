@@ -6,6 +6,7 @@ package guard
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -95,6 +96,8 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 		all   bool
 		paths []string
 		msgs  []string
+		// msgFiles are -F and --file message files: that text is published like any other.
+		msgFiles []string
 	)
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
@@ -113,6 +116,9 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 			if name == "--message" {
 				msgs = append(msgs, val)
 			}
+			if name == "--file" {
+				msgFiles = append(msgFiles, val)
+			}
 		case strings.HasPrefix(a, "-") && len(a) > 1:
 			for j := 1; j < len(a); j++ {
 				c := a[j]
@@ -127,6 +133,9 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 					}
 					if c == 'm' {
 						msgs = append(msgs, val)
+					}
+					if c == 'F' {
+						msgFiles = append(msgFiles, val)
 					}
 					break
 				}
@@ -158,10 +167,51 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 	for _, m := range msgs {
 		fs = append(fs, ScanText("commit message", m)...)
 	}
+	for _, mf := range msgFiles {
+		if mf == "-" {
+			return refuse(action, action+" refused: -F - reads the message from stdin, which cannot be checked. Write it to a file and pass that file", nil)
+		}
+		b, err := r.ReadFile(commitFilePath(globals, mf))
+		if err != nil {
+			return refuse(action, fmt.Sprintf("%s refused: cannot read the message file %s (%v). Check the path", action, mf, err), nil)
+		}
+		fs = append(fs, ScanText(mf, string(b))...)
+	}
 	if len(fs) > 0 {
 		return keyRefusal(action, "the commit", fs)
 	}
 	return allow(action)
+}
+
+// commitFilePath resolves a relative -F path against the -C directories git changes into before
+// it reads the file.
+func commitFilePath(globals []string, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	dir := ""
+	for i := 0; i+1 < len(globals); i++ {
+		if globals[i] == "-C" {
+			if filepath.IsAbs(globals[i+1]) {
+				dir = globals[i+1]
+			} else {
+				dir = filepath.Join(dir, globals[i+1])
+			}
+		}
+	}
+	return filepath.Join(dir, p)
+}
+
+// CheckCommitMsg is what the commit-msg hook runs on the message file git passes in.
+func CheckCommitMsg(r Runner, file string) Verdict {
+	b, err := r.ReadFile(file)
+	if err != nil {
+		return refuse("commit-msg", fmt.Sprintf("commit refused: cannot read the message file (%v)", err), nil)
+	}
+	if fs := ScanText("commit message", string(b)); len(fs) > 0 {
+		return keyRefusal("commit", "the commit message", fs)
+	}
+	return allow("commit-msg")
 }
 
 var (
@@ -176,6 +226,7 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 		all        bool
 		mirror     bool
 		tags       bool
+		del        bool
 	)
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
@@ -189,6 +240,8 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 			mirror = true
 		case a == "--tags":
 			tags = true
+		case a == "--delete" || a == "-d":
+			del = true
 		case strings.HasPrefix(a, "--"):
 			name, val, hasVal := strings.Cut(a, "=")
 			if !hasVal && pushValueLong[name] && i+1 < len(rest) {
@@ -201,6 +254,10 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 		case a == "-o" && i+1 < len(rest):
 			i++
 		case strings.HasPrefix(a, "-") && len(a) > 1:
+			// a cluster such as -fd; -o carries a value, so its letters are not flags
+			if !strings.HasPrefix(a, "-o") && strings.Contains(a, "d") {
+				del = true
+			}
 		default:
 			positional = append(positional, a)
 		}
@@ -217,24 +274,30 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 		remote = defaultPushRemote(r, globals)
 	}
 
-	// Resolve to a URL with local git commands only; nothing here touches the network.
+	// Resolve to URLs with local git commands only; nothing here touches the network. A remote can
+	// have several push URLs and git pushes to all of them, so each one must pass the policy.
 	isName := true
-	url, err := r.Git(globals, "remote", "get-url", "--push", remote)
-	url = strings.TrimSpace(url)
-	if err != nil || url == "" {
+	out, err := r.Git(globals, "remote", "get-url", "--push", "--all", remote)
+	urls := strings.Fields(out)
+	if err != nil || len(urls) == 0 {
 		if strings.ContainsAny(remote, "/:") {
-			url, isName = remote, false
+			urls, isName = []string{remote}, false
 		} else {
 			return refuse(action, fmt.Sprintf("%s refused: no remote named %q. List them with git remote -v", action, remote), nil)
 		}
 	}
-	host, err := ParseRemoteHost(url)
-	if err != nil {
-		return refuse(action, fmt.Sprintf("%s refused: %v. Push to a remote with a plain host", action, err), nil)
+	for _, url := range urls {
+		host, err := ParseRemoteHost(url)
+		if err != nil {
+			return refuse(action, fmt.Sprintf("%s refused: %v. Push to a remote with a plain host", action, err), nil)
+		}
+		if !pol.Allows(host) {
+			return refuse(action, fmt.Sprintf("%s refused: host %q is not in the allowed list (%s). Push to an allowed remote, or allow it with: git config --add %s %s",
+				action, host, strings.Join(pol.AllowedHosts, ", "), PolicyKey, host), nil)
+		}
 	}
-	if !pol.Allows(host) {
-		return refuse(action, fmt.Sprintf("%s refused: host %q is not in the allowed list (%s). Push to an allowed remote, or allow it with: git config --add %s %s",
-			action, host, strings.Join(pol.AllowedHosts, ", "), PolicyKey, host), nil)
+	if del {
+		return allow(action) // deleting remote refs sends no commits
 	}
 
 	var revs []string
@@ -269,7 +332,7 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 	logArgs := append([]string{"log", "-p", "--format="}, strings.Fields(logDiffFlags)...)
 	logArgs = append(logArgs, revs...)
 	logArgs = append(logArgs, "--not", not)
-	out, err := r.Git(globals, logArgs...)
+	out, err = r.Git(globals, logArgs...)
 	if err != nil {
 		return refuse(action, fmt.Sprintf("%s refused: could not list the commits to push (%v). Check the branch name", action, err), nil)
 	}

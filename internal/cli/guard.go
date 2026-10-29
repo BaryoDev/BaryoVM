@@ -34,12 +34,22 @@ func (osRunner) Git(globals []string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return string(out), errors.New(msg)
+			return string(out), &gitFailure{msg: msg, err: err}
 		}
 		return string(out), err
 	}
 	return string(out), nil
 }
+
+// gitFailure carries git's stderr as the message and keeps the underlying error, so the exit code
+// stays reachable with errors.As.
+type gitFailure struct {
+	msg string
+	err error
+}
+
+func (e *gitFailure) Error() string { return e.msg }
+func (e *gitFailure) Unwrap() error { return e.err }
 
 func (osRunner) ReadFile(p string) ([]byte, error) { return os.ReadFile(p) } // #nosec G304 -- path is a file the user named on the gh command line
 
@@ -59,17 +69,31 @@ func runReal(name string, args []string) (int, error) {
 	return 0, nil
 }
 
-// loadPolicy reads the allowed hosts from git config and BARYOVM_ALLOWED_HOSTS. A missing key is
-// not an error: no policy means no host restriction.
-func loadPolicy(globals []string) guard.Policy {
+// loadPolicy reads the allowed hosts from git config and BARYOVM_ALLOWED_HOSTS. git config exits 1
+// when the key is not set, which means no policy and no host restriction. Any other failure (a
+// broken config file, git missing) is returned: reading the policy wrong must not turn into
+// "everything is allowed".
+func loadPolicy(globals []string) (guard.Policy, error) {
 	var values []string
-	if out, err := guardRunner.Git(globals, "config", "--get-all", guard.PolicyKey); err == nil {
+	out, err := guardRunner.Git(globals, "config", "--get-all", guard.PolicyKey)
+	switch {
+	case err == nil:
 		values = append(values, strings.Split(out, "\n")...)
+	default:
+		var coded interface{ ExitCode() int }
+		if !errors.As(err, &coded) || coded.ExitCode() != 1 {
+			return guard.Policy{}, fmt.Errorf("cannot read %s from git config (%v): fix the config or run inside a git repository", guard.PolicyKey, err)
+		}
 	}
 	if env := os.Getenv("BARYOVM_ALLOWED_HOSTS"); env != "" {
 		values = append(values, env)
 	}
-	return guard.ParsePolicy(values)
+	return guard.ParsePolicy(values), nil
+}
+
+// policyRefusal is the verdict used when the policy cannot be read.
+func policyRefusal(action string, err error) guard.Verdict {
+	return guard.Verdict{Action: action, Reason: action + " refused: " + err.Error()}
 }
 
 // finishGuard turns a verdict into the command result. A refusal emits ui.Result with OK false and
@@ -194,7 +218,18 @@ func newGuardCheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return hookResult(guard.CheckPrePush(guardRunner, args[0], args[1], string(in), loadPolicy(nil)))
+			pol, perr := loadPolicy(nil)
+			if perr != nil {
+				return hookResult(policyRefusal("push", perr))
+			}
+			return hookResult(guard.CheckPrePush(guardRunner, args[0], args[1], string(in), pol))
+		},
+	}, &cobra.Command{
+		Use:   "commit-msg <file>",
+		Short: "Scan the commit message file for keys",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return hookResult(guard.CheckCommitMsg(guardRunner, args[0]))
 		},
 	})
 	return check

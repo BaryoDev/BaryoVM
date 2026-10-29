@@ -963,30 +963,41 @@ baryovm gh release create v1 --notes-file notes.md
 baryovm guard install-hooks            # pre-commit and pre-push hooks, same checks
 ```
 
-Checked: `git commit`, `git push`, `gh pr create`, `gh release create` and
-`gh issue create` (`--title`, `--body`, `--body-file`, `--notes`,
-`--notes-file`). Every other git and gh command passes straight through with the
-tool's own output and exit code. Flags after `git` or `gh` belong to that tool,
-so these two take none of their own; set `BARYOVM_OUTPUT=json` for a JSON
-refusal.
+Checked:
+
+- `git commit`: the staged diff, the working diff with `-a` or paths, the
+  message from `-m`, and the message file from `-F` or `--file`.
+- `git push`: the host of every push URL of the remote, then every commit not on
+  the remote. A delete (`--delete`, `-d`, `:branch`) skips the commit scan but
+  still gets the host check.
+- `gh pr`, `gh issue` and `gh release`, for `create`, `edit`, `comment` and
+  `review` where gh has them: `--title`, `--body`, `-b`, `--body-file`, `-F`,
+  `--notes`, `-n` and `--notes-file`. A repo flag such as `-R o/r` before the
+  verb is fine.
+
+Every other git and gh command passes straight through with the tool's own
+output and exit code. Flags after `git` or `gh` belong to that tool, so these
+two take none of their own; set `BARYOVM_OUTPUT=json` for a JSON refusal.
 
 The scanner looks for Google `AIza` keys, GitHub tokens, AWS access keys, Slack
-tokens, Stripe live keys, npm tokens and private key blocks. A refusal exits 1,
-names `file:line (rule)`, never prints the value, and does not run git or gh.
-Put `allow-secret` in a comment on a line to exempt a test fixture. A body from
-stdin (`-F -`) is refused because it cannot be checked; write it to a file.
-`git push` scans only commits not already on the remote.
+tokens, Stripe live keys, npm tokens, Anthropic (`sk-ant-`) and OpenAI (`sk-`,
+`sk-proj-`) keys, PGP private key blocks and other private key blocks. A refusal
+exits 1, names `file:line (rule)`, never prints the value, and does not run git
+or gh. Put `allow-secret` in a comment on a line to exempt a test fixture. A body
+or message from stdin (`-F -`) is refused because it cannot be checked; write it
+to a file. `git push` scans only commits not already on the remote.
 
 To limit where a repository may push, list the allowed hosts. With none set,
 every host is allowed. A push to any other host is refused before git contacts
-it.
+it. If the setting cannot be read (a broken git config, as opposed to unset),
+the command is refused rather than allowed.
 
 ```sh
 git config --add baryovm.allowedHosts github.com
 export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
 ```
 
-`guard install-hooks` writes `pre-commit` and `pre-push` hooks into the current
+`guard install-hooks` writes `pre-commit`, `commit-msg` and `pre-push` hooks into the current
 repository so commits made without the wrapper are checked too. It leaves a hook
 that is not BaryoVM's alone unless you pass `--force`, which keeps it as
 `<name>.baryovm-old`. The hooks fail when `baryovm` is not on PATH.

@@ -24,12 +24,24 @@ var cliFakeKey = "AI" + "za" + strings.Repeat("Q", 35)
 type fakeGuardRunner struct {
 	answers map[string]string
 	files   map[string]string
+	errs    map[string]error
 	calls   []string
 }
+
+// codedErr is an error with an exit code, like the one osRunner returns for a failed git.
+type codedErr struct{ code int }
+
+func (e codedErr) Error() string { return "git failed" }
+func (e codedErr) ExitCode() int { return e.code }
 
 func (f *fakeGuardRunner) Git(globals []string, args ...string) (string, error) {
 	key := strings.Join(args, " ")
 	f.calls = append(f.calls, key)
+	for k, e := range f.errs {
+		if strings.HasPrefix(key, k) {
+			return "", e
+		}
+	}
 	for k, v := range f.answers {
 		if strings.HasPrefix(key, k) {
 			return v, nil
@@ -195,6 +207,127 @@ func TestGhCleanAndOtherCommandsPassThrough(t *testing.T) {
 	}
 	if len(*ran) != 2 {
 		t.Fatalf("ran: %v", *ran)
+	}
+}
+
+func TestGhGroupWordFoundPastRepoFlag(t *testing.T) {
+	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"f": "k " + cliFakeKey + "\n"}}, 0)
+	err := runGroup(t, "gh", "pr", "-R", "o/r", "create", "--body-file", "f")
+	if code, _ := exitCodeOf(err); err == nil || code != 1 {
+		t.Fatalf("want exit 1, got %v", err)
+	}
+	if len(*ran) != 0 {
+		t.Fatalf("gh ran: %v", *ran)
+	}
+}
+
+func TestGhEditCommentReviewAreScanned(t *testing.T) {
+	cases := [][]string{
+		{"gh", "pr", "edit", "1", "--body-file", "f"},
+		{"gh", "pr", "comment", "1", "-F", "f"},
+		{"gh", "pr", "review", "1", "--body-file", "f"},
+		{"gh", "issue", "edit", "1", "--body-file", "f"},
+		{"gh", "issue", "comment", "1", "--body-file", "f"},
+		{"gh", "release", "edit", "v1", "--notes-file", "f"},
+		{"gh", "release", "create", "v1", "-n", cliFakeKey},
+		{"gh", "issue", "comment", "1", "--body", cliFakeKey},
+	}
+	for _, args := range cases {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"f": "k " + cliFakeKey + "\n"}}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+}
+
+func TestGitPushDeleteSkipsScanButKeepsHostPolicy(t *testing.T) {
+	for _, args := range [][]string{
+		{"git", "push", "origin", "--delete", "feat"},
+		{"git", "push", "origin", "-d", "feat"},
+		{"git", "push", "origin", ":feat"},
+	} {
+		r := &fakeGuardRunner{answers: map[string]string{"remote get-url": "https://github.com/o/r\n", "log -p": plantedCLIDiff()}}
+		ran := withGuardSeams(t, r, 0)
+		if err := runGroup(t, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if len(*ran) != 1 {
+			t.Fatalf("%v: ran %v", args, *ran)
+		}
+		for _, c := range r.calls {
+			if strings.HasPrefix(c, "log") {
+				t.Fatalf("%v: scanned history for a delete", args)
+			}
+		}
+	}
+	t.Setenv("BARYOVM_ALLOWED_HOSTS", "github.com")
+	r := &fakeGuardRunner{answers: map[string]string{"remote get-url": "https://evil.example/o/r\n"}}
+	ran := withGuardSeams(t, r, 0)
+	if err := runGroup(t, "git", "push", "origin", "--delete", "feat"); err == nil || len(*ran) != 0 {
+		t.Fatalf("delete to an unlisted host: err=%v ran=%v", err, *ran)
+	}
+}
+
+func TestGitCommitMessageFileIsScanned(t *testing.T) {
+	for _, args := range [][]string{
+		{"git", "commit", "-F", "m.txt"},
+		{"git", "commit", "--file=m.txt"},
+		{"git", "commit", "--file", "m.txt"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"m.txt": "subject\n\n" + cliFakeKey + "\n"}}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+		if !strings.Contains(err.Error(), "m.txt:3") || strings.Contains(err.Error(), cliFakeKey) {
+			t.Fatalf("%v: error %s", args, err.Error())
+		}
+	}
+	ran := withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runGroup(t, "git", "commit", "-F", "-"); err == nil || len(*ran) != 0 {
+		t.Fatalf("-F - was not refused: err=%v ran=%v", err, *ran)
+	}
+}
+
+func TestGuardCheckCommitMsg(t *testing.T) {
+	withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"bad": "x " + cliFakeKey + "\n", "ok": "fine\n"}}, 0)
+	if err := runGroup(t, "guard", "check", "commit-msg", "ok"); err != nil {
+		t.Fatalf("clean message: %v", err)
+	}
+	err := runGroup(t, "guard", "check", "commit-msg", "bad")
+	if code, _ := exitCodeOf(err); err == nil || code != 1 {
+		t.Fatalf("want exit 1, got %v", err)
+	}
+}
+
+func TestGitPushChecksEveryPushURL(t *testing.T) {
+	t.Setenv("BARYOVM_ALLOWED_HOSTS", "github.com")
+	r := &fakeGuardRunner{answers: map[string]string{"remote get-url": "https://github.com/o/r\nhttps://evil.example/o/r\n"}}
+	ran := withGuardSeams(t, r, 0)
+	if err := runGroup(t, "git", "push", "origin", "main"); err == nil || len(*ran) != 0 {
+		t.Fatalf("second push url outside the policy: err=%v ran=%v", err, *ran)
+	}
+}
+
+func TestPolicyConfigErrors(t *testing.T) {
+	// Exit 1 means the key is unset: no restriction.
+	ran := withGuardSeams(t, &fakeGuardRunner{errs: map[string]error{"config --get-all": codedErr{1}}}, 0)
+	if err := runGroup(t, "git", "status"); err != nil {
+		t.Fatalf("unset policy: %v", err)
+	}
+	if len(*ran) != 1 {
+		t.Fatalf("ran: %v", *ran)
+	}
+	// Any other failure refuses.
+	ran = withGuardSeams(t, &fakeGuardRunner{errs: map[string]error{"config --get-all": codedErr{128}}}, 0)
+	err := runGroup(t, "git", "status")
+	if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+		t.Fatalf("broken config: err=%v ran=%v", err, *ran)
+	}
+	ran = withGuardSeams(t, &fakeGuardRunner{errs: map[string]error{"config --get-all": os.ErrPermission}}, 0)
+	if err := runGroup(t, "git", "status"); err == nil || len(*ran) != 0 {
+		t.Fatalf("uncoded error: err=%v ran=%v", err, *ran)
 	}
 }
 

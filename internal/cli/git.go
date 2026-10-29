@@ -43,8 +43,11 @@ JSON output of a refusal set BARYOVM_OUTPUT=json.
 				return cmd.Help()
 			}
 			globals, _, _ := guard.SplitGit(args)
-			v := guard.CheckGit(guardRunner, args, loadPolicy(globals))
-			return finishGuard(v, "git", args)
+			pol, err := loadPolicy(globals)
+			if err != nil {
+				return finishGuard(policyRefusal("git", err), "git", args)
+			}
+			return finishGuard(guard.CheckGit(guardRunner, args, pol), "git", args)
 		},
 	}
 }

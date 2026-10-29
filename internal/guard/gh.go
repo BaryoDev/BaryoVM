@@ -10,7 +10,11 @@ import (
 )
 
 // ghChecked are the gh subcommands whose text goes public: a pull request, a release and an issue.
-var ghChecked = map[string]bool{"pr create": true, "release create": true, "issue create": true}
+var ghChecked = map[string]bool{
+	"pr create": true, "pr edit": true, "pr comment": true, "pr review": true,
+	"issue create": true, "issue edit": true, "issue comment": true,
+	"release create": true, "release edit": true,
+}
 
 // ghTextLong and ghTextShort are the flags that carry text or name a file with text. Short flags
 // differ by command only in meaning (-n is notes on release create), so one table serves all three.
@@ -26,8 +30,15 @@ var (
 // gh; write it to a file instead.
 func CheckGh(r Runner, args []string) Verdict {
 	var words []string
-	for _, a := range args {
-		if len(words) < 2 && !strings.HasPrefix(a, "-") {
+	// The group and verb are the first two words that are not flags. -R and --repo take a value
+	// that is not a word, so it is skipped: `gh pr -R o/r create` is still `pr create`.
+	for i := 0; i < len(args) && len(words) < 2; i++ {
+		a := args[i]
+		if a == "-R" || a == "--repo" {
+			i++
+			continue
+		}
+		if !strings.HasPrefix(a, "-") {
 			words = append(words, a)
 		}
 	}

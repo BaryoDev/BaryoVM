@@ -7,6 +7,9 @@ package guard
 import (
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -50,6 +53,15 @@ func TestScanLine(t *testing.T) {
 		{"private key", fakePEM, "private-key"},
 		{"openssh private key", "-----BEGIN OPENSSH " + "PRIVATE KEY-----", "private-key"},
 		{"public key", "-----BEGIN PUBLIC " + "KEY-----", ""},
+		{"pgp private key", "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----", "pgp-private-key"},
+		{"pgp public key", "-----BEGIN PGP " + "PUBLIC KEY BLOCK-----", ""},
+		{"anthropic key", "k=sk" + "-ant-" + strings.Repeat("a", 24), "anthropic-key"},
+		{"anthropic key too short", "sk" + "-ant-short", ""},
+		{"openai project key", "k=sk" + "-proj-" + strings.Repeat("a", 24), "openai-key"},
+		{"openai project key too short", "sk" + "-proj-abc", ""},
+		{"openai classic key", "k=sk" + "-" + strings.Repeat("a", 24), "openai-key"},
+		{"sk word too short", "sk" + "-abc", ""},
+		{"task word not a key", "task" + "-" + strings.Repeat("a", 24), ""},
 		{"allow marker", fakeGoogle + " // allow-secret", ""},
 		{"plain text", "nothing to see here", ""},
 	}
@@ -121,6 +133,34 @@ func TestScanDiffNamesFileAndLine(t *testing.T) {
 	}
 }
 
+func TestScanDiffAddedLineStartingWithPlusPlus(t *testing.T) {
+	// The added line "++x KEY" shows up in the diff as "+++x KEY", which must not be read as a
+	// file header inside a hunk.
+	diff := "diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1,2 @@\n ctx\n+++x " + fakeGoogle + "\n"
+	fs := ScanDiff(diff)
+	if len(fs) != 1 || fs[0].File != "x.txt" || fs[0].Line != 2 {
+		t.Fatalf("got %v", fs)
+	}
+}
+
+func TestHookScriptFailsWithoutBaryovmOnPath(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hook")
+	if err := os.WriteFile(script, []byte(HookScript("pre-commit")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", script)
+	cmd.Env = []string{"PATH="}
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() == 0 {
+		t.Fatalf("want a non-zero exit, got %v", err)
+	}
+	if !strings.Contains(string(out), "not on PATH") {
+		t.Fatalf("output: %q", out)
+	}
+}
+
 func TestScanDiffIgnoresRemovedKey(t *testing.T) {
 	diff := "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-k=" + fakeGoogle + "\n+k=\n"
 	if fs := ScanDiff(diff); len(fs) != 0 {
@@ -141,9 +181,20 @@ func TestParseRemoteHost(t *testing.T) {
 		{"/srv/git/r.git", "", false},
 		{"../r.git", "", false},
 		{"file:///srv/git/r.git", "", false},
-		{"C:\\repos\\r", "", false},
 		{"", "", true},
 		{"https:///nohost", "", true},
+	}
+	// A single letter before the colon is a drive only on Windows; elsewhere it is host "c".
+	if runtime.GOOS == "windows" {
+		tests = append(tests, struct {
+			raw, want string
+			err       bool
+		}{"C:\\repos\\r", "", false})
+	} else {
+		tests = append(tests, struct {
+			raw, want string
+			err       bool
+		}{"C:\\repos\\r", "c", false})
 	}
 	for _, tc := range tests {
 		got, err := ParseRemoteHost(tc.raw)
@@ -417,7 +468,7 @@ func TestCheckGh(t *testing.T) {
 		{"clean file", []string{"pr", "create", "--body-file", "clean.md"}, true, ""},
 		{"stdin refused", []string{"pr", "create", "--body-file", "-"}, false, ""},
 		{"missing file refused", []string{"pr", "create", "--body-file", "gone.md"}, false, ""},
-		{"other gh command not scanned", []string{"pr", "comment", "--body", fakeGoogle}, true, ""},
+		{"other gh command not scanned", []string{"pr", "merge", "--body", fakeGoogle}, true, ""},
 		{"pr list", []string{"pr", "list"}, true, ""},
 		{"no args", nil, true, ""},
 	}
