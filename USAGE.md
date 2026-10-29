@@ -1648,6 +1648,53 @@ export BARYOVM_ALLOWED_REGISTRIES=registry.npmjs.org,api.nuget.org   # alternati
 A refusal exits 1, names `file:line (rule)` and never prints the value. Flags belong to npm and dotnet;
 set `BARYOVM_OUTPUT=json` for a JSON refusal. OTP and Trusted Publishing stay with you.
 
+### Shipping a release
+
+`baryovm ship <name>` runs the release gate, tags, watches the publish run, checks the registry and
+creates the GitHub release. `baryovm stack publish <name>` runs the same gate, then tags and pushes the
+tag and stops. BaryoVM never publishes and never holds a registry credential: the repository's own
+workflow publishes, and BaryoVM only reads the registry. The GitHub token comes from `--token-ref`
+(default `cmd:gh auth token`; `env:` and `file:` work too) and is used for the run reads and the release.
+
+```sh
+baryovm ship shop --dry-run          # every check, no tag, no push, no token needed
+baryovm ship shop --yes              # tag, push, watch, verify, release
+baryovm stack publish shop --yes     # gate, tag, push the tag
+baryovm stack set-publish shop --file publish.json
+```
+
+The spec comes from `--file`, then the stack's `publish` setting (also valid in a project file), then
+`baryovm.publish.json` in the repository:
+
+```json
+{"registry": "nuget", "versionFrom": "src/Lib/Lib.csproj", "changelog": "CHANGELOG.md",
+ "requireDeployed": "shop", "assert": ["Microsoft.EntityFrameworkCore\" version=\"8.0.30\""]}
+```
+
+`registry` is `nuget` or `npm`. Optional: `tag` (default `v{version}`), `packages`, `registryUrl`,
+`remote`, `branch`, `repo`, `workflow`, `publishStep` (default `publish`), `publishJob`.
+
+`publishStep` is the exact name of the workflow step that publishes (case does not matter). Every step
+with that name must have succeeded, so a skipped leg of a matrix refuses, and no match refuses.
+`publishJob` limits the match to one job. The version read from the project file must be a plain
+version (`1.3.0`, `1.3.0-beta.1`); anything with `/`, `..` or a leading `-` is refused.
+
+The gate reports every check and refuses with each cause named: the tree is not clean, the branch is not
+the default branch, the branch is not synced with the remote, the tag exists at another commit, the
+changelog has no section for that exact version (`1.2.4-beta` and `1.2.40` do not count), the NuGet
+`PackageReleaseNotes` does not mention the version, a package is already published at the version, or
+the `requireDeployed` stack last released a different commit.
+
+After the tag is pushed, `ship` finds the run for it and waits for success. A green run whose publish
+step was skipped is a failure. It then polls the registry until every package resolves, reads the
+published artifact's metadata and checks its version and each `assert` line, and only then creates the
+release, with the changelog section as its notes.
+
+A rerun after an interrupted watch finds the tag already at HEAD and picks up from the watch, without a
+second tag. Without a terminal, or under `-o json`, a real run needs `--yes`. Every outbound call has a
+timeout; `--timeout` bounds the run watch. What was checked and the values seen are saved to
+`$BARYOVM_HOME/ship/<name>/<version>.json`, and `-o json` returns the same record.
+
 ### Deploying to the cloud
 
 `baryovm cloud wrangler`, `baryovm cloud firebase` and `baryovm cloud gcloud` check a deploy before the

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/BaryoDev/BaryoVM/internal/managed"
+	"github.com/BaryoDev/BaryoVM/internal/ship"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
@@ -43,6 +44,7 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 			Checks:   []verify.Check{{Path: "/", Contains: []string{"marker"}}, {Command: "true"}},
 			Attempts: 7,
 		},
+		Publish: &ship.Spec{Registry: ship.NuGet, VersionFrom: "src/App.csproj", RequireDeployed: "prod", Assert: []string{"x"}},
 	}
 
 	s := &Store{}
@@ -99,6 +101,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	if got.Verify == nil || got.Verify.Attempts != 7 || len(got.Verify.Checks) != 2 ||
 		got.Verify.Checks[0].Contains[0] != "marker" || got.Verify.Checks[1].Command != "true" {
 		t.Errorf("Verify was lost or changed: %+v", got.Verify)
+	}
+	if got.Publish == nil || got.Publish.Registry != ship.NuGet || got.Publish.RequireDeployed != "prod" || len(got.Publish.Assert) != 1 {
+		t.Errorf("Publish was lost or changed: %+v", got.Publish)
 	}
 }
 

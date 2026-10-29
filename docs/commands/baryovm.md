@@ -27,6 +27,7 @@ CLI-first: the MAUI app and MCP server drive this same CLI (with -o json).
 * [baryovm publish](baryovm_publish.md)	 - Publish an npm or NuGet package, refusing one that holds a key or aims at the wrong registry
 * [baryovm repo](baryovm_repo.md)	 - Move a stack's source repository to another Git host
 * [baryovm scan](baryovm_scan.md)	 - Run an OWASP ZAP baseline (passive) scan against a URL
+* [baryovm ship](baryovm_ship.md)	 - Run the release gate, tag, watch the publish run, verify the registry, create the GitHub release
 * [baryovm site](baryovm_site.md)	 - Provision and deploy a static site on a VM (nginx, TLS, webroot)
 * [baryovm stack](baryovm_stack.md)	 - Manage docker compose stacks on your VMs
 * [baryovm status](baryovm_status.md)	 - Every registered stack on one screen (read only)
