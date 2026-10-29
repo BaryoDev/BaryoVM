@@ -22,7 +22,9 @@ jobs:
     timeout-minutes: 30
     env:
       STACK: barako # the stack name, already marked with `stack set-update --auto`
-      BARYOVM_VERSION: "0.5.0" # pinned on purpose; raise it by hand after reading the release notes
+      # Pinned on purpose; raise it by hand after reading the release notes. 0.6.0 is the first
+      # release with BARYOVM_NOTIFY_URL.
+      BARYOVM_VERSION: "0.6.0"
     steps:
       - name: Install baryovm
         run: |
