@@ -184,7 +184,7 @@ func assertAdoptOrder(t *testing.T, seen []string) {
 	if mounts < 0 || info < 0 || rm < 0 || build < 0 || up < 0 || sync < 0 {
 		t.Fatalf("a step is missing (mounts %d, info %d, rm %d, build %d, up %d, sync %d):\n%s", mounts, info, rm, build, up, sync, dump)
 	}
-	if !(sync < mounts && mounts < rm && info < rm && rm < build && build < up) {
+	if sync >= mounts || mounts >= rm || info >= rm || rm >= build || build >= up {
 		t.Errorf("wrong order, want sync, inspect, rm, build, up:\n%s", dump)
 	}
 	if strings.Contains(seen[rm], "rm -f -v") || strings.Contains(seen[rm], " -v ") {
@@ -249,7 +249,7 @@ func TestDeployAdoptRemovesAndBringsTheStackUp(t *testing.T) {
 	rm := indexOfCmd(f.seen, "docker rm -f 'umbraco-pwa-demo'")
 	up := indexOfCmd(f.seen, "up -d")
 	mounts := indexOfCmd(f.seen, "json .Mounts")
-	if mounts < 0 || rm < 0 || up < 0 || !(mounts < rm && rm < up) {
+	if mounts < 0 || rm < 0 || up < 0 || mounts >= rm || rm >= up {
 		t.Errorf("want inspect, rm, up in that order:\n%s", strings.Join(f.seen, "\n"))
 	}
 }
