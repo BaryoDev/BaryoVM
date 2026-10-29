@@ -22,16 +22,19 @@ jobs:
     timeout-minutes: 30
     env:
       STACK: barako # the stack name, already marked with `stack set-update --auto`
+      BARYOVM_VERSION: "0.5.0" # pinned on purpose; raise it by hand after reading the release notes
     steps:
       - name: Install baryovm
         run: |
           set -euo pipefail
           os=linux
           arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
-          version=$(curl -fsSL https://api.github.com/repos/BaryoDev/BaryoVM/releases/latest \
-            | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+          version="$BARYOVM_VERSION"
           base="https://github.com/BaryoDev/BaryoVM/releases/download/v${version}"
           curl -fsSLO "${base}/baryovm_${version}_${os}_${arch}.tar.gz"
+          # checksums.txt comes from the same release as the binary, so this only catches a bad
+          # download. Compare the pinned version's checksums.txt against a signed or separately
+          # published source when you raise the version.
           curl -fsSLO "${base}/checksums.txt"
           grep " baryovm_${version}_${os}_${arch}.tar.gz\$" checksums.txt | sha256sum -c -
           tar -xzf "baryovm_${version}_${os}_${arch}.tar.gz" baryovm

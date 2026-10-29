@@ -539,6 +539,7 @@ exported in the build's own shell, and the command carries only `--build-arg NAM
 `ps` on the VM. A build arg is still baked into image history if the Dockerfile uses it in a `RUN`.
 For a value that must stay out of the image, add `"secrets": { "npmrc": "env:NPM_TOKEN" }` to the
 build and read it with `RUN --mount=type=secret,id=npmrc` (BuildKit). Existing manifests keep working.
+A literal value that starts with `env:`, `file:` or `cmd:` is read as a reference, not as text.
 
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
