@@ -215,6 +215,45 @@ only when the account does not exist, so an attempt without that token names a r
 account, and the report marks it. Expect `root` to appear on any public host, since it
 is on every scanner's list; your own login name appearing is the interesting case.
 
+## Scanning a deployed site
+
+```sh
+baryovm scan --url https://example.com
+baryovm scan --url https://example.com --fail-on medium
+baryovm scan --url https://example.com --resolver 1.1.1.1 -o json
+```
+
+`scan` runs a ZAP baseline against the site, then a small set of passive edge checks, and
+reports both in one list, worst first. `--fail-on` (default `high`) and the `-o json` envelope
+apply to the whole list. In JSON, edge findings use the same fields as ZAP findings and add
+`check` and `detail`. Those two fields are left out of ZAP findings, so existing consumers see
+no change.
+
+The edge checks use exactly five DNS lookups (CAA, TXT, MX, `_dmarc` TXT and A on the target's
+host) and three HTTP requests: one GET for `/.well-known/security.txt`, and one GET each to the
+first A record's bare IP over HTTPS (no SNI, certificate not verified) and plain HTTP. Nothing
+else is sent: no zone transfers, port scans or guessing.
+
+| Check | Finding |
+| --- | --- |
+| CAA | low when missing, informational with the allowed CAs when present |
+| SPF | low when missing, when there are several records, or when a domain with no MX does not end in `-all` |
+| DMARC | low when missing or the policy is `none`, informational for `quarantine` and `reject` |
+| Bare IP | medium when the IP answers 2xx over HTTPS or over HTTP |
+| security.txt | low when it has no `Contact`, no valid `Expires`, or has expired; informational when missing |
+| HSTS | informational, the header value as sent (or "not set"); not judged |
+
+Every lookup and request has a 5 second timeout and the edge checks stop after 30 seconds in
+total. Checks that did not finish are reported once, as a low "Edge checks timed out" finding that
+names them. A refused or dropped bare-IP connection is not a finding.
+
+`--url` must be an http or https URL with a registered hostname. A bare IP, a name with
+non-ASCII characters (give the `xn--` form), credentials such as `https://a@b/`, and a host with
+`\` or `%` are refused, for the ZAP scan too.
+
+Lookups use the system resolver. `--resolver 1.1.1.1` (or `ip:port`) sends every lookup,
+including CAA, to that server instead. It takes an IP address, not a name.
+
 ## Stacks: docker compose over SSH (day-to-day deploys)
 
 Your real workloads (barakoCMS, BaryoClub) run as compose projects, so this is

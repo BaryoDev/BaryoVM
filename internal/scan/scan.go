@@ -83,8 +83,38 @@ type Finding struct {
 	CWE        string   `json:"cwe,omitempty"`
 	Solution   string   `json:"solution,omitempty"`
 	URLs       []string `json:"urls,omitempty"`
+	// Check names the edge check that produced a finding (caa, spf, dmarc,
+	// bare-ip, security.txt, hsts, edge). Empty for ZAP findings.
+	Check string `json:"check,omitempty"`
+	// Detail is a value the reader wants verbatim, like an HSTS header or the
+	// CAs a CAA record allows. Empty for ZAP findings.
+	Detail string `json:"detail,omitempty"`
 
 	severity Severity // parsed, for gating; not serialised
+}
+
+// WithFindings returns a copy of the report with extra findings merged in,
+// counts recomputed and the list sorted worst-first. Existing findings and the
+// Target are untouched, so a ZAP report plus edge findings is one list.
+func (r Report) WithFindings(extra []Finding) Report {
+	out := Report{Target: r.Target, Findings: append([]Finding{}, r.Findings...), Counts: map[string]int{}}
+	out.Findings = append(out.Findings, extra...)
+	sortFindings(out.Findings)
+	for _, f := range out.Findings {
+		out.Counts[f.Severity]++
+	}
+	return out
+}
+
+// sortFindings orders worst first, then by name so the order is stable for
+// tests and diffs.
+func sortFindings(fs []Finding) {
+	sort.SliceStable(fs, func(i, j int) bool {
+		if fs[i].severity != fs[j].severity {
+			return fs[i].severity > fs[j].severity
+		}
+		return fs[i].Name < fs[j].Name
+	})
 }
 
 // Report is the outcome of a scan.
@@ -168,13 +198,7 @@ func ParseReport(target string, raw []byte) (Report, error) {
 		}
 	}
 
-	// Worst first, then by name so the order is stable for tests and diffs.
-	sort.SliceStable(rep.Findings, func(i, j int) bool {
-		if rep.Findings[i].severity != rep.Findings[j].severity {
-			return rep.Findings[i].severity > rep.Findings[j].severity
-		}
-		return rep.Findings[i].Name < rep.Findings[j].Name
-	})
+	sortFindings(rep.Findings)
 	return rep, nil
 }
 
