@@ -120,7 +120,7 @@ func TestDiscoverSudoWrapsEveryCommand(t *testing.T) {
 	}
 	for _, c := range f.seen {
 		if !strings.HasPrefix(c, "sudo -n docker compose ") {
-			t.Errorf("not elevated: %s", c)
+			t.Errorf("missing sudo -n: %s", c)
 		}
 	}
 }
