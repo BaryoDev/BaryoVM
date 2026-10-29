@@ -172,3 +172,67 @@ func TestCheckConfinedAcceptsLinksThatStayInside(t *testing.T) {
 		t.Errorf("a link inside the directory and a not-yet-built entry must pass: %v", err)
 	}
 }
+
+// A manifest reached through a symlinked directory (/tmp on macOS) with a real-path localRoot is not
+// an escape.
+func TestLoadAcceptsARealPathLocalRootForAManifestReachedThroughASymlink(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "via")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(real, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := writeManifest(t, real, src, "out/")
+	linked := filepath.Join(link, filepath.Base(p))
+	if _, err := Load(linked, false); err != nil {
+		t.Fatalf("a real-path localRoot beside a manifest reached through a symlink was refused: %v", err)
+	}
+	// And the reverse: a localRoot written through the link, manifest at the real path.
+	p2 := writeManifest(t, real, filepath.Join(link, "src"), "out/")
+	if _, err := Load(p2, false); err != nil {
+		t.Fatalf("a localRoot written through a symlink to the manifest's own directory was refused: %v", err)
+	}
+	// The real-path form must not become a way out.
+	if _, err := Load(writeManifest(t, real, filepath.Join(filepath.Dir(real), "nowhere"), "out/"), false); err == nil {
+		t.Error("a path outside the directory must still be refused")
+	}
+}
+
+func TestARefusedRelativeLocalRootSaysWhereItWasRead(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Load(writeManifest(t, dir, "../src", "out/"), false)
+	if err == nil || !strings.Contains(err.Error(), "relative localRoot resolves against the current directory, not the manifest's") {
+		t.Fatalf("want the relative-path explanation, got %v", err)
+	}
+	_, err = Load(writeManifest(t, dir, "/etc", "out/"), false)
+	if err == nil || strings.Contains(err.Error(), "relative localRoot") {
+		t.Errorf("an absolute localRoot must not get the relative note: %v", err)
+	}
+}
+
+func TestLoadRefusesARequireLocalEntryThatClimbsOut(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"localRoot":` + quote(dir) + `,"remoteRoot":"/srv/app","requireLocal":["../../etc/passwd"]}`
+	p := filepath.Join(dir, "r.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p, false); err == nil || !strings.Contains(err.Error(), "requireLocal") {
+		t.Fatalf("want a refusal naming requireLocal, got %v", err)
+	}
+}
+
+// `stack tls` syncs nothing, so a localRoot elsewhere is not its business.
+func TestLoadRemoteOnlySkipsTheLocalPathCheck(t *testing.T) {
+	dir := t.TempDir()
+	p := writeManifest(t, dir, "/etc", "../x")
+	if _, err := Load(p, false); err == nil {
+		t.Fatal("Load must refuse it")
+	}
+	if _, err := LoadRemoteOnly(p, false); err != nil {
+		t.Errorf("LoadRemoteOnly must not check local paths: %v", err)
+	}
+}

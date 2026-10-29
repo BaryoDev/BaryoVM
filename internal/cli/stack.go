@@ -103,16 +103,11 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		}
 	}
 	if in.Changed("release-root") && in.ReleaseRoot != "" {
-		root := in.ReleaseRoot
-		if root == "~" || strings.HasPrefix(root, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				root = filepath.Join(home, strings.TrimPrefix(root, "~"))
-			}
+		root, err := absReleaseRoot(in.ReleaseRoot)
+		if err != nil {
+			return fleet.Stack{}, "", err
 		}
-		if !filepath.IsAbs(root) {
-			return fleet.Stack{}, "", fmt.Errorf("--release-root %q must be an absolute directory", in.ReleaseRoot)
-		}
-		in.ReleaseRoot = filepath.Clean(root)
+		in.ReleaseRoot = root
 	}
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
 		return fleet.Stack{}, "", err
@@ -310,6 +305,11 @@ func syncTar(m *release.Manifest, vm *fleet.VM, sub string) error {
 // syncSub copies one sync entry to the VM with the chosen transport. Releases and `site deploy`
 // both go through it, so there is one rsync path and one answer to "is this the right machine".
 func syncSub(m *release.Manifest, vm *fleet.VM, sub string, transport release.Transport) error {
+	// Checked again here, not only before the backup: a link made after the first check, or during a
+	// long build, must not be followed (#158).
+	if err := m.CheckConfined(); err != nil {
+		return err
+	}
 	if transport == release.TransportTar {
 		return syncTar(m, vm, sub)
 	}
@@ -394,6 +394,31 @@ type stackReleaseOpts struct {
 	// Recipe overrides the stack's registered recipe; Inputs are NAME=ref bindings for its inputs.
 	Recipe string
 	Inputs []string
+	// ViaProject says the release came from `project release`, whose way out of a refused path is its
+	// own --release-root flag and not `stack add`.
+	ViaProject bool
+}
+
+// absReleaseRoot expands ~ and requires an absolute directory.
+func absReleaseRoot(v string) (string, error) {
+	root := v
+	if root == "~" || strings.HasPrefix(root, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			root = filepath.Join(home, strings.TrimPrefix(root, "~"))
+		}
+	}
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("--release-root %q must be an absolute directory", v)
+	}
+	return filepath.Clean(root), nil
+}
+
+// pathHint words a path refusal for the command that raised it.
+func (o stackReleaseOpts) pathHint(err error) error {
+	if err == nil || !o.ViaProject {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), release.HintStack, release.HintProject))
 }
 
 // releaseStack releases one stack of store. It does not emit: the result the caller should emit is
@@ -424,7 +449,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 	m, err := release.Load(manifestPath, st.Sudo, st.ReleaseRoot)
 	if err != nil {
-		return err
+		return o.pathHint(err)
 	}
 	m.Runtime = st.Runtime
 
@@ -471,7 +496,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	// A static site's artifact is built outside the release. Refuse before anything is
 	// backed up, synced or run if it is not there (#68).
 	if err := m.CheckConfined(); err != nil {
-		return fail(err)
+		return fail(o.pathHint(err))
 	}
 	if err := m.CheckRequireLocal(); err != nil {
 		return fail(err)
