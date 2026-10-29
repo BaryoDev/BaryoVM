@@ -157,6 +157,8 @@ baryovm stack restore app --yes
 Generated command flags and examples: **[command reference](docs/commands/baryovm.md)**.
 Operator workflows: **[USAGE.md](USAGE.md)**.
 
+Guides by reader: **[one VM, five minutes](docs/indie.md)** · **[a server that already runs your product](docs/sme.md)** · **[client VMs and a team](docs/agency.md)** · **[troubleshooting](docs/troubleshooting.md)**.
+
 ### `stack release` is config-driven
 
 A JSON manifest in your repo describes what to sync + build + deploy. The CLI has
