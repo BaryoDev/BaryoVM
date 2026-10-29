@@ -1,0 +1,56 @@
+# Copy to .github/workflows/scheduled-update.yml.
+# Runs an unattended, health-gated update on a schedule and tells a webhook when it fails.
+#
+# Secrets to create in the repo:
+#   SSH_KEY       private key the runner uses to reach the VM
+#   FLEET_JSON    the contents of your fleet.json (VM and stack registration, key path "~/.ssh/deploy")
+#   KNOWN_HOSTS   the VM's host key line(s), reviewed by you, not fetched at run time
+#   NOTIFY_URL    https webhook (Slack, Discord, anything that accepts a JSON POST)
+name: scheduled-update
+
+on:
+  schedule:
+    - cron: "0 20 * * *" # 20:00 UTC, 04:00 in Manila
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STACK: barako # the stack name, already marked with `stack set-update --auto`
+    steps:
+      - name: Install baryovm
+        run: |
+          set -euo pipefail
+          os=linux
+          arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+          version=$(curl -fsSL https://api.github.com/repos/BaryoDev/BaryoVM/releases/latest \
+            | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+          base="https://github.com/BaryoDev/BaryoVM/releases/download/v${version}"
+          curl -fsSLO "${base}/baryovm_${version}_${os}_${arch}.tar.gz"
+          curl -fsSLO "${base}/checksums.txt"
+          grep " baryovm_${version}_${os}_${arch}.tar.gz\$" checksums.txt | sha256sum -c -
+          tar -xzf "baryovm_${version}_${os}_${arch}.tar.gz" baryovm
+          sudo install -m 0755 baryovm /usr/local/bin/baryovm
+
+      - name: Restore the fleet, key and pinned host key
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          FLEET_JSON: ${{ secrets.FLEET_JSON }}
+          KNOWN_HOSTS: ${{ secrets.KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh ~/.baryovm
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          printf '%s\n' "$FLEET_JSON" > ~/.baryovm/fleet.json
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.baryovm/known_hosts
+
+      - name: Update
+        env:
+          NOTIFY_URL: ${{ secrets.NOTIFY_URL }}
+        run: baryovm stack update "$STACK" --auto --strict-host-keys --notify "$NOTIFY_URL" -o json

@@ -1087,6 +1087,31 @@ Run it from cron on the VM, or from anywhere with SSH access:
 0 4 * * * /usr/local/bin/baryovm stack update barako --auto -o json >> ~/baryovm-update.log 2>&1
 ```
 
+#### Unattended updates
+
+A schedule that depends on a laptop being open is not maintenance. Run it from CI: a scheduled
+GitHub Actions workflow has an always-on runner, and the agentless model needs nothing on the VM.
+Copy [docs/examples/scheduled-update.yml](docs/examples/scheduled-update.yml) into
+`.github/workflows/`. It installs baryovm, pins the VM's host key, and runs
+`stack update <name> --auto --notify "$NOTIFY_URL" -o json` on a cron.
+
+A failed unattended run has to reach a person. `--notify <url>` (or the environment variable
+`BARYOVM_NOTIFY_URL`, which keeps a token out of the process list) posts the JSON result envelope to a
+webhook when an `--auto` run fails or rolls back. `--notify-on always` posts every run, `failure` is
+the default. Rules:
+
+- https only. Plain http is accepted for `localhost`, `127.0.0.1` and `::1`, for tests.
+- 10 second timeout, one retry at most (on a network error or a 5xx), redirects are not followed, and
+  the body is capped at 64 KiB (an oversized envelope loses its `data`, not its verdict).
+- `--notify` needs `--auto`. The environment variable is ignored without it.
+- The URL usually holds a token, so it is never printed. Output shows scheme and host only.
+- If the notification fails, the exit code is non-zero and the envelope carries `data.notify` with
+  `ok: false` and the reason. It never replaces the update's own result or error.
+
+The posted body is the same envelope `-o json` prints, so it carries whatever stable error code the
+envelope has. The workflow file was written to match the commands above but has not been run on a live
+runner.
+
 Verified against a stack whose image was swapped for one that exits on start: the update was applied,
 the health check failed, the previous image was restored and the site was serving again, and
 separately, that a genuine new image is kept when it comes up healthy.
