@@ -36,11 +36,22 @@ func TestForPlacesTheFileNextToTheRoot(t *testing.T) {
 	}
 }
 
-func TestForFallsBackToVarTmp(t *testing.T) {
-	for _, root := range []string{"/srv", "srv", "/"} {
-		if got := For(root, "a", false).File; got != "/var/tmp/.baryovm-release-a.json" {
-			t.Errorf("%q: %s", root, got)
+func TestForNeverUsesASharedDirectory(t *testing.T) {
+	for root, want := range map[string]string{
+		"/srv": "/.baryovm-release-a.json",
+		"/":    "/.baryovm-release-a.json",
+		"srv":  ".baryovm-release-a.json",
+	} {
+		if got := For(root, "a", false).File; got != want {
+			t.Errorf("%q: %s, want %s", root, got, want)
 		}
+	}
+}
+
+func TestWriteCmdUsesMktemp(t *testing.T) {
+	cmd := WriteCmd(For("/home/opc/src", "d", false), "/home/opc/x.json", []byte("{}"))
+	if !strings.Contains(cmd, "mktemp '/home/opc/.baryovm-release.XXXXXX'") || strings.Contains(cmd, ".tmp") {
+		t.Errorf("write does not go through mktemp: %s", cmd)
 	}
 }
 

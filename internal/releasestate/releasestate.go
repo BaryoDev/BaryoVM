@@ -155,9 +155,11 @@ type Loc struct {
 // cannot take it.
 func For(remoteRoot, stack string, sudo bool) Loc {
 	root := strings.TrimRight(strings.TrimSpace(remoteRoot), "/")
+	// No shared fallback such as /var/tmp: with sudo, a fixed name in a world-writable directory
+	// writes through whatever symlink another local user left there.
 	dir := path.Dir(root)
-	if dir == "/" || dir == "." {
-		dir = "/var/tmp"
+	if root == "" {
+		dir = "/"
 	}
 	return Loc{File: path.Join(dir, ".baryovm-release-"+stack+".json"), Sudo: sudo}
 }
@@ -190,14 +192,14 @@ func (l Loc) ReadCmd() string {
 // is in transit only; the file on the host is plain JSON.
 func WriteCmd(l Loc, file string, data []byte) string {
 	f := sshx.Quote(file)
-	tmp := sshx.Quote(file + ".tmp")
+	tmp := sshx.Quote(path.Join(path.Dir(file), ".baryovm-release.XXXXXX"))
 	b64 := base64.StdEncoding.EncodeToString(data)
-	return l.sh("printf %s " + sshx.Quote(b64) + " | base64 -d > " + tmp + " && mv " + tmp + " " + f)
+	return l.sh("t=$(mktemp " + tmp + ") && printf %s " + sshx.Quote(b64) + " | base64 -d > \"$t\" && mv \"$t\" " + f)
 }
 
 // RemoveCmd deletes the state file, a stray temp file and the lock.
 func (l Loc) RemoveCmd() string {
-	return l.sh("rm -f " + sshx.Quote(l.File) + " " + sshx.Quote(l.File+".tmp") + "; rmdir " + sshx.Quote(l.Lock()) + " 2>/dev/null; true")
+	return l.sh("rm -f " + sshx.Quote(l.File) + "; rmdir " + sshx.Quote(l.Lock()) + " 2>/dev/null; true")
 }
 
 // Acquire takes the start lock. ErrBusy when another release has it.
