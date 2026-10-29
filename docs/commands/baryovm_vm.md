@@ -27,6 +27,7 @@ baryovm vm [flags]
 * [baryovm vm exec](baryovm_vm_exec.md)	 - Run a command on a registered VM over SSH
 * [baryovm vm forget-key](baryovm_vm_forget-key.md)	 - Forget a VM's recorded SSH host key, so the next connection learns it again
 * [baryovm vm harden](baryovm_vm_harden.md)	 - Apply the SSH hardening policy to a VM
+* [baryovm vm health](baryovm_vm_health.md)	 - Ask a VM the questions an owner should ask monthly (read only)
 * [baryovm vm list](baryovm_vm_list.md)	 - List registered VMs
 * [baryovm vm patch](baryovm_vm_patch.md)	 - Update OS packages on a VM and check the stack came back
 * [baryovm vm ping](baryovm_vm_ping.md)	 - SSH in and report host + Docker status
