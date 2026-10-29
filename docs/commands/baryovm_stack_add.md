@@ -19,6 +19,7 @@ baryovm stack add <name> [flags]
       --keep int                     backups to retain per kind (default 14)
       --path string                  remote project directory, e.g. /opt/barakocms (required)
       --release-file stack release   local JSON release manifest for stack release
+      --runtime string               container runtime on the VM: docker (default) or podman. See USAGE.md for which commands podman covers
       --sudo                         run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is root-owned. See USAGE.md for what it covers and the three things that change with it
       --vm string                    VM the stack runs on (required)
 ```

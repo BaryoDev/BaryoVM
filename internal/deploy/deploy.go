@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
@@ -24,6 +25,7 @@ type Spec struct {
 	Env     map[string]string // environment variables; sent on stdin to an owner-only file, never on argv (#93)
 	Restart string            // docker restart policy; default "unless-stopped"
 	Pull    bool              // pull the image before running
+	Runtime string            // docker (default) or podman; see package ctr
 }
 
 // Report describes a completed deploy.
@@ -62,10 +64,10 @@ func Run(c *sshx.Client, spec Spec) (Report, error) {
 }
 
 // PullCmd is the image pull Run does when Pull is set.
-func PullCmd(spec Spec) string { return "docker pull " + sshx.Quote(spec.Image) }
+func PullCmd(spec Spec) string { return ctr.Bin(spec.Runtime) + " pull " + sshx.Quote(spec.Image) }
 
 // RemoveCmd is the removal of any same-named container Run does before starting the new one.
-func RemoveCmd(spec Spec) string { return "docker rm -f " + sshx.Quote(spec.Name) }
+func RemoveCmd(spec Spec) string { return ctr.Bin(spec.Runtime) + " rm -f " + sshx.Quote(spec.Name) }
 
 // Commands lists, in order, what Run would send to the VM, without running any of it.
 func Commands(spec Spec) []string {
@@ -81,6 +83,9 @@ var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // Validate refuses an environment that cannot be written as an env file. It runs before any remote
 // call. The messages name the key, never the value.
 func Validate(spec Spec) error {
+	if err := ctr.Valid(spec.Runtime); err != nil {
+		return err
+	}
 	for k, v := range spec.Env {
 		if !envKeyRe.MatchString(k) {
 			return fmt.Errorf("invalid environment key %q: use letters, digits and underscores, not starting with a digit", k)
@@ -122,7 +127,7 @@ func runCmd(spec Spec) string {
 		spec.Restart = "unless-stopped"
 	}
 	var b strings.Builder
-	b.WriteString("docker run -d --name " + sshx.Quote(spec.Name) + " --restart " + spec.Restart)
+	b.WriteString(ctr.Bin(spec.Runtime) + " run -d --name " + sshx.Quote(spec.Name) + " --restart " + spec.Restart)
 	for _, p := range spec.Ports {
 		b.WriteString(" -p " + sshx.Quote(p))
 	}

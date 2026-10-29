@@ -36,6 +36,7 @@ baryovm up <name> [flags]
   -p, --publish stringArray   port mapping host:container (repeatable)
       --pull                  pull the image before running
       --region string         cloud region (default: from ~/.aws)
+      --runtime string        container runtime on the VM: docker (default) or podman
       --size string           instance size / bundle (default: provider's smallest)
       --ssh-from strings      limit port 22 to these CIDRs (default: open to 0.0.0.0/0)
       --yes                   really create the VM (billable); without it the plan is printed and nothing is created

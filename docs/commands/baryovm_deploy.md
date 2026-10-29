@@ -25,6 +25,7 @@ baryovm deploy [flags]
       --name string           container name (required)
   -p, --publish stringArray   port mapping host:container (repeatable)
       --pull                  pull the image before running
+      --runtime string        container runtime on the VM: docker (default) or podman
       --vm string             target VM name (required)
 ```
 

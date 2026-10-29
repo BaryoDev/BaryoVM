@@ -29,6 +29,7 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		DBContainer: "pg", DBName: "appdb", DBUser: "postgres", EnvFile: ".env",
 		BackupDir: "/backups", Keep: 7,
 		Sudo:           true,
+		Runtime:        "podman",
 		AutoUpdate:     true,
 		HealthURL:      "http://127.0.0.1:8080/health",
 		NoDatabase:     true,
@@ -56,6 +57,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 
 	if !got.Sudo {
 		t.Error("Sudo was lost: an elevated stack would silently run unelevated")
+	}
+	if got.Runtime != "podman" {
+		t.Errorf("Runtime was lost: a podman stack would run docker commands, got %q", got.Runtime)
 	}
 	if !got.AutoUpdate {
 		t.Error("AutoUpdate was lost: a stack would be skipped by --auto, or worse, picked up when it should not be")
