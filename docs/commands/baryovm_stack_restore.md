@@ -11,11 +11,13 @@ baryovm stack restore <name> [flags]
 ```
   baryovm stack restore baryoclub --yes
   baryovm stack restore baryoclub --file db-20260717-011514.dump --yes
+  baryovm stack restore baryoclub --drill
 ```
 
 ### Options
 
 ```
+      --drill         prove the backup restores: load it into a throwaway postgres container, check it, remove the container. Touches nothing live, needs no --yes
       --dry-run       print the restore script and the backup it would use, without connecting (needs no --yes)
       --file string   backup to restore (name or path); default: newest
   -h, --help          help for restore

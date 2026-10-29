@@ -766,6 +766,7 @@ baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune
 baryovm stack backups baryoclub     # list backups, newest first
 baryovm stack restore baryoclub --yes                    # newest (REPLACES data)
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
+baryovm stack restore baryoclub --drill                  # prove the newest dump restores
 ```
 
 If the project's `.env` is root-owned, the right posture for a file holding the database password,
@@ -789,6 +790,15 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
 which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
 restore runs.
+
+`stack restore <name> --drill` proves a backup restores. It starts a throwaway postgres container on
+the VM (same image as the stack's database container, no network, no mounts), `pg_restore`s the
+newest dump (or `--file`) into it with `--no-owner --no-privileges`, checks that the restore had no
+errors and that the table count is above zero, then removes the container. The container is removed
+on failure too (an EXIT trap on the VM, and a second removal from the client). The live database and
+its container are only read for their image name, so `--drill` needs no `--yes` and rejects one. It
+emits a result on both paths; in `-o json` success `data` holds `file`, `tables`, `container`,
+`removed` and `liveTouched` (always false). `--drill --dry-run` prints the script without connecting.
 
 Example: recreating the barakoCMS API and the barakoBrew console together is one command:
 

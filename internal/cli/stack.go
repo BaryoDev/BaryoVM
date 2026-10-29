@@ -751,7 +751,7 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 		return err
 	})
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: o.errData})
 		return err
 	}
 	emitOp(name, action, o)
@@ -801,14 +801,24 @@ func newStackBackupsCmd() *cobra.Command {
 
 func newStackRestoreCmd() *cobra.Command {
 	var file string
-	var yes, dryRun bool
+	var yes, dryRun, drill bool
 	cmd := &cobra.Command{
 		Use:   "restore <name>",
 		Short: "Restore the stack's database from a backup (REPLACES current data)",
 		Args:  cobra.ExactArgs(1),
 		Example: "  baryovm stack restore baryoclub --yes\n" +
-			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes",
+			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes\n" +
+			"  baryovm stack restore baryoclub --drill",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if drill {
+				if yes {
+					return fmt.Errorf("--drill changes nothing live and takes no --yes: drop one of the two")
+				}
+				if dryRun {
+					return dryStackDrill(args[0], file)
+				}
+				return runStackDrill(args[0], file)
+			}
 			if dryRun {
 				return dryStackRestore(args[0], file)
 			}
@@ -823,8 +833,26 @@ func newStackRestoreCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "", "backup to restore (name or path); default: newest")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the destructive restore")
+	cmd.Flags().BoolVar(&drill, "drill", false, "prove the backup restores: load it into a throwaway postgres container, check it, remove the container. Touches nothing live, needs no --yes")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the restore script and the backup it would use, without connecting (needs no --yes)")
 	return cmd
+}
+
+// runStackDrill restores a dump into a throwaway container and reports. The live database and its
+// container are not touched, so there is no confirmation to ask for; it says so instead.
+func runStackDrill(name, file string) error {
+	const action = "stack restore"
+	ui.Notef("%s", backup.DrillNote)
+	drill := backup.DrillContainerName(name, time.Now().UTC().Format("20060102-150405"))
+	return runStackBackup(name, action, fmt.Sprintf("restore drill for %s", name),
+		func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
+			r, err := backup.Drill(c, backupConfig(st), file, drill)
+			if err != nil {
+				return opOutput{errData: r}, fmt.Errorf("restore drill failed (the live database was not touched, throwaway container removed: %t): %w", r.Removed, err)
+			}
+			text := fmt.Sprintf("drill ok: %s restored into a throwaway container, %d tables, container removed", r.File, r.Tables)
+			return opOutput{text: text, data: r}, nil
+		})
 }
 
 func newStackListCmd() *cobra.Command {
@@ -962,6 +990,9 @@ type opOutput struct {
 	text string
 	data any
 	note string
+	// errData rides on the failure envelope when the op fails, for an op whose failure has more to
+	// say than the error text (the drill reports whether its container was removed).
+	errData any
 }
 
 // bareOutput is the shape an op that says nothing about its own output emits, and the shape every

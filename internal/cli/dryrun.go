@@ -142,6 +142,26 @@ func dryStackRestore(name, file string) error {
 	return nil
 }
 
+// dryStackDrill is the --dry-run of `stack restore --drill`.
+func dryStackDrill(name, file string) error {
+	st, _, err := dryStackVM(name, "stack restore")
+	if err != nil {
+		return err
+	}
+	if st.DBContainer == "" || st.DBName == "" {
+		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+	}
+	p := newDryRunPlan(name)
+	p.File = file
+	if file == "" {
+		p.File = "newest"
+	}
+	p.note("%s", backup.DrillNote)
+	p.add("drill", backup.DrillScript(backupConfig(st), file, backup.DrillContainerName(name, "<timestamp>")))
+	emitDryRun("stack restore", p)
+	return nil
+}
+
 // dryStackDeploy is the --dry-run of `stack deploy`.
 func dryStackDeploy(name string, o compose.UpOptions) error {
 	st, _, err := dryStackVM(name, "stack deploy")
