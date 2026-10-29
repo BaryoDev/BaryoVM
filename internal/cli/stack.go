@@ -751,7 +751,7 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 		return err
 	})
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: o.errData})
 		return err
 	}
 	emitOp(name, action, o)
@@ -848,7 +848,7 @@ func runStackDrill(name, file string) error {
 		func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
 			r, err := backup.Drill(c, backupConfig(st), file, drill)
 			if err != nil {
-				return opOutput{}, fmt.Errorf("restore drill failed (the live database was not touched, throwaway container removed: %t): %w", r.Removed, err)
+				return opOutput{errData: r}, fmt.Errorf("restore drill failed (the live database was not touched, throwaway container removed: %t): %w", r.Removed, err)
 			}
 			text := fmt.Sprintf("drill ok: %s restored into a throwaway container, %d tables, container removed", r.File, r.Tables)
 			return opOutput{text: text, data: r}, nil
@@ -990,6 +990,9 @@ type opOutput struct {
 	text string
 	data any
 	note string
+	// errData rides on the failure envelope when the op fails, for an op whose failure has more to
+	// say than the error text (the drill reports whether its container was removed).
+	errData any
 }
 
 // bareOutput is the shape an op that says nothing about its own output emits, and the shape every
