@@ -16,6 +16,7 @@ import (
 
 func newVMHealthCmd() *cobra.Command {
 	var all bool
+	o := health.Defaults()
 	cmd := &cobra.Command{
 		Use:   "health [name]",
 		Short: "Ask a VM the questions an owner should ask monthly (read only)",
@@ -30,22 +31,30 @@ func newVMHealthCmd() *cobra.Command {
 			"in data, and --all gives a list of reports.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.Validate(); err != nil {
+				ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
+				return err
+			}
 			if all == (len(args) == 1) {
 				err := errors.New("give a VM name, or --all for every registered VM")
 				ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
 				return err
 			}
 			if all {
-				return healthAll()
+				return healthAll(o)
 			}
-			return healthOne(args[0])
+			return healthOne(args[0], o)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "check every registered VM")
+	cmd.Flags().IntVar(&o.DiskWarn, "disk-warn", o.DiskWarn, "disk percent used at which a filesystem warns (1-100, below --disk-fail)")
+	cmd.Flags().IntVar(&o.DiskFail, "disk-fail", o.DiskFail, "disk percent used at which a filesystem fails (1-100)")
+	cmd.Flags().IntVar(&o.OtherUpdatesWarn, "max-updates", o.OtherUpdatesWarn, "non-security updates pending at which updates warns (0 turns it off)")
+	cmd.Flags().IntVar(&o.RestartWarn, "max-restarts", o.RestartWarn, "restarts of a running container at which it warns (0 turns it off)")
 	return cmd
 }
 
-func healthOne(name string) error {
+func healthOne(name string, o health.Options) error {
 	vm, err := requireVM(name)
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
@@ -55,11 +64,11 @@ func healthOne(name string) error {
 		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
 		return err
 	}
-	rep := checkVM(vm)
+	rep := checkVM(vm, o)
 	return emitHealth([]health.Report{rep}, false)
 }
 
-func healthAll() error {
+func healthAll(o health.Options) error {
 	store, err := fleet.Load()
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
@@ -73,26 +82,26 @@ func healthAll() error {
 	var reps []health.Report
 	for _, vm := range store.VMs {
 		if err := requireLinux(&vm, "vm health"); err != nil {
-			reps = append(reps, health.Skipped(vm.Name, err.Error()))
+			reps = append(reps, withThresholds(health.Skipped(vm.Name, err.Error()), o))
 			continue
 		}
-		reps = append(reps, checkVM(vm))
+		reps = append(reps, checkVM(vm, o))
 	}
 	return emitHealth(reps, true)
 }
 
 // checkVM dials and runs the checks. An unreachable VM is a report, not an error, so --all goes on
 // to the next machine.
-func checkVM(vm fleet.VM) health.Report {
+func checkVM(vm fleet.VM, o health.Options) health.Report {
 	var rep health.Report
 	_ = ui.Step("checking "+vm.Name, func() error {
 		c, err := dialRelease(&vm)
 		if err != nil {
-			rep = health.Unreachable(vm.Name, err)
+			rep = withThresholds(health.Unreachable(vm.Name, err), o)
 			return nil
 		}
 		defer c.Close()
-		rep = health.Run(c, vm.Name, health.Options{})
+		rep = health.Run(c, vm.Name, o)
 		return nil
 	})
 	return rep
@@ -157,4 +166,9 @@ func printHealth(r health.Report) {
 			ui.Notef("    %s", it)
 		}
 	}
+}
+
+func withThresholds(r health.Report, o health.Options) health.Report {
+	r.Thresholds = o
+	return r
 }

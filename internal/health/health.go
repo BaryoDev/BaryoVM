@@ -49,31 +49,46 @@ const (
 	CheckUnattended = "unattended-updates"
 )
 
-// Options holds the thresholds. Zero values take the defaults.
+// Options holds the thresholds. The zero Options takes the defaults; once any field is set the
+// struct is used as given, so a count of 0 turns that warning off.
 type Options struct {
 	// DiskWarn and DiskFail are percent used.
-	DiskWarn int
-	DiskFail int
+	DiskWarn int `json:"diskWarn"`
+	DiskFail int `json:"diskFail"`
 	// OtherUpdatesWarn is how many non-security updates make the updates check a warning.
-	OtherUpdatesWarn int
+	OtherUpdatesWarn int `json:"maxUpdates"`
 	// RestartWarn is the restart count at which a running container is called out.
-	RestartWarn int
+	RestartWarn int `json:"maxRestarts"`
+}
+
+// Defaults are the thresholds used when no flag changes them.
+func Defaults() Options {
+	return Options{DiskWarn: 80, DiskFail: 90, OtherUpdatesWarn: 25, RestartWarn: 5}
 }
 
 func (o Options) withDefaults() Options {
-	if o.DiskWarn <= 0 {
-		o.DiskWarn = 80
-	}
-	if o.DiskFail <= 0 {
-		o.DiskFail = 90
-	}
-	if o.OtherUpdatesWarn <= 0 {
-		o.OtherUpdatesWarn = 25
-	}
-	if o.RestartWarn <= 0 {
-		o.RestartWarn = 5
+	if o == (Options{}) {
+		return Defaults()
 	}
 	return o
+}
+
+// Validate refuses thresholds that cannot mean anything: percentages outside 1 to 100, a warn level
+// that is not below the fail level, or a negative count.
+func (o Options) Validate() error {
+	if o.DiskWarn < 1 || o.DiskWarn > 100 || o.DiskFail < 1 || o.DiskFail > 100 {
+		return fmt.Errorf("disk thresholds are percentages from 1 to 100: got --disk-warn %d and --disk-fail %d", o.DiskWarn, o.DiskFail)
+	}
+	if o.DiskWarn >= o.DiskFail {
+		return fmt.Errorf("--disk-warn (%d) must be below --disk-fail (%d)", o.DiskWarn, o.DiskFail)
+	}
+	if o.OtherUpdatesWarn < 0 {
+		return fmt.Errorf("--max-updates cannot be negative: got %d (0 turns the warning off)", o.OtherUpdatesWarn)
+	}
+	if o.RestartWarn < 0 {
+		return fmt.Errorf("--max-restarts cannot be negative: got %d (0 turns the warning off)", o.RestartWarn)
+	}
+	return nil
 }
 
 // Check is one line of the report.
@@ -95,6 +110,8 @@ type Report struct {
 	Checks         []Check `json:"checks"`
 	// Error is set when the VM could not be checked at all, such as an unreachable host.
 	Error string `json:"error,omitempty"`
+	// Thresholds are the limits the verdicts were judged against.
+	Thresholds Options `json:"thresholds"`
 }
 
 // Failed reports whether anything in the report is a fail.
@@ -426,7 +443,7 @@ func UpdatesCheck(pm string, u Updates, o Options) Check {
 	switch {
 	case u.Security > 0:
 		v = Fail
-	case other >= o.OtherUpdatesWarn:
+	case o.OtherUpdatesWarn > 0 && other >= o.OtherUpdatesWarn:
 		v = Warn
 	}
 	detail := fmt.Sprintf("%d security and %d other updates pending", u.Security, other)
@@ -479,7 +496,7 @@ func ContainersCheck(cs []Container, state string, o Options) Check {
 			bad = append(bad, c.Name+" exited but its restart policy is always")
 		case c.Health == "unhealthy":
 			bad = append(bad, c.Name+" is unhealthy")
-		case c.Status == "running" && c.Restarts >= o.RestartWarn:
+		case c.Status == "running" && o.RestartWarn > 0 && c.Restarts >= o.RestartWarn:
 			warn = append(warn, fmt.Sprintf("%s has restarted %d times", c.Name, c.Restarts))
 		}
 	}
@@ -510,7 +527,7 @@ func UnattendedCheck(state, how string) Check {
 // cannot be answered is reported as unknown with the reason, and the others still run.
 func Run(r sshx.Runner, vm string, o Options) Report {
 	o = o.withDefaults()
-	rep := Report{VM: vm}
+	rep := Report{VM: vm, Thresholds: o}
 
 	out, perr := r.Run(PMCmd())
 	pm := ParsePM(out)

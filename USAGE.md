@@ -274,6 +274,18 @@ Each line is a check with a verdict of `ok`, `warn`, `fail`, `unknown` or `skip`
 | `containers` | restarting, dead, unhealthy, or exited with a non-zero code or under `restart: always`; running ones that restarted 5 or more times warn | any problem fails |
 | `unattended-updates` | `APT::Periodic::Unattended-Upgrade`, or a dnf-automatic timer that applies updates | off warns |
 
+The limits are flags, shown here with their defaults:
+
+```sh
+baryovm vm health oracle --disk-warn 80 --disk-fail 90 --max-updates 25 --max-restarts 5
+```
+
+`--disk-warn` and `--disk-fail` are percent used, both 1 to 100, with warn below fail.
+`--max-updates` is the count of non-security updates that makes `updates` warn, and
+`--max-restarts` is the restart count that makes a running container warn. A count of 0 turns that
+warning off; a negative count is refused. A bad value is refused before any connection is opened.
+The limits used are echoed in `thresholds` in the JSON report.
+
 It needs `sudo -n` for docker and the package manager. A check it cannot answer (no docker, no
 sudo, no supported package manager) is `unknown` or `skip` with the reason, and the rest still run.
 `apt list` reads the host's cached index, which this command does not refresh. The command exits

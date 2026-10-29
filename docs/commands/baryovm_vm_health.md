@@ -23,8 +23,12 @@ baryovm vm health [name] [flags]
 ### Options
 
 ```
-      --all    check every registered VM
-  -h, --help   help for health
+      --all                check every registered VM
+      --disk-fail int      disk percent used at which a filesystem fails (1-100) (default 90)
+      --disk-warn int      disk percent used at which a filesystem warns (1-100, below --disk-fail) (default 80)
+  -h, --help               help for health
+      --max-restarts int   restarts of a running container at which it warns (0 turns it off) (default 5)
+      --max-updates int    non-security updates pending at which updates warns (0 turns it off) (default 25)
 ```
 
 ### Options inherited from parent commands

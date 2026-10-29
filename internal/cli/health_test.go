@@ -148,3 +148,83 @@ func TestVMHealthAllReportsTheReachableVMWhenOneIsDown(t *testing.T) {
 		t.Errorf("vm2: %+v", ds[1])
 	}
 }
+
+// diskHost is healthyHost with the root filesystem at 85%.
+func diskHost() healthHost {
+	base := healthyHost("0")
+	return func(cmd string) string {
+		if strings.Contains(cmd, "df -P -k '/'") {
+			return "DISK|/|100000000|85000000|85\n"
+		}
+		return base(cmd)
+	}
+}
+
+func rootDiskVerdict(t *testing.T, args ...string) (string, string) {
+	t.Helper()
+	healthFleet(t, "vm1")
+	stubDial(t, map[string]sshx.Runner{"vm1": diskHost()})
+	stdout, _, err := runCmdE(t, newVMHealthCmd(), nil, true, append([]string{"vm1"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, data := parseEnvelope(t, stdout)
+	var d healthData
+	if err := json.Unmarshal([]byte(data), &d); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range d.Checks {
+		if c.Name == "disk-root" {
+			return c.Verdict, data
+		}
+	}
+	t.Fatal("no disk-root check")
+	return "", ""
+}
+
+func TestVMHealthDiskThresholdFlags(t *testing.T) {
+	v, data := rootDiskVerdict(t)
+	for _, want := range []string{`"diskWarn":80`, `"diskFail":90`, `"maxUpdates":25`, `"maxRestarts":5`} {
+		if !strings.Contains(data, want) {
+			t.Errorf("default thresholds missing %s in %s", want, data)
+		}
+	}
+	if v != "warn" {
+		t.Fatalf("85%% by default: %s", v)
+	}
+	v, data = rootDiskVerdict(t, "--disk-warn", "90", "--disk-fail", "95")
+	if v != "ok" || !strings.Contains(data, `"diskWarn":90`) || !strings.Contains(data, `"diskFail":95`) {
+		t.Fatalf("raised: %s %s", v, data)
+	}
+}
+
+func TestVMHealthRefusesBadThresholdsBeforeDialling(t *testing.T) {
+	for _, args := range [][]string{
+		{"--disk-warn", "95", "--disk-fail", "90"},
+		{"--disk-warn", "90", "--disk-fail", "90"},
+		{"--disk-warn", "0"},
+		{"--disk-fail", "101"},
+		{"--max-updates", "-1"},
+		{"--max-restarts", "-3"},
+	} {
+		healthFleet(t, "vm1")
+		dialled := false
+		prev := dialRelease
+		dialRelease = func(*fleet.VM) (remoteSession, error) {
+			dialled = true
+			return nil, errors.New("dialled")
+		}
+		stdout, _, err := runCmdE(t, newVMHealthCmd(), nil, true, append([]string{"vm1"}, args...)...)
+		dialRelease = prev
+		if err == nil {
+			t.Errorf("%v: expected a refusal", args)
+		}
+		if dialled {
+			t.Errorf("%v: dialled", args)
+		}
+		env, _ := parseEnvelope(t, stdout)
+		if env.OK || env.Action != "vm health" {
+			t.Errorf("%v: %+v", args, env)
+		}
+	}
+}
