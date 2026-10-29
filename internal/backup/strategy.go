@@ -353,11 +353,14 @@ func multiBackupScript(cfg Config) (string, error) {
 		if cfg.Skip[i] {
 			continue
 		}
-		cmd, err := cfg.dumpCmd(s, `"$BK/`+names[i]+`"`)
+		cmd, err := cfg.dumpCmd(s, `"$BK/`+names[i]+`.partial"`)
 		if err != nil {
 			return "", err
 		}
+		// The artifact takes its final name only once its command has succeeded, on its own line
+		// so set -e stops a failed dump before the rename.
 		b.WriteString(cmd + "\n")
+		fmt.Fprintf(&b, "mv \"$BK/%s.partial\" \"$BK/%s\"\n", names[i], names[i])
 		ran = append(ran, i)
 	}
 	if len(ran) == 0 {
@@ -403,7 +406,18 @@ func multiRestoreScript(cfg Config, file string) (string, error) {
 	b.WriteString("set -e\n")
 	b.WriteString(cfg.bkVar())
 	if file == "" {
-		b.WriteString("f=$(ls -1t \"$BK\"/" + strings.Replace(names[0], "$ts", "*", 1) + " | head -1)\n")
+		// The newest set with every artifact present. A set whose backup failed part way is
+		// missing one, and a .partial file never matches the glob, so it is not picked.
+		b.WriteString("f=\n")
+		b.WriteString("for c in \"$BK\"/" + strings.Replace(names[0], "$ts", "*", 1) + "; do\n")
+		b.WriteString("  [ -f \"$c\" ] || continue\n")
+		b.WriteString(`  ts=$(basename "$c" | grep -oE '[0-9]{8}-[0-9]{6}' | head -1)` + "\n")
+		b.WriteString("  ok=1\n")
+		for i := range cfg.Strategies {
+			fmt.Fprintf(&b, "  [ -f \"$BK/%s\" ] || ok=0\n", names[i])
+		}
+		b.WriteString("  if [ \"$ok\" = 1 ]; then f=$c; fi\n")
+		b.WriteString("done\n")
 	} else {
 		b.WriteString("f=" + sshx.Quote(file) + "\n")
 		b.WriteString("case \"$f\" in /*) ;; *) f=\"$BK/$f\" ;; esac\n")

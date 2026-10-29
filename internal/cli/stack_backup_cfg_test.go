@@ -110,7 +110,7 @@ func TestLegacyAndMigratedStacksBackUpIdentically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a != b || !strings.Contains(a, "pg_dump -U 'app' -Fc 'appdb' > \"$BK/db-$ts.dump\"") {
+	if a != b || !strings.Contains(a, "pg_dump -U 'app' -Fc 'appdb' > \"$BK/db-$ts.dump.partial\"") {
 		t.Errorf("scripts differ:\n%s\n---\n%s", a, b)
 	}
 }

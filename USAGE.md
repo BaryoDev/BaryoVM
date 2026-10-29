@@ -1113,7 +1113,9 @@ backup.json` (`--clear` removes it). Unknown keys and unknown kinds are refused 
 
 `restore` brings back the whole set that shares the timestamp of the file named by `--file` (the
 newest set by default) and checks every file exists before it replaces anything. A release and `stack
-backup` run every strategy under one timestamp and stop at the first failure. On a first release a
+backup` run every strategy under one timestamp and stop at the first failure. Each file is written as
+`<name>.partial` and renamed once its command succeeds, so a failed backup leaves no file under the
+real name and the default restore picks the newest set that is complete. On a first release a
 `postgres-container` strategy whose container is not there yet is skipped, as before. The
 `--drill` needs a `postgres-container` strategy.
 

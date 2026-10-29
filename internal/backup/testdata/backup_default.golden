@@ -3,7 +3,8 @@ umask 077
 BK="$HOME/app-backups"
 mkdir -p "$BK" && chmod 700 "$BK"
 ts=$(date +%Y%m%d-%H%M%S)
-docker exec 'app-postgres-1' pg_dump -U 'postgres' -Fc 'appdb' > "$BK/db-$ts.dump"
+docker exec 'app-postgres-1' pg_dump -U 'postgres' -Fc 'appdb' > "$BK/db-$ts.dump.partial"
+mv "$BK/db-$ts.dump.partial" "$BK/db-$ts.dump"
 if [ -f '/opt/app/.env' ]; then cp '/opt/app/.env' "$BK/env-$ts" && chmod 600 "$BK/env-$ts"; fi
 ls -1t "$BK"/db-*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f
 ls -1t "$BK"/env-* 2>/dev/null | tail -n +15 | xargs -r rm -f

@@ -163,8 +163,11 @@ func BackupScript(cfg Config) (string, error) {
 	b.WriteString(cfg.bkVar())
 	b.WriteString("mkdir -p \"$BK\" && chmod 700 \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
-	fmt.Fprintf(&b, cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump.partial\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
+	// Renamed only after the dump succeeded: set -e stops a failed one before this line, so a
+	// partial file never carries the name restore looks for.
+	b.WriteString("mv \"$BK/db-$ts.dump.partial\" \"$BK/db-$ts.dump\"\n")
 	if cfg.EnvFile != "" {
 		// The config file is the reason Sudo exists: it is the one holding the database password, so
 		// it is often root-owned and mode 600. Copy it the same way the rest of the stack is reached,

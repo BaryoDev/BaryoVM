@@ -5,6 +5,9 @@
 package backup
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,10 +42,10 @@ func TestMultiBackupRunsEveryStrategyInOrderUnderSetE(t *testing.T) {
 	if !strings.HasPrefix(script, "set -e\n") {
 		t.Errorf("the first failure must stop the script:\n%s", script)
 	}
-	pg := indexOf(t, script, "pg_dump -U 'postgres' -Fc 'app' > \"$BK/db-$ts.dump\"")
+	pg := indexOf(t, script, "pg_dump -U 'postgres' -Fc 'app' > \"$BK/db-$ts.dump.partial\"")
 	remote := indexOf(t, script, "db1-$ts.dump")
 	cmd := indexOf(t, script, "mongodump --archive && echo done")
-	files := indexOf(t, script, "tar -czf - -C / 'srv/app/uploads' 'srv/app/my files' > \"$BK/files3-$ts.tar.gz\"")
+	files := indexOf(t, script, "tar -czf - -C / 'srv/app/uploads' 'srv/app/my files' > \"$BK/files3-$ts.tar.gz.partial\"")
 	if pg >= remote || remote >= cmd || cmd >= files {
 		t.Errorf("strategies out of order: %d %d %d %d", pg, remote, cmd, files)
 	}
@@ -132,7 +135,7 @@ func TestMultiRestoreChecksEveryArtifactBeforeReplacingAnything(t *testing.T) {
 	if lastCheck < 0 || lastCheck > firstRestore {
 		t.Errorf("every artifact must be checked before the first restore:\n%s", script)
 	}
-	for _, want := range []string{"mongorestore --archive", "pg_restore -h", "tar -xzf - -C /", `ls -1t "$BK"/db-*.dump`} {
+	for _, want := range []string{"mongorestore --archive", "pg_restore -h", "tar -xzf - -C /", `for c in "$BK"/db-*.dump; do`} {
 		indexOf(t, script, want)
 	}
 	named, _ := RestoreScriptE(multiCfg(), "db-20260101-010101.dump")
@@ -208,5 +211,60 @@ func TestListCoversEveryArtifactOfAStrategyList(t *testing.T) {
 		if !strings.Contains(script, g) {
 			t.Errorf("listing lacks %s:\n%s", g, script)
 		}
+	}
+}
+
+func TestAFailedBackupSetIsNeverTheOneRestoreWouldPick(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this machine")
+	}
+	bk := filepath.Join(t.TempDir(), "bk")
+	if err := os.MkdirAll(bk, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// An older, complete set.
+	for _, n := range []string{"cmd0-20200101-000000.out", "cmd1-20200101-000000.out"} {
+		if err := os.WriteFile(filepath.Join(bk, n), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "restored")
+	cfg := Config{Name: "app", BackupDir: bk, Strategies: []Strategy{
+		{Kind: KindCommand, Dump: "echo first", Restore: "cat >> " + out},
+		{Kind: KindCommand, Dump: "echo partial; exit 3", Restore: "cat >> " + out},
+	}}
+	backup, err := BackupScript(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(sh, "-c", backup).Run(); err == nil {
+		t.Fatal("the backup with a failing second strategy must fail")
+	}
+	restore, err := RestoreScriptE(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := exec.Command(sh, "-c", restore).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, got)
+	}
+	if !strings.Contains(string(got), "restoring set 20200101-000000") {
+		t.Errorf("restore must pick the older complete set, got:\n%s", got)
+	}
+	data, _ := os.ReadFile(out)
+	if strings.Contains(string(data), "first") || strings.Contains(string(data), "partial") {
+		t.Errorf("the failed set was restored: %q", data)
+	}
+}
+
+func TestASinglePGDumpThatFailsLeavesNoDumpNamedFile(t *testing.T) {
+	script, err := BackupScript(Config{Name: "app", DBContainer: "db", DBName: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := indexOf(t, script, `> "$BK/db-$ts.dump.partial"`)
+	if mv := indexOf(t, script, `mv "$BK/db-$ts.dump.partial" "$BK/db-$ts.dump"`); mv < dump {
+		t.Errorf("rename must follow the dump:\n%s", script)
 	}
 }
