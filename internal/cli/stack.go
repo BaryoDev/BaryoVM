@@ -529,6 +529,10 @@ func newStackReleaseCmd() *cobra.Command {
 			// the site can still serve the wrong thing: that is how the umbraco-pwa demo served
 			// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
 			// every listing pointed at.
+			m.ReleaseTag = commit
+			if m.ReleaseTag == "" {
+				m.ReleaseTag = time.Now().UTC().Format("20060102T150405Z")
+			}
 			plan := m.Verification(st.HealthURL)
 			attemptsUsed := 0
 			if len(plan.Commands) == 0 {
@@ -607,6 +611,8 @@ func verifyLabel(source string) string {
 		return "the manifest verify list"
 	case "healthUrl":
 		return "the stack healthUrl"
+	case "verifyVisual":
+		return "the manifest verifyVisual block"
 	}
 	return source
 }

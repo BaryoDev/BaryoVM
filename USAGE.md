@@ -433,6 +433,7 @@ Manifest options:
 | `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
 | `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
 | `verifyDelaySeconds` | `3` | wait between attempts |
+| `verifyVisual` | none | opens a page in a headless chromium or chrome on the VM after the curl checks. Keys: `url` (http or https, as seen from the VM), `widths` (1 to 10000 px, up to 20), `screenshotDir` (absolute path on the VM; writes `<release>-<width>.png`), `assertNoHorizontalOverflow` (fails when `scrollWidth` exceeds `innerWidth`, naming the width). Needs `screenshotDir` or the assertion. Each browser run is capped at 60 seconds and shares the `verifyAttempts` and `verifyDelaySeconds` bounds. No image comparison. A VM with no browser fails with a message pointing at `baryovm vm bootstrap` |
 
 #### TLS and the nginx vhost
 
