@@ -234,7 +234,7 @@ func TestRecordForAnotherNameOrVersionIsRefused(t *testing.T) {
 }
 
 func TestRecordStringsAreCleanedInTextJSONAndErrors(t *testing.T) {
-	bad := "\x1b]0;x\x07" + "\x1b[31m" + "‮"
+	bad := "\x1b]0;x\x07" + "\x1b[31m" + "\u202e"
 	r := goodRecord()
 	r.Diff.Commits = []string{"fix " + bad + "subject"}
 	r.Assertions = []ship.Assertion{{Package: "Acme.Lib", Assert: "version", OK: false, Observed: "8.0" + bad}}
@@ -246,7 +246,7 @@ func TestRecordStringsAreCleanedInTextJSONAndErrors(t *testing.T) {
 	}
 	b, _ := json.Marshal(p)
 	hasBad := func(s string) bool {
-		return strings.ContainsAny(s, "\x1b\x07‮") || strings.Contains(s, "\\u001b") || strings.Contains(s, "\\u202e") || strings.Contains(s, "\\u0007")
+		return strings.ContainsAny(s, "\x1b\x07\u202e") || strings.Contains(s, "\\u001b") || strings.Contains(s, "\\u202e") || strings.Contains(s, "\\u0007")
 	}
 	if hasBad(p.Text()) || hasBad(string(b)) {
 		t.Errorf("control text survived:\n%q\n%s", p.Text(), b)

@@ -318,7 +318,7 @@ func Load(home, name, version string) (*ship.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- path is RecordPath under $BARYOVM_HOME/ship, name and version validated
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("no release record for %s %s: looked for %s (it is written by `baryovm ship`)", name, version, path)
 	}
