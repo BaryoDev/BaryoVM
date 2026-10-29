@@ -75,7 +75,7 @@ func SetCmd(file, key string, sudo bool) string {
 		`trap 'rm -f "$vf" "$nf"' EXIT`,
 		`cat > "$vf"`,
 		`[ -e "$f" ] || : > "$f"`,
-		`awk -v k=` + sshx.Quote(key) + ` -v vf="$vf" 'BEGIN{getline v < vf; close(vf)} index($0,k"=")==1{if(!d){print k"="v;d=1};next} {print} END{if(!d)print k"="v}' "$f" > "$nf"`,
+		`awk -v k=` + sshx.Quote(key) + ` -v vf="$vf" 'BEGIN{getline v < vf; close(vf)} {p="";r=$0; if(match($0,/^export[ \t]+/)){p=substr($0,1,RLENGTH);r=substr($0,RLENGTH+1)}} index(r,k"=")==1{if(!d){print p k"="v;d=1};next} {print} END{if(!d)print k"="v}' "$f" > "$nf"`,
 		`cat "$nf" > "$f"`,
 		`chmod 600 "$f"`,
 	}, "\n")
@@ -91,7 +91,7 @@ func UnsetCmd(file, key string, sudo bool) string {
 		`[ -f "$f" ] || exit 0`,
 		`nf=$(mktemp)`,
 		`trap 'rm -f "$nf"' EXIT`,
-		`awk -v k=` + sshx.Quote(key) + ` 'index($0,k"=")!=1' "$f" > "$nf"`,
+		`awk -v k=` + sshx.Quote(key) + ` '{r=$0; if(match($0,/^export[ \t]+/))r=substr($0,RLENGTH+1)} index(r,k"=")!=1' "$f" > "$nf"`,
 		`cat "$nf" > "$f"`,
 		`chmod 600 "$f"`,
 	}, "\n")
@@ -102,7 +102,7 @@ func UnsetCmd(file, key string, sudo bool) string {
 // travels back over the connection.
 func ListCmd(file string, sudo bool) string {
 	script := "f=" + sshx.Quote(file) + "\n" +
-		`if [ -f "$f" ]; then awk '/^[A-Za-z_][A-Za-z0-9_]*=/{print substr($0,1,index($0,"=")-1)}' "$f"; fi`
+		`if [ -f "$f" ]; then awk '{r=$0; if(match($0,/^export[ \t]+/))r=substr($0,RLENGTH+1)} r ~ /^[A-Za-z_][A-Za-z0-9_]*=/{print substr(r,1,index(r,"=")-1)}' "$f"; fi`
 	return sshx.SudoShell(sudo, script)
 }
 

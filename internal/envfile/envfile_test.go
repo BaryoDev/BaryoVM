@@ -183,7 +183,7 @@ func TestListPrintsKeysAndNeverValues(t *testing.T) {
 		t.Fatalf("list leaked a value: %q", out)
 	}
 	keys := parseKeys(out)
-	if strings.Join(keys, ",") != "A,B_2" {
+	if strings.Join(keys, ",") != "A,B_2,C" {
 		t.Fatalf("keys = %v", keys)
 	}
 }
@@ -256,5 +256,29 @@ func TestListParsesKeysFromTheRemote(t *testing.T) {
 	}
 	if !strings.HasPrefix(f.cmds[0], "sudo -n ") {
 		t.Errorf("sudo missing: %s", f.cmds[0])
+	}
+}
+
+// docker compose reads `export KEY=v` as KEY. A second plain KEY line would be a duplicate that
+// compose resolves by position, so Set must replace the export line in place and keep its prefix.
+func TestSetTreatsAnExportLineAsTheSameKey(t *testing.T) {
+	f := filepath.Join(t.TempDir(), ".env")
+	_ = os.WriteFile(f, []byte("A=1\nexport DB=old\nB=2\n"), 0o600)
+	sh(t, SetCmd(f, "DB", false), "new\n")
+	if got := read(t, f); got != "A=1\nexport DB=new\nB=2\n" {
+		t.Fatalf("got %q", got)
+	}
+	sh(t, UnsetCmd(f, "DB", false), "")
+	if got := read(t, f); got != "A=1\nB=2\n" {
+		t.Fatalf("unset left the export line: %q", got)
+	}
+}
+
+func TestListIncludesExportLines(t *testing.T) {
+	f := filepath.Join(t.TempDir(), ".env")
+	_ = os.WriteFile(f, []byte("A=1\nexport B=2\n# export C=3\n"), 0o600)
+	got := parseKeys(sh(t, ListCmd(f, false), ""))
+	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
+		t.Fatalf("got %v", got)
 	}
 }
