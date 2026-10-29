@@ -17,11 +17,11 @@ const dockerScript = `set -e
 if command -v docker >/dev/null 2>&1; then
   echo "ALREADY_INSTALLED"
 else
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "$(whoami)" || true
+  curl -fsSL https://get.docker.com | sudo -n sh
+  sudo -n usermod -aG docker "$(whoami)" || true
 fi
-sudo systemctl enable --now docker >/dev/null 2>&1 || true
-docker --version 2>/dev/null || sudo docker --version
+sudo -n systemctl enable --now docker >/dev/null 2>&1 || true
+docker --version 2>/dev/null || sudo -n docker --version
 `
 
 // Report describes the outcome of EnsureDocker.
