@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -81,7 +82,7 @@ func TestVMHealthJSONHealthyHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env, data := parseEnvelope(t, stdout)
+	env, data := healthEnvelope(t, stdout)
 	if !env.OK || env.Action != "vm health" {
 		t.Fatalf("%+v", env)
 	}
@@ -110,7 +111,7 @@ func TestVMHealthSecurityUpdateExitsNonZeroButKeepsTheReport(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a non-zero exit")
 	}
-	env, data := parseEnvelope(t, stdout)
+	env, data := healthEnvelope(t, stdout)
 	if env.OK {
 		t.Fatal("ok should be false")
 	}
@@ -130,7 +131,7 @@ func TestVMHealthAllReportsTheReachableVMWhenOneIsDown(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unreachable VM should make the run exit non-zero")
 	}
-	env, data := parseEnvelope(t, stdout)
+	env, data := healthEnvelope(t, stdout)
 	if env.OK {
 		t.Fatal("ok should be false")
 	}
@@ -168,7 +169,7 @@ func rootDiskVerdict(t *testing.T, args ...string) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, data := parseEnvelope(t, stdout)
+	_, data := healthEnvelope(t, stdout)
 	var d healthData
 	if err := json.Unmarshal([]byte(data), &d); err != nil {
 		t.Fatal(err)
@@ -222,7 +223,7 @@ func TestVMHealthRefusesBadThresholdsBeforeDialling(t *testing.T) {
 		if dialled {
 			t.Errorf("%v: dialled", args)
 		}
-		env, _ := parseEnvelope(t, stdout)
+		env, _ := healthEnvelope(t, stdout)
 		if env.OK || env.Action != "vm health" {
 			t.Errorf("%v: %+v", args, env)
 		}
@@ -250,7 +251,7 @@ func TestVMHealthMaxUpdatesZeroWarnsOnOnePending(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, data := parseEnvelope(t, stdout)
+		_, data := healthEnvelope(t, stdout)
 		var d healthData
 		if err := json.Unmarshal([]byte(data), &d); err != nil {
 			t.Fatal(err)
@@ -265,4 +266,21 @@ func TestVMHealthMaxUpdatesZeroWarnsOnOnePending(t *testing.T) {
 			t.Errorf("%v: updates is %q, want %q", tc.args, got, tc.want)
 		}
 	}
+}
+
+// healthEnvelope is parseEnvelope without the demand that the result be ok: vm health emits ok
+// false, with the report still in data, when a check fails.
+func healthEnvelope(t *testing.T, stdout string) (envelope, string) {
+	t.Helper()
+	var e envelope
+	if err := json.Unmarshal([]byte(stdout), &e); err != nil {
+		t.Fatalf("envelope is not JSON (%v): %s", err, stdout)
+	}
+	var buf bytes.Buffer
+	if len(e.Data) > 0 {
+		if err := json.Compact(&buf, e.Data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return e, buf.String()
 }
