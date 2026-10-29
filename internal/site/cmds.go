@@ -36,6 +36,16 @@ func ProbeCertCmd(domain string) string {
 	return sshx.SudoShell(true, "if [ -f "+f+" ]; then echo present; else echo missing; fi")
 }
 
+// ProbePrevCmd says whether a copy of the original server block from an earlier, interrupted run
+// is still on the VM. Overwriting it would lose the only copy of the original.
+func ProbePrevCmd(domain string) string {
+	f := sshx.Quote(ConfPath(domain) + prevSuffix)
+	return sshx.SudoShell(true, "if [ -e "+f+" ]; then echo present; else echo missing; fi")
+}
+
+// PrevPath is the file BackupCmd writes.
+func PrevPath(domain string) string { return ConfPath(domain) + prevSuffix }
+
 // ProbeSSLCmd lists which of certbot's helper files exist.
 func ProbeSSLCmd() string {
 	return sshx.SudoShell(true, "[ -f "+sshx.Quote(sslOptions)+" ] && echo options; [ -f "+
@@ -64,10 +74,14 @@ func BackupCmd(domain string) string {
 }
 
 // WriteCmd writes content to the server block path. The payload travels base64 encoded, so no byte
-// of it is ever shell syntax.
+// of it is ever shell syntax. It is decoded into a temp file beside the target under set -e and
+// moved into place only if the decode succeeded and produced something, so a failed decode fails
+// the step instead of leaving a truncated config (a plain pipe into tee reports tee's status).
 func WriteCmd(domain, content string) string {
-	return "printf '%s' " + sshx.Quote(base64.StdEncoding.EncodeToString([]byte(content))) +
-		" | base64 -d | " + sshx.Sudo(true, "tee "+sshx.Quote(ConfPath(domain))) + " > /dev/null"
+	script := `set -e; t=$(mktemp "$1.XXXXXX"); trap 'rm -f "$t"' EXIT; ` +
+		`printf '%s' "$2" | base64 -d > "$t"; [ -s "$t" ]; chmod 644 "$t"; mv -f "$t" "$1"`
+	return sshx.Sudo(true, "sh -c "+sshx.Quote(script)+" sh "+sshx.Quote(ConfPath(domain))+" "+
+		sshx.Quote(base64.StdEncoding.EncodeToString([]byte(content))))
 }
 
 // TestCmd is nginx's own config test. Nothing reloads unless it passes.

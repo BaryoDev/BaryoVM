@@ -83,10 +83,12 @@ func Add(r sshx.Runner, o Options, step StepFunc) (rep Report, err error) {
 	}
 
 	var (
-		state    State
-		ssl      SSLFiles
-		touched  bool // the server block file has been written
-		reloaded bool // nginx has been reloaded with the new file
+		state       State
+		ssl         SSLFiles
+		touched     bool // the server block file has been written
+		certPresent bool // a certificate for the domain already exists
+		backedUp    bool // the original is copied aside
+		reloaded    bool // nginx has been reloaded with the new file
 	)
 
 	// rollback is the single exit for a failure after the first write.
@@ -119,6 +121,13 @@ func Add(r sshx.Runner, o Options, step StepFunc) (rep Report, err error) {
 	// write puts content at the path and keeps it only if nginx -t accepts it. nginx is not
 	// reloaded here: a reload of a config that failed its test would take down every other site.
 	write := func(content string) error {
+		// The original is copied aside once, before the first write of the run.
+		if state != Absent && !backedUp {
+			if _, e := run(BackupCmd(o.Domain)); e != nil {
+				return e
+			}
+			backedUp = true
+		}
 		touched = true
 		if _, e := run(WriteCmd(o.Domain, content)); e != nil {
 			return e
@@ -143,6 +152,18 @@ func Add(r sshx.Runner, o Options, step StepFunc) (rep Report, err error) {
 		if state != Absent && !o.Force {
 			return fmt.Errorf("%s already exists on the VM: pass --force to replace it (the old file is kept if a step fails)", ConfPath(o.Domain))
 		}
+		// A leftover copy means an earlier run was interrupted after it moved the original aside.
+		// Copying over it would destroy the original, so stop and let a person look.
+		if out, e = run(ProbePrevCmd(o.Domain)); e != nil {
+			return e
+		}
+		if strings.TrimSpace(out) == "present" {
+			return fmt.Errorf("%s exists from an interrupted run and may hold the original server block: inspect it, put it back or remove it, then rerun", PrevPath(o.Domain))
+		}
+		if out, e = run(ProbeCertCmd(o.Domain)); e != nil {
+			return e
+		}
+		certPresent = strings.TrimSpace(out) == "present"
 		if out, e = run(ProbeSSLCmd()); e != nil {
 			return e
 		}
@@ -173,30 +194,28 @@ func Add(r sshx.Runner, o Options, step StepFunc) (rep Report, err error) {
 		}
 	}
 
-	if err := do(StepHTTPBlock, func() error {
-		if state != Absent {
-			if _, e := run(BackupCmd(o.Domain)); e != nil {
+	// A live HTTPS site being replaced (--force) already has its certificate and a block that
+	// serves it. Writing the HTTP-only block first would take HTTPS down until certbot finished,
+	// so that stage is skipped and the full block goes in directly.
+	if !(state == Managed && certPresent) {
+		if err := do(StepHTTPBlock, func() error { return write(HTTPBlock(o)) }); err != nil {
+			return rep, err
+		}
+		if err := do(StepHTTPReload, func() error {
+			if _, e := run(ReloadCmd()); e != nil {
 				return e
 			}
+			reloaded = true
+			return nil
+		}); err != nil {
+			return rep, err
 		}
-		return write(HTTPBlock(o))
-	}); err != nil {
-		return rep, err
-	}
-	if err := do(StepHTTPReload, func() error {
-		if _, e := run(ReloadCmd()); e != nil {
+		if err := do(StepCert, func() error {
+			_, e := run(CertbotCmd(o.Domain, o.Email))
 			return e
+		}); err != nil {
+			return rep, err
 		}
-		reloaded = true
-		return nil
-	}); err != nil {
-		return rep, err
-	}
-	if err := do(StepCert, func() error {
-		_, e := run(CertbotCmd(o.Domain, o.Email))
-		return e
-	}); err != nil {
-		return rep, err
 	}
 	if err := do(StepFullBlock, func() error { return write(FullBlock(o, ssl)) }); err != nil {
 		return rep, err
@@ -228,6 +247,8 @@ func Plan(o Options) []PlanStep {
 	write := func(what string) string { return "write " + ConfPath(o.Domain) + " (" + what + ")" }
 	return []PlanStep{
 		{StepInspect, ProbeConfCmd(o.Domain)},
+		{StepInspect, ProbePrevCmd(o.Domain)},
+		{StepInspect, ProbeCertCmd(o.Domain)},
 		{StepInspect, ProbeSSLCmd()},
 		{StepInspect, ProbeSELinuxCmd()},
 		{StepWebroot, MkdirCmd(o.Root)},

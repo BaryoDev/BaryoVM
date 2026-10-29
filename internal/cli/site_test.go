@@ -26,10 +26,14 @@ type siteHost struct {
 	fail    string
 	failNth int // fail only the Nth match of fail, 0 for all
 	hits    int
+	onRun   func(cmd string) // runs before each command, to change things mid-run
 }
 
 func (h *siteHost) Run(cmd string) (string, error) {
 	h.seen = append(h.seen, cmd)
+	if h.onRun != nil {
+		h.onRun(cmd)
+	}
 	if h.fail != "" && strings.Contains(cmd, h.fail) {
 		h.hits++
 		if h.failNth == 0 || h.hits == h.failNth {
@@ -66,7 +70,7 @@ func (h *siteHost) order() []string {
 		switch {
 		case strings.Contains(c, "head -n 1"):
 			out = append(out, "probe")
-		case strings.Contains(c, "echo options"), strings.Contains(c, "selinuxenabled"):
+		case strings.Contains(c, "echo options"), strings.Contains(c, "selinuxenabled"), strings.Contains(c, "echo present"):
 			out = append(out, "probe")
 		case strings.Contains(c, "mkdir -p"):
 			out = append(out, "mkdir")
@@ -465,4 +469,31 @@ func TestSiteDeployFallsBackToTarWithoutRsync(t *testing.T) {
 		t.Errorf("transport not tar: %s", stdout)
 	}
 	_ = h
+}
+
+func TestSiteAddKeepsFleetChangesMadeDuringTheRun(t *testing.T) {
+	h := siteFixture(t)
+	h.onRun = func(cmd string) {
+		if !strings.Contains(cmd, "certbot") {
+			return
+		}
+		// Another baryovm command registers a VM while the slow remote steps run.
+		s, err := fleet.Load()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		s.VMs = append(s.VMs, fleet.VM{Name: "web2", Host: "10.0.0.3", User: "opc", KeyPath: "/keys/id"})
+		if err := s.Save(); err != nil {
+			t.Error(err)
+		}
+	}
+	runCmd(t, newSiteAddCmd(), nil, true, siteAddArgs...)
+	s, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Find("web2") == nil || s.FindSite("example.com") == nil {
+		t.Errorf("web2 = %v, site = %v: one write clobbered the other", s.Find("web2"), s.FindSite("example.com"))
+	}
 }
