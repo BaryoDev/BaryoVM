@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
@@ -80,6 +81,10 @@ type Stack struct {
 	// of them `stack update --auto` refuses. A pointer so an explicit empty list, "backup": [],
 	// survives a save: it says there is genuinely nothing to back up. See BackupStrategies.
 	Backup *[]backup.Strategy `json:"backup,omitempty"`
+
+	// Managed names the managed database beside this VM and the AWS profile or Azure subscription
+	// whose CLI sign-in reaches it. Names only, never a credential (#81).
+	Managed *managed.Spec `json:"managed,omitempty"`
 
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`

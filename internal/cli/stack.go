@@ -19,6 +19,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
 	"github.com/BaryoDev/BaryoVM/internal/remote"
@@ -35,7 +36,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackSetBackupCmd(), newStackTLSCmd(), newStackEnvCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackSetBackupCmd(), newStackSetManagedCmd(), newStackTLSCmd(), newStackEnvCmd(),
 		newStackRollbackCmd(), newStackDiscoverCmd(),
 	)
 	return cmd
@@ -382,6 +383,9 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 		return err
 	}
 
+	// cloudCalls are the AWS or Azure CLI calls of the pre-release snapshot, kept for the envelope.
+	var cloudCalls []managed.Call
+
 	// rr is the progress record once a release has begun one. Until then a failure has
 	// nothing on the host to report or clean up.
 	var rr *relRun
@@ -394,6 +398,14 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 				res.Data = stateData(rr.loc, rr.st, name)
 				ui.Notef("release state kept at %s: %s", rr.loc.File, stateHint(name, rr.st))
 			}
+		}
+		if len(cloudCalls) > 0 {
+			d, _ := res.Data.(map[string]any)
+			if d == nil {
+				d = map[string]any{}
+			}
+			d["cloud"] = cloudCalls
+			res.Data = d
 		}
 		*out = res
 		return e
@@ -496,6 +508,22 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 			return refuseState(loc, existing, name)
 		}
 		rr.st = cur
+	}
+
+	// A managed database beside the VM is snapshotted first, through the operator's own AWS or
+	// Azure CLI sign-in, and the release waits for it. --no-backup skips it with the rest.
+	snapshotID := ""
+	if !noBackup && st.Managed != nil {
+		spec := *st.Managed
+		if err := rr.step("managed-snapshot", func() error {
+			return ui.Step("snapshot managed database "+spec.Database, func() error {
+				id, calls, e := managedSnapshot(spec)
+				snapshotID, cloudCalls = id, calls
+				return e
+			})
+		}); err != nil {
+			return fail(err)
+		}
 	}
 
 	// Safety first: back up before releasing (unless opted out / no DB configured).
@@ -709,16 +737,20 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 
 	// Say which check ran, so a release that verified nothing cannot read as one that did.
-	*out = ui.Result{OK: true, Action: "stack release", Message: name + " released",
-		Data: map[string]any{
-			"transport": string(transport),
-			"commit":    commit,
-			"verify": map[string]any{
-				"source":   plan.Source,
-				"checks":   len(plan.Commands),
-				"attempts": attemptsUsed,
-			},
-		}}
+	data := map[string]any{
+		"transport": string(transport),
+		"commit":    commit,
+		"verify": map[string]any{
+			"source":   plan.Source,
+			"checks":   len(plan.Commands),
+			"attempts": attemptsUsed,
+		},
+	}
+	if len(cloudCalls) > 0 {
+		data["managedSnapshot"] = snapshotID
+		data["cloud"] = cloudCalls
+	}
+	*out = ui.Result{OK: true, Action: "stack release", Message: name + " released", Data: data}
 	if len(plan.Commands) > 0 {
 		ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", name,
 			verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)

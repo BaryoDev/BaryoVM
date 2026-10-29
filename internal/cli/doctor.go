@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/toolchain"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -28,6 +30,8 @@ type doctorCheck struct {
 	// ok is computed over the required checks, so a box with every release tool
 	// and no cloud account is reported ready, which it is.
 	Optional bool `json:"optional,omitempty"`
+	// Calls are the cloud CLI calls behind a managed sign-in check: argv, exit code, output.
+	Calls []managed.Call `json:"calls,omitempty"`
 }
 
 // checkedCLIs are the binaries BaryoVM shells out to locally, and whether a
@@ -66,6 +70,10 @@ func newDoctorCmd() *cobra.Command {
 			"install is reported with what to do about it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			results := doctorChecks(fix, runtime.GOOS)
+			// A stack that names the AWS or Azure CLI needs it installed and signed in.
+			if store, lerr := fleet.Load(); lerr == nil {
+				results = append(results, managedDoctorChecks(store.Stacks)...)
+			}
 			var missing []string
 			for _, r := range results {
 				if !r.Present && !r.Optional {

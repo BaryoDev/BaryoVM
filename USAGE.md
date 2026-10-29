@@ -1080,6 +1080,32 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
+### Managed database snapshot (AWS and Azure CLI)
+
+A stack can name the managed database that sits beside its VM, and the AWS profile or Azure
+subscription that reaches it. BaryoVM stores only those names in `fleet.json`. It runs the `aws` or
+`az` already installed and signed in on your machine; the CLI's own sign-in (`aws sso login`,
+`az login`) does the authentication, and no key, token or password is read or stored.
+
+```sh
+baryovm stack set-managed shop --provider aws --profile prod --region ap-southeast-1 --database shop-db
+baryovm stack set-managed shop --provider azure --subscription prod-sub --resource-group shop-rg --database shop-pg
+baryovm stack set-managed shop --clear
+```
+
+`stack release` then takes a snapshot first and waits for it, before the VM backup and before
+anything changes. On AWS that is `aws rds create-db-snapshot` then `aws rds wait
+db-snapshot-available`; on Azure, `az postgres flexible-server backup create`. A failed call stops
+the release. `--no-backup` skips the snapshot along with the backup, and `--dry-run` lists the
+calls without running them. Every value that goes into a call is checked (letters, digits, `.`, `_`
+and `-`, starting with a letter or digit) and the calls are run as an argv, never through a shell.
+
+Under `-o json` the release envelope carries `data.cloud`, one entry per CLI call with its `argv`,
+`exitCode` and `output`, and `data.managedSnapshot` with the snapshot name. A failed release carries
+the same list. `baryovm doctor` checks, for every stack that names a CLI, that it is installed and
+signed in (`aws sts get-caller-identity`, `az account show`), and names the command to run when it
+is not. Not built: the reachability check, and the managed pieces in `vm ping` or `stack ps`.
+
 ### Backup strategies
 
 A stack's backup is a list of strategies, each declaring how it is dumped and how it is restored.
@@ -1155,6 +1181,7 @@ baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
 baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
 baryovm stack set-verify barako --file verify.json   # store a verify spec, or --clear
 baryovm stack set-backup barako --file backup.json   # store backup strategies, or --clear
+baryovm stack set-managed barako --provider aws --profile prod --region ap-southeast-1 --database barako-db
 
 baryovm stack update barako --dry-run   # report what is pending, change nothing
 baryovm stack update barako             # apply, verify, roll back if it does not come up
