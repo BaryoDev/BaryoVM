@@ -193,10 +193,10 @@ func TestEdgeSecurityTxtAndHSTS(t *testing.T) {
 }
 
 func TestEdgeBareIP(t *testing.T) {
-	res := &fakeResolver{a: map[string][]string{"example.com": {"192.0.2.10", "192.0.2.11"}}}
+	res := &fakeResolver{a: map[string][]string{"example.com": {"93.184.216.34", "93.184.216.35"}}}
 	f := &fakeFetcher{resp: map[string]FetchResponse{
-		"https://192.0.2.10/": {Status: 200},
-		"http://192.0.2.10/":  {Status: 301},
+		"https://93.184.216.34/": {Status: 200},
+		"http://93.184.216.34/":  {Status: 301},
 	}}
 	got := runEdge(t, res, f)
 	want(t, got, "Bare IP serves a site over HTTPS", SeverityMedium, "200")
@@ -206,8 +206,8 @@ func TestEdgeBareIP(t *testing.T) {
 
 	// Connection refused is the good answer and produces no finding.
 	f = &fakeFetcher{errs: map[string]error{
-		"https://192.0.2.10/": errors.New("connection refused"),
-		"http://192.0.2.10/":  errors.New("connection refused"),
+		"https://93.184.216.34/": errors.New("connection refused"),
+		"http://93.184.216.34/":  errors.New("connection refused"),
 	}}
 	got = runEdge(t, res, f)
 	for n := range got {
@@ -218,7 +218,7 @@ func TestEdgeBareIP(t *testing.T) {
 }
 
 func TestEdgeRequestBudget(t *testing.T) {
-	res := &fakeResolver{a: map[string][]string{"example.com": {"192.0.2.10"}}}
+	res := &fakeResolver{a: map[string][]string{"example.com": {"93.184.216.34"}}}
 	f := &fakeFetcher{}
 	runEdge(t, res, f)
 
@@ -226,7 +226,7 @@ func TestEdgeRequestBudget(t *testing.T) {
 	if strings.Join(res.calls, ",") != strings.Join(wantLookups, ",") {
 		t.Errorf("lookups = %v, want %v", res.calls, wantLookups)
 	}
-	wantURLs := []string{"https://example.com/.well-known/security.txt", "https://192.0.2.10/", "http://192.0.2.10/"}
+	wantURLs := []string{"https://example.com/.well-known/security.txt", "https://93.184.216.34/", "http://93.184.216.34/"}
 	var gotURLs []string
 	for _, c := range f.calls {
 		gotURLs = append(gotURLs, c.URL)
@@ -235,7 +235,7 @@ func TestEdgeRequestBudget(t *testing.T) {
 		t.Errorf("requests = %v, want %v", gotURLs, wantURLs)
 	}
 	for _, c := range f.calls {
-		if c.SkipVerify != (c.URL == "https://192.0.2.10/") {
+		if c.SkipVerify != (c.URL == "https://93.184.216.34/") {
 			t.Errorf("SkipVerify for %s = %v", c.URL, c.SkipVerify)
 		}
 	}
