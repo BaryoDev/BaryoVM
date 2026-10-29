@@ -177,6 +177,7 @@ type fakeCheckoutVM struct {
 	stdin      []string
 	origins    map[string]string // dir to origin
 	dirty      map[string]bool
+	owners     map[string]string // dir to the stat output; default is one owner for both
 	cron       map[string]string // dir to a reference line
 	failSetURL bool
 	approveErr string
@@ -195,6 +196,16 @@ func (v *fakeCheckoutVM) Run(cmd string) (string, error) {
 			b.WriteString(d + "/.git\n")
 		}
 		return b.String(), nil
+	}
+	if strings.Contains(cmd, "stat -c %U") {
+		for d := range v.origins {
+			if strings.Contains(cmd, "'"+d+"' ") {
+				if o, ok := v.owners[d]; ok {
+					return o, nil
+				}
+				return "app\napp\n", nil
+			}
+		}
 	}
 	for d, origin := range v.origins {
 		if !strings.Contains(cmd, "-C '"+d+"' ") && !strings.Contains(cmd, "-F -- '"+d+"' ") {
@@ -244,7 +255,7 @@ func repoFixture(t *testing.T) (*repoWorld, *fakeCheckoutVM) {
 			{Name: "vm1", Host: "10.0.0.1", User: "opc", KeyPath: "/keys/id"},
 			{Name: "vm2", Host: "10.0.0.2", User: "opc", KeyPath: "/keys/id"},
 		},
-		Stacks: []fleet.Stack{{Name: "app", VM: "vm1", Dir: "/opt/app", Sudo: true, Source: oldURL}},
+		Stacks: []fleet.Stack{{Name: "app", VM: "vm1", Dir: "/opt/deploy", Sudo: true, Source: oldURL}},
 	}
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
@@ -252,11 +263,11 @@ func repoFixture(t *testing.T) (*repoWorld, *fakeCheckoutVM) {
 	w := newRepoWorld(t)
 	v1 := &fakeCheckoutVM{
 		origins: map[string]string{
-			"/opt/deploy/app": oldURL + ".git",
-			"/home/dev/app":   "git@github.com:acme/app.git",
-			"/opt/other":      "https://github.com/acme/other",
+			"/opt/deploy/app":   oldURL + ".git",
+			"/opt/deploy/dev":   "git@github.com:acme/app.git",
+			"/opt/deploy/other": "https://github.com/acme/other",
 		},
-		dirty: map[string]bool{"/home/dev/app": true},
+		dirty: map[string]bool{"/opt/deploy/dev": true},
 		cron:  map[string]string{"/opt/deploy/app": "/etc/cron.d/app:1:0 3 * * * deploy /opt/deploy/app/backup.sh\n"},
 	}
 	w.vms["vm1"] = v1
@@ -350,16 +361,17 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 			setURL = c
 		}
 	}
-	if setURL == "" || !strings.HasPrefix(setURL, "sudo -n git -c safe.directory='/opt/deploy/app' -C '/opt/deploy/app' remote set-url origin '"+newURL+"'") {
+	want := "sudo -n -u 'app' env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor= -c core.hooksPath=/dev/null -C '/opt/deploy/app' remote set-url origin '" + newURL + "'"
+	if setURL != want {
 		t.Errorf("set-url command: %q", setURL)
 	}
 	if vm.origins["/opt/deploy/app"] != newURL {
 		t.Errorf("deploy copy not repointed: %q", vm.origins["/opt/deploy/app"])
 	}
-	if vm.origins["/home/dev/app"] != "git@github.com:acme/app.git" {
-		t.Errorf("a checkout with local changes was touched: %q", vm.origins["/home/dev/app"])
+	if vm.origins["/opt/deploy/dev"] != "git@github.com:acme/app.git" {
+		t.Errorf("a checkout with local changes was touched: %q", vm.origins["/opt/deploy/dev"])
 	}
-	if vm.origins["/opt/other"] != "https://github.com/acme/other" {
+	if vm.origins["/opt/deploy/other"] != "https://github.com/acme/other" {
 		t.Errorf("an unrelated repository was touched")
 	}
 	if w.localRemotes["origin"] != newURL || w.localRemotes["old-origin"] != oldURL+".git" {
@@ -373,7 +385,7 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 	}
 	var dirty bool
 	for _, c := range rep.Checkouts {
-		if c.Dir == "/home/dev/app" && c.Dirty && !c.Repointed {
+		if c.Dir == "/opt/deploy/dev" && c.Dirty && !c.Repointed {
 			dirty = true
 		}
 	}
@@ -635,6 +647,51 @@ func TestRepoMoveRefusesURLsThatCarryATokenAndSendsNothing(t *testing.T) {
 	}
 	if len(w.calls) != 0 {
 		t.Errorf("calls were made: %v", w.calls)
+	}
+}
+
+func TestRepoMoveRefusesACheckoutOwnedByTheWrongUserBeforeAnyGitCommand(t *testing.T) {
+	w, vm := repoFixture(t)
+	w.hosts[newURL] = map[string]string{}
+	vm.owners = map[string]string{"/opt/deploy/app": "app\nmallory\n"}
+	args, _ := withExport(t, moveArgs("--yes"))
+	rep, stdout, stderr, err := runMove(t, args...)
+	if err != nil {
+		t.Fatalf("%v %s %s", err, stdout, stderr)
+	}
+	for _, c := range vm.cmds {
+		if strings.Contains(c, "git ") && strings.Contains(c, "/opt/deploy/app'") {
+			t.Errorf("git ran on a checkout with mixed owners: %s", c)
+		}
+	}
+	if vm.origins["/opt/deploy/app"] != oldURL+".git" {
+		t.Error("a refused checkout was repointed")
+	}
+	var refused bool
+	for _, c := range rep.Checkouts {
+		if c.Dir == "/opt/deploy/app" && strings.Contains(c.Skipped, "refused") && !c.Repointed {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Errorf("the refusal is not reported: %+v", rep.Checkouts)
+	}
+}
+
+func TestRepoMoveOnlyLooksUnderTheDirectoriesOfRegisteredStacks(t *testing.T) {
+	_, vm := repoFixture(t)
+	vm.origins["/srv/elsewhere"] = oldURL + ".git"
+	args, _ := withExport(t, moveArgs("--from", oldURL, "--yes"))
+	if _, _, _, err := runMove(t, args...); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range vm.cmds {
+		if strings.Contains(c, "/srv/elsewhere") && !strings.Contains(c, "find ") {
+			t.Errorf("a command touched a checkout outside every stack directory: %s", c)
+		}
+	}
+	if vm.origins["/srv/elsewhere"] != oldURL+".git" {
+		t.Error("a checkout outside every stack directory was repointed")
 	}
 }
 

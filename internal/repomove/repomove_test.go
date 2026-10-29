@@ -7,6 +7,8 @@ package repomove
 import (
 	"strings"
 	"testing"
+
+	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
 func TestParseKindsAndSameRepository(t *testing.T) {
@@ -93,7 +95,7 @@ func TestPushNeverForcesOrDeletes(t *testing.T) {
 
 func TestRemoteCommandsQuoteEveryValue(t *testing.T) {
 	dir := "/opt/it's here; rm -rf x"
-	for _, c := range []string{GetURLCmd(true, dir), StatusCmd(true, dir), SetURLCmd(true, dir, "https://h/o/r'; id #"), ReferencesCmd(true, dir), CredHelperCmd(true, dir), FindCmd(true, []string{dir})} {
+	for _, c := range []string{GetURLCmd(true, "app", dir), StatusCmd(true, "app", dir), SetURLCmd(true, "app", dir, "https://h/o/r'; id #"), ReferencesCmd(true, dir), OwnerCmd(true, dir), FindCmd(true, []string{dir})} {
 		if !strings.HasPrefix(c, "sudo -n ") {
 			t.Errorf("not elevated: %s", c)
 		}
@@ -101,10 +103,58 @@ func TestRemoteCommandsQuoteEveryValue(t *testing.T) {
 			t.Errorf("unquoted value in %s", c)
 		}
 	}
-	if strings.HasPrefix(GetURLCmd(false, dir), "sudo") {
+	if strings.HasPrefix(GetURLCmd(false, "app", dir), "sudo") {
 		t.Error("sudo without the stack setting")
 	}
-	if strings.Contains(CredApproveCmd(false, "/d"), "password") {
-		t.Error("credential approve carries a value on its command line")
+	ap, err := CredApproveCmd(false, "app", "/d")
+	if err != nil || strings.Contains(ap, "password") {
+		t.Errorf("credential approve carries a value on its command line: %v", err)
+	}
+}
+
+func TestGitRunsAsTheOwnerWithCodeRunningConfigBlanked(t *testing.T) {
+	helper, _ := CredHelperCmd(true, "deploy", "/opt/app")
+	approve, _ := CredApproveCmd(true, "deploy", "/opt/app")
+	for _, c := range []string{GetURLCmd(true, "deploy", "/opt/app"), StatusCmd(true, "deploy", "/opt/app"), SetURLCmd(true, "deploy", "/opt/app", "u"), helper, approve} {
+		for _, must := range []string{"sudo -n -u 'deploy' ", "GIT_CONFIG_NOSYSTEM=1", "core.fsmonitor=", "core.hooksPath=/dev/null"} {
+			if !strings.Contains(c, must) {
+				t.Errorf("%q missing from %s", must, c)
+			}
+		}
+		if strings.Contains(c, "safe.directory") {
+			t.Errorf("safe.directory override in %s", c)
+		}
+	}
+}
+
+func TestCredentialHelperValueQuotesAHostilePath(t *testing.T) {
+	if _, err := CredHelperCmd(true, "app", "/opt/a b;touch x"); err == nil {
+		t.Error("a hostile directory was accepted for the credential helper")
+	}
+	if _, err := CredApproveCmd(true, "app", "/opt/$(id)"); err == nil {
+		t.Error("a hostile directory was accepted for credential approve")
+	}
+	c, err := CredHelperCmd(false, "app", "/opt/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the helper value is quoted for git's shell, then again for the remote shell
+	if !strings.Contains(c, sshx.Quote("store --file="+sshx.Quote("/opt/app/.git/baryovm-credentials"))) {
+		t.Errorf("helper value not quoted twice: %s", c)
+	}
+	ap, _ := CredApproveCmd(false, "app", "/opt/app")
+	if !strings.Contains(ap, "-L ") || !strings.Contains(ap, "umask 077") {
+		t.Errorf("approve does not refuse a symlink under umask 077: %s", ap)
+	}
+}
+
+func TestParseOwnerRefusesMixedOrMissingOwners(t *testing.T) {
+	if o, err := ParseOwner("deploy\ndeploy\n"); err != nil || o != "deploy" {
+		t.Errorf("%q %v", o, err)
+	}
+	for _, bad := range []string{"", "deploy\nroot\n", "deploy\n", "a b\na b\n", "-x\n-x\n"} {
+		if _, err := ParseOwner(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }

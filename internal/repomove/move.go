@@ -214,18 +214,27 @@ func Run(o Options, d Deps) (*Report, error) {
 			conns[c.VM] = r
 		}
 		sudo := sudoOf[c.VM]
-		if _, err := r.Run(SetURLCmd(sudo, c.Dir, o.To.URL)); err != nil {
+		owner := c.Owner
+		if _, err := r.Run(SetURLCmd(sudo, owner, c.Dir, o.To.URL)); err != nil {
 			return fail(fmt.Errorf("repoint %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 		}
 		old := c.Origin
-		undo = append(undo, func() { _, _ = r.Run(SetURLCmd(sudo, c.Dir, old)) })
+		undo = append(undo, func() { _, _ = r.Run(SetURLCmd(sudo, owner, c.Dir, old)) })
 		c.Repointed = true
 		if useCred {
-			if _, err := r.Run(CredHelperCmd(sudo, c.Dir)); err != nil {
+			helper, err := CredHelperCmd(sudo, owner, c.Dir)
+			if err != nil {
+				return fail(err)
+			}
+			approve, err := CredApproveCmd(sudo, owner, c.Dir)
+			if err != nil {
+				return fail(err)
+			}
+			if _, err := r.Run(helper); err != nil {
 				return fail(fmt.Errorf("set the credential helper on %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 			}
 			in := strings.NewReader(CredInput(o.To.Host, o.CredUser, token))
-			if _, err := r.RunStdin(CredApproveCmd(sudo, c.Dir), in); err != nil {
+			if _, err := r.RunStdin(approve, in); err != nil {
 				return fail(fmt.Errorf("store the read-only credential on %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 			}
 			c.CredStored = true
@@ -276,6 +285,17 @@ func Run(o Options, d Deps) (*Report, error) {
 	return rep, nil
 }
 
+// under reports whether dir is one of the roots or inside one, by whole path elements.
+func under(dir string, roots []string) bool {
+	for _, r := range roots {
+		r = strings.TrimRight(r, "/")
+		if dir == r || strings.HasPrefix(dir, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func scrub(err error, token string) error {
 	if token == "" || err == nil {
 		return err
@@ -320,13 +340,29 @@ func discover(o Options, d Deps) ([]Checkout, []Reference, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("connect to %s: %w", v.Name, err)
 		}
-		roots := append(append([]string{}, DefaultRoots...), v.Roots...)
-		out, err := r.Run(FindCmd(v.Sudo, roots))
+		// Only the directories of stacks registered on the VM are searched. A checkout anywhere
+		// else is not ours to run git in.
+		if len(v.Roots) == 0 {
+			continue
+		}
+		out, err := r.Run(FindCmd(v.Sudo, v.Roots))
 		if err != nil {
 			return nil, nil, fmt.Errorf("search %s for checkouts: %w", v.Name, err)
 		}
 		for _, dir := range ParseFinds(out) {
-			url, err := r.Run(GetURLCmd(v.Sudo, dir))
+			if !under(dir, v.Roots) {
+				continue
+			}
+			ow, err := r.Run(OwnerCmd(v.Sudo, dir))
+			owner, oerr := ParseOwner(ow)
+			if err != nil || oerr != nil {
+				if oerr == nil {
+					oerr = err
+				}
+				checkouts = append(checkouts, Checkout{VM: v.Name, Dir: dir, Skipped: "refused, no git command was run: " + oerr.Error()})
+				continue
+			}
+			url, err := r.Run(GetURLCmd(v.Sudo, owner, dir))
 			if err != nil {
 				continue // a .git with no origin is not ours
 			}
@@ -334,12 +370,12 @@ func discover(o Options, d Deps) ([]Checkout, []Reference, error) {
 			if err != nil {
 				continue
 			}
-			c := Checkout{VM: v.Name, Dir: dir, Origin: strings.TrimSpace(url)}
+			c := Checkout{VM: v.Name, Dir: dir, Origin: strings.TrimSpace(url), Owner: owner}
 			switch {
 			case Same(cur, o.To):
 				c.AlreadyNew = true
 			case Same(cur, o.From):
-				st, err := r.Run(StatusCmd(v.Sudo, dir))
+				st, err := r.Run(StatusCmd(v.Sudo, owner, dir))
 				if err != nil {
 					return nil, nil, fmt.Errorf("read the status of %s:%s: %w", v.Name, dir, err)
 				}
