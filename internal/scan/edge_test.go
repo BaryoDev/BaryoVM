@@ -333,3 +333,33 @@ func TestRunEdgeRejectsBadTarget(t *testing.T) {
 		t.Error("want error without seams")
 	}
 }
+
+// CAA is inherited down the tree (RFC 8659) and DMARC falls back to the organisational domain
+// (RFC 7489), so a subdomain with no record of its own is not unprotected.
+func TestEdgeCAAAndDMARCClimbToTheParentDomain(t *testing.T) {
+	res := &fakeResolver{
+		caa: map[string][]CAA{"example.com": {{Tag: "issue", Value: "letsencrypt.org"}}},
+		txt: map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject"}},
+	}
+	fs, err := RunEdge(context.Background(), "https://www.shop.example.com/", EdgeOptions{Resolver: res, Fetcher: &fakeFetcher{}, Now: func() time.Time { return fixedNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Finding{}
+	for _, f := range fs {
+		got[f.Name] = f
+	}
+	want(t, got, "CAA record present", SeverityInformational, "letsencrypt.org")
+	want(t, got, "DMARC policy reject", SeverityInformational, "")
+	for _, c := range res.calls {
+		if c == "CAA com" || c == "TXT _dmarc.com" {
+			t.Errorf("climbed above two labels: %s", c)
+		}
+	}
+	// SPF stays on the exact host.
+	for _, c := range res.calls {
+		if strings.HasPrefix(c, "TXT ") && c != "TXT www.shop.example.com" && !strings.HasPrefix(c, "TXT _dmarc.") {
+			t.Errorf("unexpected TXT lookup: %s", c)
+		}
+	}
+}

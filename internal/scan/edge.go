@@ -131,6 +131,23 @@ func isTimeout(err error) bool {
 	return errors.As(err, &de) && de.IsTimeout
 }
 
+// ancestors lists host and then each parent, stopping at two labels. CAA is inherited down the
+// tree (RFC 8659) and DMARC falls back to the organisational domain (RFC 7489), so a subdomain
+// with no record of its own is covered by its parent. Never going above two labels keeps the
+// query off the TLD, which is a public suffix and says nothing about this site. A host with
+// fewer labels (a bare name) is returned as is.
+func ancestors(host string) []string {
+	out := []string{host}
+	for {
+		i := strings.Index(host, ".")
+		if i < 0 || !strings.Contains(host[i+1:], ".") {
+			return out
+		}
+		host = host[i+1:]
+		out = append(out, host)
+	}
+}
+
 func (e *edge) run(host string) {
 	var (
 		caa           []CAA
@@ -142,8 +159,12 @@ func (e *edge) run(host string) {
 		aOK           bool
 	)
 	caaOK = e.op(CheckCAA, "CAA", func(ctx context.Context) (err error) {
-		caa, err = e.opts.Resolver.LookupCAA(ctx, host)
-		return err
+		for _, name := range ancestors(host) {
+			if caa, err = e.opts.Resolver.LookupCAA(ctx, name); err != nil || len(caa) > 0 {
+				return err
+			}
+		}
+		return nil
 	})
 	spfOK = e.op(CheckSPF, "SPF", func(ctx context.Context) (err error) {
 		txt, err = e.opts.Resolver.LookupTXT(ctx, host)
@@ -154,8 +175,12 @@ func (e *edge) run(host string) {
 		return err
 	})
 	dmarcOK = e.op(CheckDMARC, "DMARC", func(ctx context.Context) (err error) {
-		dmarcTXT, err = e.opts.Resolver.LookupTXT(ctx, "_dmarc."+host)
-		return err
+		for _, name := range ancestors(host) {
+			if dmarcTXT, err = e.opts.Resolver.LookupTXT(ctx, "_dmarc."+name); err != nil || len(dmarcTXT) > 0 {
+				return err
+			}
+		}
+		return nil
 	})
 	aOK = e.op(CheckBareIP, "A record", func(ctx context.Context) (err error) {
 		ips, err = e.opts.Resolver.LookupA(ctx, host)
