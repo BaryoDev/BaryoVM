@@ -215,7 +215,7 @@ func TestAMissingBrowserPointsAtBootstrap(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a missing browser must fail, output: %s", out)
 	}
-	if !strings.Contains(out, "baryovm vm bootstrap") || strings.Contains(out, "not found") {
+	if !strings.Contains(out, "install chromium on the VM") || strings.Contains(out, "not found") {
 		t.Fatalf("expected the bootstrap message, got: %s", out)
 	}
 }

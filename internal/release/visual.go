@@ -79,7 +79,7 @@ const (
 )
 
 // BrowserMissingMessage is what a VM without a headless browser reports.
-const BrowserMissingMessage = "verifyVisual: no headless browser on this VM (looked for chromium, chromium-browser, google-chrome and google-chrome-stable): run `baryovm vm bootstrap` to install one, or install chromium yourself"
+const BrowserMissingMessage = "verifyVisual: no headless browser on this VM (looked for chromium, chromium-browser, google-chrome and google-chrome-stable): install chromium on the VM, BaryoVM does not install it"
 
 // releaseFileSafe reduces a release label to characters that are safe in a file name.
 func releaseFileSafe(s string) string {
