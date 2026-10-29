@@ -15,6 +15,7 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/managed"
+	"github.com/BaryoDev/BaryoVM/internal/ship"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
@@ -132,6 +133,11 @@ type Stack struct {
 	// a stack that only has a healthUrl verifies as it always did. A release manifest's own `verify`
 	// commands still win for a release.
 	Verify *verify.Spec `json:"verify,omitempty"`
+
+	// Publish is the release gate spec read by `baryovm ship` and `stack publish`: where the version
+	// lives, the changelog, the registry and its packages, and the assertions on the published
+	// artifact. BaryoVM only reads registries; the repository's own workflow publishes.
+	Publish *ship.Spec `json:"publish,omitempty"`
 
 	// NoDatabase records that this stack has no database, as a static site does. An unattended
 	// update otherwise refuses a stack with no dbContainer or dbName, since recreating containers
