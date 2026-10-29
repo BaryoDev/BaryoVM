@@ -159,31 +159,93 @@ func ghBypass(args, words []string) *Verdict {
 		v := refuseRule(action, RuleDestructive, "", fmt.Sprintf("%s refused: a gh alias can stand for a command the guard would refuse, such as repo delete. Run the gh command directly, %s", action, off))
 		return &v
 	case words[0] == "api":
-		method, fields := "", false
+		// Flags are read the way gh's flag parser reads them, so a flag's value is never taken for
+		// a method. Every method given must be GET, since gh uses the last one.
+		var methods []string
+		fields, unknown := false, ""
 		for i := 0; i < len(args); i++ {
 			a := args[i]
 			switch {
 			case a == "--":
 				i = len(args)
-			case a == "-X" || a == "--method":
-				if i+1 < len(args) {
-					i++
-					method = args[i]
+			case strings.HasPrefix(a, "--"):
+				name, val, hasVal := strings.Cut(a[2:], "=")
+				takesValue, known := ghAPILongFlags[name]
+				if !known {
+					if unknown == "" {
+						unknown = "-" + a
+					}
+					continue
 				}
-			case strings.HasPrefix(a, "--method="):
-				method = strings.TrimPrefix(a, "--method=")
-			case strings.HasPrefix(a, "-X") && !strings.HasPrefix(a, "--"):
-				method = strings.TrimPrefix(a, "-X")
-			case a == "--field" || a == "--raw-field" || a == "--input" || strings.HasPrefix(a, "--field=") || strings.HasPrefix(a, "--raw-field=") || strings.HasPrefix(a, "--input="):
-				fields = true
-			case strings.HasPrefix(a, "-f") || strings.HasPrefix(a, "-F"):
-				fields = true
+				if takesValue && !hasVal && i+1 < len(args) {
+					i++
+					val = args[i]
+				}
+				switch name {
+				case "method":
+					methods = append(methods, val)
+				case "field", "raw-field", "input":
+					fields = true
+				}
+			case len(a) > 1 && a[0] == '-':
+				var short string
+				short, i = ghAPIShorts(a[1:], args, i, &methods, &fields)
+				if short != "" && unknown == "" {
+					unknown = short
+				}
 			}
 		}
-		if (method != "" && !strings.EqualFold(method, "GET")) || (method == "" && fields) {
+		if unknown != "" {
+			v := refuseRule("gh api", RuleDestructive, "", "gh api refused: the guard cannot read the flag -"+unknown+". Spell the flags out, "+off)
+			return &v
+		}
+		changes := len(methods) == 0 && fields
+		for _, m := range methods {
+			if !strings.EqualFold(m, "GET") {
+				changes = true
+			}
+		}
+		if changes {
 			v := refuseRule("gh api", RuleDestructive, "", "gh api refused: it would change data (a method other than GET, or fields, which make gh send a POST). Pass -X GET for a read, run the change with a gh command that has its own check, "+off)
 			return &v
 		}
 	}
 	return nil
+}
+
+// ghAPILongFlags lists the long flags of gh api and whether each takes a value.
+var ghAPILongFlags = map[string]bool{
+	"method": true, "field": true, "raw-field": true, "header": true, "input": true, "jq": true,
+	"template": true, "hostname": true, "cache": true, "preview": true,
+	"include": false, "paginate": false, "slurp": false, "silent": false, "verbose": false, "help": false,
+	"allow-escape-sequences": false,
+}
+
+// ghAPIShorts walks one gh api shorthand cluster (the text after the dash). -i and -h take no value;
+// -X, -f, -F, -H, -p, -q and -t take the rest of the cluster or the next argument. It returns an
+// unknown shorthand, if any, and the index of the last argument used.
+func ghAPIShorts(cluster string, args []string, i int, methods *[]string, fields *bool) (string, int) {
+	for j := 0; j < len(cluster); j++ {
+		c := cluster[j]
+		switch c {
+		case 'i', 'h':
+			continue
+		case 'X', 'f', 'F', 'H', 'p', 'q', 't':
+			val := cluster[j+1:]
+			if val == "" && i+1 < len(args) {
+				i++
+				val = args[i]
+			}
+			switch c {
+			case 'X':
+				*methods = append(*methods, val)
+			case 'f', 'F':
+				*fields = true
+			}
+			return "", i
+		default:
+			return string(c), i
+		}
+	}
+	return "", i
 }
