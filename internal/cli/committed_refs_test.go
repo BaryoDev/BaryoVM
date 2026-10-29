@@ -17,37 +17,76 @@ import (
 // A manifest from someone's branch must not be able to read the operator's secrets.
 func TestCommittedManifestRefsAreConfined(t *testing.T) {
 	for _, ref := range []string{"file:/etc/passwd", "file:~/.ssh/id_ed25519", "file:../outside", "env:HOME"} {
-		for _, dry := range []bool{true, false} {
-			releaseFixture(t)
-			withLookPath(t, hasRsync)
-			home := os.Getenv("BARYOVM_HOME")
-			m, _ := json.Marshal(map[string]any{
-				"localRoot": filepath.Join(home, "src"), "remoteRoot": "/srv/x", "sync": []string{"web"},
-				"builds": []map[string]any{{"image": "x:1", "dockerfile": "Dockerfile", "context": "web",
-					"args": map[string]string{"TOKEN": ref}}},
-			})
-			if err := os.WriteFile(filepath.Join(home, "release.json"), m, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			f := &fakeRunner{}
-			prev := dialRelease
-			dialRelease = func(*fleet.VM) (remoteSession, error) {
-				t.Errorf("%s: nothing may connect", ref)
-				return fakeSession{f}, nil
-			}
-			args := []string{"demo"}
-			if dry {
-				args = append(args, "--dry-run")
-			}
-			_, _, err := runCmdE(t, newStackReleaseCmd(), f, true, args...)
-			dialRelease = prev
-			if err == nil || !strings.Contains(err.Error(), "refused in a committed file") || !strings.Contains(err.Error(), ref) {
-				t.Errorf("%s (dry run %v): want a refusal naming the reference and the rule, got %v", ref, dry, err)
-			}
-			if len(f.seen) != 0 {
-				t.Errorf("%s: no command may reach the runner: %v", ref, f.seen)
+		for _, field := range []string{"args", "secrets"} {
+			for _, dry := range []bool{true, false} {
+				releaseFixture(t)
+				withLookPath(t, hasRsync)
+				home := os.Getenv("BARYOVM_HOME")
+				m, _ := json.Marshal(map[string]any{
+					"localRoot": filepath.Join(home, "src"), "remoteRoot": "/srv/x", "sync": []string{"web"},
+					"builds": []map[string]any{{"image": "x:1", "dockerfile": "Dockerfile", "context": "web",
+						field: map[string]string{"TOKEN": ref}}},
+				})
+				if err := os.WriteFile(filepath.Join(home, "release.json"), m, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				f := &fakeRunner{}
+				prev := dialRelease
+				dialRelease = func(*fleet.VM) (remoteSession, error) {
+					t.Errorf("%s: nothing may connect", ref)
+					return fakeSession{f}, nil
+				}
+				args := []string{"demo"}
+				if dry {
+					args = append(args, "--dry-run")
+				}
+				_, _, err := runCmdE(t, newStackReleaseCmd(), f, true, args...)
+				dialRelease = prev
+				if err == nil || !strings.Contains(err.Error(), "refused in a committed file") || !strings.Contains(err.Error(), ref) {
+					t.Errorf("%s in %s (dry run %v): want a refusal naming the reference and the rule, got %v", ref, field, dry, err)
+				}
+				if len(f.seen) != 0 {
+					t.Errorf("%s: no command may reach the runner: %v", ref, f.seen)
+				}
 			}
 		}
+	}
+}
+
+// A symlink beside the manifest that points out passes the load-time check and is caught when the
+// release resolves it, before anything connects.
+func TestCommittedManifestSymlinkOutsideIsRefused(t *testing.T) {
+	releaseFixture(t)
+	withLookPath(t, hasRsync)
+	home := os.Getenv("BARYOVM_HOME")
+	outside := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(outside, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, "link")); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := json.Marshal(map[string]any{
+		"localRoot": filepath.Join(home, "src"), "remoteRoot": "/srv/x", "sync": []string{"web"},
+		"builds": []map[string]any{{"image": "x:1", "dockerfile": "Dockerfile", "context": "web",
+			"args": map[string]string{"TOKEN": "file:link"}}},
+	})
+	if err := os.WriteFile(filepath.Join(home, "release.json"), m, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{}
+	prev := dialRelease
+	t.Cleanup(func() { dialRelease = prev })
+	dialRelease = func(*fleet.VM) (remoteSession, error) {
+		t.Error("nothing may connect")
+		return fakeSession{f}, nil
+	}
+	_, _, err := runCmdE(t, newStackReleaseCmd(), f, true, "demo")
+	if err == nil || !strings.Contains(err.Error(), "refused in a committed file") || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("want a refusal that does not carry the value, got %v", err)
+	}
+	if len(f.seen) != 0 {
+		t.Errorf("no command may reach the runner: %v", f.seen)
 	}
 }
 
