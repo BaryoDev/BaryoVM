@@ -12,6 +12,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/managed"
@@ -190,7 +191,11 @@ func dryStackDeploy(name string, o compose.UpOptions) error {
 }
 
 // dryVMBootstrap is the --dry-run of `vm bootstrap`.
-func dryVMBootstrap(name string) error {
+func dryVMBootstrap(name, runtime string) error {
+	script, err := bootstrap.Script(runtime)
+	if err != nil {
+		return err
+	}
 	vm, err := requireVM(name)
 	if err != nil {
 		return err
@@ -199,7 +204,7 @@ func dryVMBootstrap(name string) error {
 		return err
 	}
 	p := newDryRunPlan(vm.Name)
-	p.add("install docker", bootstrap.Script())
+	p.add("install "+ctr.Bin(runtime), script)
 	emitDryRun("vm bootstrap", p)
 	return nil
 }
@@ -225,7 +230,7 @@ func dryDeploy(vmName string, spec deploy.Spec) error {
 		switch {
 		case spec.Pull && i == 0:
 			step = "pull"
-		case strings.HasPrefix(c, "docker rm") || strings.Contains(c, " rm -f"):
+		case strings.HasPrefix(c, "docker rm") || strings.HasPrefix(c, "podman rm") || strings.Contains(c, " rm -f"):
 			step = "remove old container"
 		}
 		p.add(step, c)

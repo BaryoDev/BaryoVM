@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/secretref"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
@@ -90,6 +91,11 @@ type Manifest struct {
 	// host's own web server, so there is no compose file to bring up and the default behaviour
 	// would fail after the sync had already succeeded.
 	NoCompose bool `json:"noCompose,omitempty"`
+
+	// Runtime is the container runtime for the image builds, set by the caller from the stack's
+	// registration (docker when empty). It is not read from the manifest: the stack owns the choice,
+	// so one release makes one decision, as with Sudo.
+	Runtime string `json:"-"`
 
 	// RequireLocal lists paths, relative to localRoot, that must exist before anything is synced.
 	// A static site's artifact is built outside the release, and a release over a missing one
@@ -290,10 +296,10 @@ func (m *Manifest) BuildCmd(b Build) string {
 func (m *Manifest) buildScript(b Build) string {
 	q := sshx.Quote
 	plain := len(b.Args) == 0 && len(b.Secrets) == 0
-	cmd := "docker build"
+	cmd := ctr.Bin(m.Runtime) + " build"
 	if plain {
 		cmd = sshx.Sudo(m.Sudo, cmd)
-	} else if len(b.Secrets) > 0 {
+	} else if len(b.Secrets) > 0 && ctr.Bin(m.Runtime) == ctr.Docker {
 		cmd = "DOCKER_BUILDKIT=1 " + cmd
 	}
 	if b.NoCache {

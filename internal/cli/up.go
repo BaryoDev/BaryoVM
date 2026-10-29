@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -21,6 +22,7 @@ func newUpCmd() *cobra.Command {
 	var image, container string
 	var ports, envs, envRefs []string
 	var pull bool
+	var runtimeName string
 
 	cmd := &cobra.Command{
 		Use:   "up <name>",
@@ -34,6 +36,9 @@ func newUpCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			name := args[0]
+			if err := ctr.Valid(runtimeName); err != nil {
+				return err
+			}
 
 			// Resolved first, before provisioning bills or anything connects: a reference that
 			// does not resolve must stop the command with nothing created.
@@ -72,13 +77,13 @@ func newUpCmd() *cobra.Command {
 
 			// 2. Install Docker.
 			var boot bootstrap.Report
-			if err := ui.Step(fmt.Sprintf("installing Docker on %s", vm.Name), func() error {
+			if err := ui.Step(fmt.Sprintf("installing %s on %s", ctr.Bin(runtimeName), vm.Name), func() error {
 				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
 				defer c.Close()
-				boot, err = bootstrap.EnsureDocker(c)
+				boot, err = bootstrap.EnsureRuntime(c, runtimeName)
 				return err
 			}); err != nil {
 				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
@@ -93,7 +98,7 @@ func newUpCmd() *cobra.Command {
 					return err
 				}
 				defer c.Close()
-				rep, err = deploy.Run(c, deploy.Spec{Name: container, Image: image, Ports: ports, Env: env, Pull: pull})
+				rep, err = deploy.Run(c, deploy.Spec{Name: container, Image: image, Ports: ports, Env: env, Pull: pull, Runtime: runtimeName})
 				return err
 			}); err != nil {
 				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
@@ -120,6 +125,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", nil, "environment KEY=value (repeatable)")
 	cmd.Flags().StringArrayVar(&envRefs, "env-ref", nil, "environment KEY=<reference> (repeatable): env:NAME, file:PATH or cmd:<command>, resolved here, never stored")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull the image before running")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "container runtime on the VM: docker (default) or podman")
 	_ = cmd.MarkFlagRequired("image")
 	_ = cmd.MarkFlagRequired("container")
 	return cmd

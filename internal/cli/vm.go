@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -221,13 +222,17 @@ func newVMPingCmd() *cobra.Command {
 
 func newVMBootstrapCmd() *cobra.Command {
 	var dryRun bool
+	var runtimeName string
 	cmd := &cobra.Command{
 		Use:   "bootstrap <name>",
-		Short: "Install Docker on a VM (idempotent)",
+		Short: "Install the container runtime (docker or podman) on a VM (idempotent)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ctr.Valid(runtimeName); err != nil {
+				return err
+			}
 			if dryRun {
-				return dryVMBootstrap(args[0])
+				return dryVMBootstrap(args[0], runtimeName)
 			}
 			vm, err := requireVM(args[0])
 			if err != nil {
@@ -237,13 +242,13 @@ func newVMBootstrapCmd() *cobra.Command {
 				return err
 			}
 			var rep bootstrap.Report
-			err = ui.Step(fmt.Sprintf("installing Docker on %s", vm.Name), func() error {
+			err = ui.Step(fmt.Sprintf("installing %s on %s", ctr.Bin(runtimeName), vm.Name), func() error {
 				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
 				defer c.Close()
-				rep, err = bootstrap.EnsureDocker(c)
+				rep, err = bootstrap.EnsureRuntime(c, runtimeName)
 				return err
 			})
 			if err != nil {
@@ -252,13 +257,17 @@ func newVMBootstrapCmd() *cobra.Command {
 			}
 			msg := vm.Name + " ready: " + rep.DockerVersion
 			if rep.AlreadyReady {
-				msg = vm.Name + " already had Docker: " + rep.DockerVersion
+				msg = vm.Name + " already had " + ctr.Bin(runtimeName) + ": " + rep.DockerVersion
+			}
+			if rep.NoSystemd {
+				msg += " (no systemd on this host: the service step was skipped, start it with the host's own init)"
 			}
 			ui.Emit(ui.Result{OK: true, Action: "vm bootstrap", Message: msg, Data: rep})
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the install script without connecting")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "runtime to install: docker (default) or podman")
 	return cmd
 }
 

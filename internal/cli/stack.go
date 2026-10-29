@@ -17,6 +17,7 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/managed"
@@ -62,6 +63,7 @@ type stackAddInput struct {
 	ReleaseFile, Recipe                             string
 	Keep                                            int
 	Sudo                                            bool
+	Runtime                                         string
 	Changed                                         func(name string) bool
 }
 
@@ -92,6 +94,11 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		in.Recipe = abs
 		if st.File == "" && !in.Changed("file") {
 			st.File = recipe.DefaultComposeFile
+		}
+	}
+	if in.Changed("runtime") {
+		if err := ctr.Valid(in.Runtime); err != nil {
+			return fleet.Stack{}, "", err
 		}
 	}
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
@@ -130,6 +137,7 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		"release-file": func() { st.ReleaseFile = in.ReleaseFile },
 		"recipe":       func() { st.RecipeFile = in.Recipe },
 		"sudo":         func() { st.Sudo = in.Sudo },
+		"runtime":      func() { st.Runtime = in.Runtime },
 	} {
 		if in.Changed(name) {
 			apply()
@@ -156,6 +164,7 @@ func newStackAddCmd() *cobra.Command {
 	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile, recipePath string
 	var keep int
 	var useSudo bool
+	var runtimeName string
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Register a compose stack (a project dir on a VM)",
@@ -169,7 +178,7 @@ func newStackAddCmd() *cobra.Command {
 			st, verb, err := registerStack(store, stackAddInput{
 				Name: args[0], VM: vm, Path: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser, EnvFile: envFile,
-				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, Keep: keep, Sudo: useSudo,
+				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, Keep: keep, Sudo: useSudo, Runtime: runtimeName,
 				Changed: f.Changed,
 			})
 			if err != nil {
@@ -196,6 +205,7 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&useSudo, "sudo", false,
 		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
 			"root-owned. See USAGE.md for what it covers and the three things that change with it")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "container runtime on the VM: docker (default) or podman. See USAGE.md for which commands podman covers")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
@@ -401,6 +411,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	if err != nil {
 		return err
 	}
+	m.Runtime = st.Runtime
 
 	// cloudCalls are the AWS or Azure CLI calls of the pre-release snapshot, kept for the envelope.
 	var cloudCalls []managed.Call
@@ -873,7 +884,7 @@ func lastLines(s string, n int) string {
 // a stack goes through here, so Sudo cannot be dropped by a call site assembling the struct by hand,
 // which is how `stack deploy`, `stack release` and the release hooks each lost it in turn.
 func composeStack(st *fleet.Stack) compose.Stack {
-	return compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}
+	return compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo, Runtime: st.Runtime}
 }
 
 // releaseComposeStack is the compose target for a release's `compose up`. The release made one
@@ -898,7 +909,7 @@ func releaseBackupConfig(st *fleet.Stack, m *release.Manifest) backup.Config {
 
 func backupConfig(st *fleet.Stack) backup.Config {
 	cfg := backup.Config{
-		Sudo: st.Sudo,
+		Sudo: st.Sudo, Runtime: st.Runtime,
 		Name: st.Name, Dir: st.Dir, EnvFile: st.EnvFile,
 		DBContainer: st.DBContainer, DBName: st.DBName, DBUser: st.DBUser,
 		BackupDir: st.BackupDir, Keep: st.Keep,

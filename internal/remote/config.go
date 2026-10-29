@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 )
 
 // DefaultConfigPath is where the VM keeps its allowlist.
@@ -34,6 +35,7 @@ type StackConfig struct {
 	Dir       string   `json:"dir"`
 	File      string   `json:"file,omitempty"`
 	Sudo      bool     `json:"sudo,omitempty"`
+	Runtime   string   `json:"runtime,omitempty"`   // docker (default) or podman
 	Services  []string `json:"services,omitempty"`  // limits update and logs; empty means all
 	HealthURL string   `json:"healthUrl,omitempty"` // required for update
 
@@ -110,6 +112,9 @@ func plainText(p string) bool {
 }
 
 func (s StackConfig) validate() error {
+	if err := ctr.Valid(s.Runtime); err != nil {
+		return err
+	}
 	if !plainText(s.Dir) || !path.IsAbs(s.Dir) {
 		return errors.New("dir must be an absolute path")
 	}

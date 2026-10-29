@@ -99,6 +99,10 @@ type Stack struct {
 	// Without it every command fails with "permission denied" for the SSH user.
 	Sudo bool `json:"sudo,omitempty"`
 
+	// Runtime is the container runtime on the VM: "docker" (also when empty) or "podman". Validated
+	// by ctr.Valid at `stack add`.
+	Runtime string `json:"runtime,omitempty"`
+
 	// Update policy, used by `stack update`.
 	//
 	// AutoUpdate is what separates a stack that may be updated unattended from one that may not.

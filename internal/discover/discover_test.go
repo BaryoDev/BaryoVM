@@ -15,21 +15,21 @@ const lsJSON = `[{"Name":"deploy","Status":"running(3)","ConfigFiles":"/home/opc
 {"Name":"split","Status":"running(1)","ConfigFiles":"/opt/split/compose.yaml,/opt/split/override.yaml"}]`
 
 func TestLsCmdIsExact(t *testing.T) {
-	if got, want := LsCmd(false), "docker compose ls --format json"; got != want {
+	if got, want := LsCmd(false, ""), "docker compose ls --format json"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
-	if got, want := LsCmd(true), "sudo -n docker compose ls --format json"; got != want {
+	if got, want := LsCmd(true, ""), "sudo -n docker compose ls --format json"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
 
 func TestConfigCmdQuotesEveryFile(t *testing.T) {
-	got := ConfigCmd([]string{"/srv/my apps/it's/prod.yml", "/srv/o.yml"}, true)
+	got := ConfigCmd([]string{"/srv/my apps/it's/prod.yml", "/srv/o.yml"}, true, "")
 	want := `sudo -n docker compose -f '/srv/my apps/it'\''s/prod.yml' -f '/srv/o.yml' config --format json`
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
-	if got := ConfigCmd([]string{"/opt/a/compose.yaml"}, false); got != "docker compose -f '/opt/a/compose.yaml' config --format json" {
+	if got := ConfigCmd([]string{"/opt/a/compose.yaml"}, false, ""); got != "docker compose -f '/opt/a/compose.yaml' config --format json" {
 		t.Errorf("got %s", got)
 	}
 }
@@ -135,12 +135,12 @@ func TestInspectMalformedDoesNotEchoOutput(t *testing.T) {
 func TestAddCommandIsExactAndQuoted(t *testing.T) {
 	p := Project{Name: "barako", Dir: "/opt/barakocms", PostgresGuess: "barako-postgres"}
 	want := `baryovm stack add 'barako' --vm 'oracle' --path '/opt/barakocms' --db-container 'barako-postgres'`
-	if got := AddCommand(p, "oracle", false); got != want {
+	if got := AddCommand(p, "oracle", false, ""); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 	p = Project{Name: "spaced", Dir: "/srv/my apps/it's", File: "prod.yml"}
 	want = `baryovm stack add 'spaced' --vm 'my vm' --path '/srv/my apps/it'\''s' --file 'prod.yml' --sudo`
-	if got := AddCommand(p, "my vm", true); got != want {
+	if got := AddCommand(p, "my vm", true, ""); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }

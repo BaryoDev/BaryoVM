@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
@@ -40,15 +41,15 @@ type Project struct {
 }
 
 // LsCmd lists the running compose projects as JSON.
-func LsCmd(sudo bool) string {
-	return sshx.Sudo(sudo, "docker compose ls --format json")
+func LsCmd(sudo bool, runtime string) string {
+	return sshx.Sudo(sudo, ctr.Compose(runtime)+" ls --format json")
 }
 
 // ConfigCmd prints the resolved config of one project. It names every config file, so a project
 // split across an override file reports all its services.
-func ConfigCmd(files []string, sudo bool) string {
+func ConfigCmd(files []string, sudo bool, runtime string) string {
 	var b strings.Builder
-	b.WriteString("docker compose")
+	b.WriteString(ctr.Compose(runtime))
 	for _, f := range files {
 		b.WriteString(" -f " + sshx.Quote(f))
 	}
@@ -185,7 +186,7 @@ func Check(p *Project) {
 }
 
 // AddCommand is the `stack add` invocation for p on vm, every value quoted for a shell.
-func AddCommand(p Project, vm string, sudo bool) string {
+func AddCommand(p Project, vm string, sudo bool, runtime string) string {
 	parts := []string{"baryovm", "stack", "add", sshx.Quote(p.Name), "--vm", sshx.Quote(vm), "--path", sshx.Quote(p.Dir)}
 	if p.File != "" {
 		parts = append(parts, "--file", sshx.Quote(p.File))
@@ -195,6 +196,9 @@ func AddCommand(p Project, vm string, sudo bool) string {
 	}
 	if sudo {
 		parts = append(parts, "--sudo")
+	}
+	if runtime != "" && runtime != ctr.Docker {
+		parts = append(parts, "--runtime", ctr.Bin(runtime))
 	}
 	return strings.Join(parts, " ")
 }

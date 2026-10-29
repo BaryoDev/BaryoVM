@@ -40,6 +40,7 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm bootstrap oracle --runtime podman   # install podman from the distro package
 baryovm vm bootstrap oracle --dry-run   # print the install script, no connection
 baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
 baryovm vm runner remove oracle --repo acme/app
@@ -208,6 +209,7 @@ It never edits `authorized_keys`. Without `--binary` it uses the running binary 
       "sudo": true,
       "services": ["api"],
       "healthUrl": "http://127.0.0.1:8080/health",
+      "runtime": "docker",
       "dbContainer": "pg",
       "dbName": "app",
       "envFile": ".env",
@@ -219,7 +221,7 @@ It never edits `authorized_keys`. Without `--binary` it uses the running binary 
 }
 ```
 
-A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
+`runtime` is `docker` (the default) or `podman`; anything else is refused when the file loads. A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
 
 The request is `baryovm-remote v1 <op> <stack>`, parsed without a shell. `<op>` is `update`, `backup`, `status` or `logs`, and `<stack>` matches `^[a-z0-9][a-z0-9-]{0,62}$` and must be a key in the file. `logs` returns the last 200 lines per service. `exec` and `release` are not available: exec is arbitrary shell and release uploads files.
 
@@ -472,6 +474,38 @@ existing stack is:
 ```sh
 baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy-postgres-1 --db-name barako
 ```
+
+### Podman instead of Docker
+
+A stack runs on docker unless told otherwise. `stack add --runtime podman` stores `podman` on the
+stack, and every command for that stack (deploy, update, release builds, ps, logs, backup, restore,
+the restore drill) then runs `podman` and `podman compose` instead of `docker` and `docker compose`.
+The value is a fixed set: `docker` or `podman`, anything else is refused by the command and by
+`remote.json`. `deploy`, `up`, `stack discover` and `vm bootstrap` take the same `--runtime` flag.
+`stack add` without the flag keeps the stored value.
+
+`vm bootstrap` detects the package manager (apt-get, dnf, yum, apk or pacman) and says which it
+found; any other host is refused with that list. Docker comes from get.docker.com on apt-get, dnf
+and yum, and from the distro package on apk and pacman. Podman always comes from the distro package.
+Enabling the service uses systemctl. On a host with no systemd (an Alpine container host, for
+example) that step is skipped and the output says `NO_SYSTEMD`, so start the service with the
+host's own init. systemctl errors are not swallowed.
+
+What is covered: the commands BaryoVM builds itself (`podman run`, `rm`, `pull`, `exec`, `inspect`,
+`tag`, `build`, `ps`) and the compose commands it passes (`up -d --force-recreate --no-deps`,
+`pull --ignore-pull-failures`, `config --format json`, `ps -a --format`, `ps --format json`,
+`ps -q`, `logs --no-color --tail`, `compose ls --format json`). This code passes none of `--wait`
+or `--project-directory`.
+
+What is not verified: those compose commands were checked against `docker compose` only. `podman
+compose` hands them to whichever provider is installed. With docker-compose v2 as the provider they
+behave as on docker. With podman-compose, `config --format json`, the JSON shape of `ps --format
+json`, `pull --ignore-pull-failures` and `compose ls` may be missing or differ, which breaks the
+health-gated update, image rollback and `stack discover`. None of this was run on a live podman host.
+A rootless podman host also needs `podman.socket` for a docker-compose provider.
+
+Left on docker, not covered by `--runtime`: the TLS and nginx/caddy helpers (a separate stack),
+`vm health`, `vm patch`, `vm prune`, `site scan`, `vm runner` and `vm ping`'s docker version line.
 
 ### Onboarding a VM that is already running things
 

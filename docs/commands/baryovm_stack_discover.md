@@ -29,10 +29,11 @@ baryovm stack discover <vm> [flags]
 ### Options
 
 ```
-      --adopt   register the projects found in the local fleet, asking about each one on a terminal
-  -h, --help    help for discover
-      --sudo    run docker through sudo -n, for a VM where the SSH user cannot reach the docker socket. Adopted stacks are registered with --sudo
-      --yes     with --adopt, register every project without asking (required without a terminal or under -o json)
+      --adopt            register the projects found in the local fleet, asking about each one on a terminal
+  -h, --help             help for discover
+      --runtime string   container runtime on the VM: docker (default) or podman. Adopted stacks are registered with it
+      --sudo             run docker through sudo -n, for a VM where the SSH user cannot reach the docker socket. Adopted stacks are registered with --sudo
+      --yes              with --adopt, register every project without asking (required without a terminal or under -o json)
 ```
 
 ### Options inherited from parent commands
