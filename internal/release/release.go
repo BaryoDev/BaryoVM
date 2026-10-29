@@ -111,6 +111,15 @@ type Manifest struct {
 	// calling the release failed. A service that restarts is normal; one that never answers is not.
 	VerifyAttempts     int `json:"verifyAttempts,omitempty"`
 	VerifyDelaySeconds int `json:"verifyDelaySeconds,omitempty"`
+
+	// VerifyVisual, when set, opens the served page in a headless browser on the VM after the
+	// other verify checks, fails on horizontal overflow and keeps a screenshot per width.
+	// Absent, verify behaves exactly as it did before.
+	VerifyVisual *VerifyVisual `json:"verifyVisual,omitempty"`
+
+	// ReleaseTag names this release in screenshot file names. The command sets it; it is not read
+	// from the manifest.
+	ReleaseTag string `json:"-"`
 }
 
 // Load reads and validates a manifest file for the stack that is about to be released.
@@ -142,6 +151,11 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 	}
 	if m.TLS != nil {
 		if err := m.TLS.Validate(m.RemoteRoot); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if m.VerifyVisual != nil {
+		if err := m.VerifyVisual.Validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -353,6 +367,18 @@ func (m *Manifest) hook(cmd string) string {
 }
 
 func (m *Manifest) Verification(healthURL string) VerifyPlan {
+	p := m.baseVerification(healthURL)
+	if m.VerifyVisual != nil {
+		if len(p.Commands) == 0 {
+			p.Source = "verifyVisual"
+		}
+		// After the curl checks: no point opening a browser on a site that is not answering.
+		p.Commands = append(p.Commands, m.VerifyVisual.Commands(m.ReleaseTag, m.Sudo)...)
+	}
+	return p
+}
+
+func (m *Manifest) baseVerification(healthURL string) VerifyPlan {
 	p := VerifyPlan{
 		Attempts: m.VerifyAttempts,
 		Delay:    time.Duration(m.VerifyDelaySeconds) * time.Second,
