@@ -38,6 +38,15 @@ type Config struct {
 	DBUser      string // defaults to "postgres"
 	BackupDir   string // remote dir to store backups; defaults to ~/<name>-backups
 	Keep        int    // how many of each kind to retain; defaults to 14
+
+	// Strategies is the stack's backup list when it is anything other than the lone
+	// postgres-container strategy the DBContainer, DBName and DBUser fields already express. Empty
+	// means the original single-database scripts, byte for byte. The cli layer fills it: see
+	// fleet.Stack.BackupStrategies.
+	Strategies []Strategy
+	// Skip lists strategy indexes to leave out of this run, such as a database container a first
+	// release has not created yet. Indexes stay stable so artifact names do not shift.
+	Skip map[int]bool
 }
 
 // dockerCmd is `docker`, elevated when the stack needs it.
@@ -140,6 +149,9 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 
 // BackupScript builds the script Backup runs, without running it.
 func BackupScript(cfg Config) (string, error) {
+	if len(cfg.Strategies) > 0 {
+		return multiBackupScript(cfg)
+	}
 	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
 		return "", err
 	}
@@ -193,7 +205,11 @@ func List(c sshx.Runner, cfg Config) (string, error) {
 	// been backed up has no backup directory, and that is a normal answer.
 	b.WriteString("if [ ! -e \"$BK\" ]; then echo " + sshx.Quote(NoBackupsMarker) + "\n")
 	b.WriteString("elif [ ! -r \"$BK\" ] || [ ! -x \"$BK\" ]; then echo \"cannot read $BK\" >&2; exit 1\n")
-	b.WriteString("else ls -1t \"$BK\"/db-*.dump 2>/dev/null || echo " + sshx.Quote(NoBackupsMarker) + "\n")
+	lsArgs := "\"$BK\"/db-*.dump"
+	if len(cfg.Strategies) > 0 {
+		lsArgs = multiListGlobs(cfg)
+	}
+	b.WriteString("else ls -1t " + lsArgs + " 2>/dev/null || echo " + sshx.Quote(NoBackupsMarker) + "\n")
 	b.WriteString("fi\n")
 	return c.Run(b.String())
 }
@@ -261,10 +277,22 @@ func DescribeList(out string) ListResult {
 // Restore replaces the database from a backup (newest if file is empty). The
 // Postgres container must be running; the caller should restart app services after.
 func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
-	return c.Run(RestoreScript(cfg, file))
+	script, err := RestoreScriptE(cfg, file)
+	if err != nil {
+		return "", err
+	}
+	return c.Run(script)
 }
 
-// RestoreScript builds the script Restore runs, without running it.
+// RestoreScriptE builds the script Restore runs, refusing a strategy list that cannot restore.
+func RestoreScriptE(cfg Config, file string) (string, error) {
+	if len(cfg.Strategies) > 0 {
+		return multiRestoreScript(cfg, file)
+	}
+	return RestoreScript(cfg, file), nil
+}
+
+// RestoreScript builds the script Restore runs for the single-database form, without running it.
 func RestoreScript(cfg Config, file string) string {
 	q := sshx.Quote
 	var b strings.Builder

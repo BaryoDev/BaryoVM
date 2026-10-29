@@ -36,6 +36,7 @@ baryovm stack [flags]
 * [baryovm stack remove](baryovm_stack_remove.md)	 - Remove a stack registration (does not touch the VM)
 * [baryovm stack restore](baryovm_stack_restore.md)	 - Restore the stack's database from a backup (REPLACES current data)
 * [baryovm stack rollback](baryovm_stack_rollback.md)	 - Put back the images the stack ran before its last release or update
+* [baryovm stack set-backup](baryovm_stack_set-backup.md)	 - Set a stack's backup strategies (database, remote database, command, files)
 * [baryovm stack set-update](baryovm_stack_set-update.md)	 - Set a stack's update policy (autoUpdate, health URL)
 * [baryovm stack set-verify](baryovm_stack_set-verify.md)	 - Set a stack's verify spec (checks, attempts, delay) read by release, update and rollback
 * [baryovm stack tls](baryovm_stack_tls.md)	 - Write the nginx vhost and get the certificate from the release manifest's tls block

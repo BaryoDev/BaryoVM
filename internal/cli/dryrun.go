@@ -106,8 +106,8 @@ func dryStackBackup(name string) error {
 	if err != nil {
 		return err
 	}
-	if st.DBContainer == "" || st.DBName == "" {
-		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+	if !hasBackupStrategies(st) {
+		return noBackupConfigError(st)
 	}
 	script, err := backup.BackupScript(backupConfig(st))
 	if err != nil {
@@ -126,18 +126,23 @@ func dryStackRestore(name, file string) error {
 	if err != nil {
 		return err
 	}
-	if st.DBContainer == "" || st.DBName == "" {
-		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+	if !hasBackupStrategies(st) {
+		return noBackupConfigError(st)
 	}
 	p := newDryRunPlan(name)
 	if file != "" {
 		p.File = file
-		p.note("would restore %s, replacing the %q database", file, st.DBName)
+		p.note("would restore %s, replacing what each backup strategy covers", file)
 	} else {
 		p.File = "newest"
-		p.note("would restore the newest db-*.dump in %s, replacing the %q database (the file is picked on the VM, not read now)", backupConfig(st).DirNote(), st.DBName)
+		p.note("would restore the newest backup set in %s, replacing what each backup strategy covers (the file is picked on the VM, not read now)", backupConfig(st).DirNote())
 	}
-	p.add("restore", backup.RestoreScript(backupConfig(st), file))
+	script, err := backup.RestoreScriptE(backupConfig(st), file)
+	if err != nil {
+		ui.Emit(ui.Result{OK: false, Action: "stack restore", Error: err.Error()})
+		return err
+	}
+	p.add("restore", script)
 	emitDryRun("stack restore", p)
 	return nil
 }
@@ -148,8 +153,11 @@ func dryStackDrill(name, file string) error {
 	if err != nil {
 		return err
 	}
-	if st.DBContainer == "" || st.DBName == "" {
-		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
+	if !hasBackupStrategies(st) {
+		return noBackupConfigError(st)
+	}
+	if backupConfig(st).DBContainer == "" {
+		return errDrillNeedsContainer(name)
 	}
 	p := newDryRunPlan(name)
 	p.File = file
@@ -244,14 +252,14 @@ func planRelease(name string, st *fleet.Stack, vm *fleet.VM, m *release.Manifest
 	switch {
 	case o.NoBackup:
 		p.note("backup skipped: --no-backup")
-	case st.DBContainer == "" || st.DBName == "":
-		p.note("backup skipped: the stack has no database configured")
+	case !hasBackupStrategies(st):
+		p.note("backup skipped: the stack has no backup configured")
 	default:
 		if script, err := backup.BackupScript(releaseBackupConfig(st, m)); err != nil {
 			p.note("backup would fail: %v", err)
 		} else {
 			p.add("backup", script)
-			p.note("the backup is skipped at run time if the database container %q is not on the VM (not probed now)", st.DBContainer)
+			p.note("a postgres-container strategy is skipped at run time if its container is not on the VM (not probed now)")
 		}
 	}
 
