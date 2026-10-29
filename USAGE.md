@@ -321,7 +321,7 @@ else is sent: no zone transfers, port scans or guessing.
 | CAA | low when missing, informational with the allowed CAs when present |
 | SPF | low when missing, when there are several records, or when a domain with no MX does not end in `-all` |
 | DMARC | low when missing or the policy is `none`, informational for `quarantine` and `reject` |
-| Bare IP | medium when the IP answers 2xx over HTTPS or over HTTP |
+| Bare IP | medium when the IP answers 2xx over HTTPS or over HTTP. A loopback, private, link-local or shared address (10.x, 127.x, 169.254.x, 100.64.0.0/10) is never probed: an informational finding says so |
 | security.txt | low when it has no `Contact`, no valid `Expires`, or has expired; informational when missing |
 | HSTS | informational, the header value as sent (or "not set"); not judged |
 

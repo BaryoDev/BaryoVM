@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 )
 
@@ -45,6 +46,7 @@ func (HTTPFetcher) Fetch(ctx context.Context, fr FetchRequest) (FetchResponse, e
 	tr := &http.Transport{
 		Proxy:             nil,
 		DisableKeepAlives: true,
+		DialContext:       (&net.Dialer{Control: guardDial}).DialContext,
 		// A bare-IP URL sends no SNI (crypto/tls omits it for IP hosts).
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: fr.SkipVerify}, //nolint:gosec // see FetchRequest.SkipVerify
 	}
