@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/recipe"
 	"github.com/BaryoDev/BaryoVM/internal/secretref"
@@ -106,6 +107,20 @@ func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Re
 		return fail(err, nil)
 	}
 	defer c.Close()
+
+	// Before anything changes on the host, as the manifest path does: a backup taken after the new
+	// services start already contains their migrations.
+	if !o.NoBackup && hasBackupStrategies(st) {
+		bcfg := backupConfig(st)
+		if backup.SkipMissingContainers(c, &bcfg) {
+			ui.Notef("no database container named %s yet, skipping the pre-release backup", bcfg.DBContainer)
+		} else if err := ui.Step("backup", func() error {
+			_, e := backup.Backup(c, bcfg)
+			return e
+		}); err != nil {
+			return fail(fmt.Errorf("pre-release backup failed: %s", backupCause(err, bcfg.DBContainer)), nil)
+		}
+	}
 
 	var res *recipe.DeployResult
 	err = ui.Step("deploy recipe "+r.Name, func() error {

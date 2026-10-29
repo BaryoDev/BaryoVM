@@ -39,6 +39,8 @@ func (h *recipeHost) Run(cmd string) (string, error) {
 		}
 	}
 	switch {
+	case strings.Contains(cmd, "ps -a --format"):
+		return "pg\n", nil
 	case strings.Contains(cmd, "echo had"):
 		if h.hadPrev {
 			return "had\n", nil
@@ -319,5 +321,77 @@ func TestStackWithoutARecipeStillNeedsAManifest(t *testing.T) {
 	}
 	if len(host.seen) != 0 {
 		t.Fatalf("nothing may run: %v", host.seen)
+	}
+}
+
+// withDatabase gives the fixture stack a postgres container, so a release has something to back up.
+func withDatabase(t *testing.T) {
+	t.Helper()
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := store.FindStack("app")
+	st.DBContainer, st.DBName, st.DBUser = "pg", "appdb", "app"
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecipeReleaseBacksUpBeforeAnyComposeCommand(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	withDatabase(t)
+
+	if _, err := releaseRecipeCmd(t, repo); err != nil {
+		t.Fatalf("release failed: %v\n%s", err, strings.Join(host.seen, "\n"))
+	}
+	dump := host.index("pg_dump", 0)
+	if dump < 0 {
+		t.Fatalf("no backup ran:\n%s", strings.Join(host.seen, "\n"))
+	}
+	for i, c := range host.seen[:dump] {
+		if strings.Contains(c, "pull") || strings.Contains(c, "base64 -d") || strings.Contains(c, "up -d") {
+			t.Fatalf("command %d changed the host before the backup: %s", i, c)
+		}
+	}
+	if host.index("pull", 0) < dump {
+		t.Fatal("the pull ran before the backup")
+	}
+}
+
+func TestRecipeReleaseFailingBackupSendsNoComposeCommand(t *testing.T) {
+	host := &recipeHost{failOnce: map[string]string{"pg_dump": "pg_dump: connection refused"}}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	withDatabase(t)
+
+	stdout, err := releaseRecipeCmd(t, repo)
+	if err == nil || !strings.Contains(err.Error(), "pre-release backup failed") {
+		t.Fatalf("want a pre-release backup failure, got %v", err)
+	}
+	parseFail(t, stdout)
+	for _, c := range host.seen {
+		if strings.Contains(c, "docker compose") || strings.Contains(c, "base64 -d") {
+			t.Fatalf("a deploy command ran after the backup failed: %s", c)
+		}
+	}
+	if len(host.stdin) != 0 {
+		t.Fatalf("inputs were written after the backup failed: %q", host.stdin)
+	}
+}
+
+func TestRecipeReleaseNoBackupSkipsIt(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	withDatabase(t)
+
+	if _, err := releaseRecipeCmd(t, repo, "--no-backup"); err != nil {
+		t.Fatalf("release failed: %v", err)
+	}
+	if host.index("pg_dump", 0) >= 0 {
+		t.Fatal("--no-backup still ran a dump")
+	}
+	if host.index("up -d --no-deps 'web'", 0) < 0 {
+		t.Fatal("the release did not run")
 	}
 }
