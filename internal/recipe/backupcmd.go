@@ -178,10 +178,10 @@ func BackupScript(strategies []Strategy, backupDir, stackName string, keep int, 
 			continue
 		}
 		seen[pattern] = true
-		b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/%s 2>/dev/null | tail -n +%d | xargs -r rm -f\n", pattern, keep+1))
+		fmt.Fprintf(&b, "ls -1t \"$BK\"/%s 2>/dev/null | tail -n +%d | xargs -r rm -f\n", pattern, keep+1)
 	}
 
-	b.WriteString(fmt.Sprintf("echo \"backup ok: %d artifact(s) at $ts in $BK\"\n", len(strategies)))
+	fmt.Fprintf(&b, "echo \"backup ok: %d artifact(s) at $ts in $BK\"\n", len(strategies))
 	return b.String(), nil
 }
 

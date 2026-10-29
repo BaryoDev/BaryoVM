@@ -2,6 +2,10 @@
 
 Manage docker compose stacks on your VMs
 
+```
+baryovm stack [flags]
+```
+
 ### Options
 
 ```
@@ -22,6 +26,7 @@ Manage docker compose stacks on your VMs
 * [baryovm stack backup](baryovm_stack_backup.md)	 - Back up the stack's database + config (pg_dump + .env)
 * [baryovm stack backups](baryovm_stack_backups.md)	 - List the stack's database backups
 * [baryovm stack deploy](baryovm_stack_deploy.md)	 - compose up -d the stack (optionally pull + recreate)
+* [baryovm stack env](baryovm_stack_env.md)	 - Set, list and unset keys in a stack's .env without ssh
 * [baryovm stack list](baryovm_stack_list.md)	 - List registered stacks
 * [baryovm stack logs](baryovm_stack_logs.md)	 - Show recent logs for the stack
 * [baryovm stack ps](baryovm_stack_ps.md)	 - Show the stack's containers
@@ -29,6 +34,7 @@ Manage docker compose stacks on your VMs
 * [baryovm stack release](baryovm_stack_release.md)	 - Sync source to the VM, build images there, then compose up (config-driven)
 * [baryovm stack remove](baryovm_stack_remove.md)	 - Remove a stack registration (does not touch the VM)
 * [baryovm stack restore](baryovm_stack_restore.md)	 - Restore the stack's database from a backup (REPLACES current data)
+* [baryovm stack rollback](baryovm_stack_rollback.md)	 - Put back the images the stack ran before its last release or update
 * [baryovm stack set-update](baryovm_stack_set-update.md)	 - Set a stack's update policy (autoUpdate, health URL)
 * [baryovm stack tls](baryovm_stack_tls.md)	 - Write the nginx vhost and get the certificate from the release manifest's tls block
 * [baryovm stack update](baryovm_stack_update.md)	 - Pull newer images and recreate, only if they come up healthy

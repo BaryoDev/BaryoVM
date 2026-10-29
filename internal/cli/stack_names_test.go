@@ -97,8 +97,9 @@ func releaseAnswers(containers string) map[string]string {
 }
 
 // The reported failure: a container started with `docker run` held the name, and the release found
-// out at compose up, after the backup, the rsync and a full image build had already run.
-func TestReleaseRefusesAHandRunContainerNameBeforeDoingAnyWork(t *testing.T) {
+// out at compose up, after the image build had already run. The check now sits after the sync (the
+// compose file is on the VM by then, #150) and must still come before the build and compose up.
+func TestReleaseRefusesAHandRunContainerNameBeforeBuildAndUp(t *testing.T) {
 	releaseFixture(t)
 	f := &fakeRunner{answers: releaseAnswers(handRunDemo)}
 
@@ -109,16 +110,56 @@ func TestReleaseRefusesAHandRunContainerNameBeforeDoingAnyWork(t *testing.T) {
 	if !strings.Contains(err.Error(), `"umbraco-pwa-demo"`) || !strings.Contains(err.Error(), "docker rm -f 'umbraco-pwa-demo'") {
 		t.Errorf("the error should name the container and the command that frees the name: %v", err)
 	}
-	if len(f.seen) != 2 {
-		t.Errorf("want only the config read and the container list, got:\n%s", strings.Join(f.seen, "\n"))
+	rsync := indexOfCmd(f.seen, "local: rsync")
+	config := indexOfCmd(f.seen, "config --format json")
+	names := indexOfCmd(f.seen, "com.docker.compose.project")
+	if rsync < 0 || config < 0 || names < 0 {
+		t.Fatalf("want the sync, the config read and the container list to run, got:\n%s", strings.Join(f.seen, "\n"))
+	}
+	if rsync >= config || config >= names {
+		t.Errorf("the name check must come after the sync, got:\n%s", strings.Join(f.seen, "\n"))
 	}
 	for _, cmd := range f.seen {
-		for _, work := range []string{"pg_dump", "local: rsync", "docker build", "up -d", "docker rm"} {
+		for _, work := range []string{"docker build", "up -d", "docker rm"} {
 			if strings.Contains(cmd, work) {
 				t.Errorf("%q ran although the name was taken: %s", work, cmd)
 			}
 		}
 	}
+}
+
+// A first release has no compose file on the VM until the sync lands it. The name check reads that
+// file, so it has to run after the sync and still refuse a colliding name before anything is built.
+func TestFirstReleaseWithACollidingNameIsRefusedAfterTheSync(t *testing.T) {
+	releaseFixture(t)
+	f := &fakeRunner{answers: releaseAnswers(handRunDemo)}
+	f.answers["--format '{{.Names}}'"] = "" // the database container does not exist yet
+
+	err := releaseAgainst(t, f)
+	if err == nil {
+		t.Fatalf("a first release went ahead over a colliding name. It ran:\n%s", strings.Join(f.seen, "\n"))
+	}
+	if indexOfCmd(f.seen, "local: rsync") < 0 {
+		t.Errorf("the sync should have run before the check, got:\n%s", strings.Join(f.seen, "\n"))
+	}
+	if indexOfCmd(f.seen, "pg_dump") >= 0 {
+		t.Errorf("there is no database to dump on a first release:\n%s", strings.Join(f.seen, "\n"))
+	}
+	for _, cmd := range f.seen {
+		if strings.Contains(cmd, "docker build") || strings.Contains(cmd, "up -d") {
+			t.Errorf("ran although the name was taken: %s", cmd)
+		}
+	}
+}
+
+// indexOfCmd is the position of the first recorded command containing sub, or -1.
+func indexOfCmd(seen []string, sub string) int {
+	for i, c := range seen {
+		if strings.Contains(c, sub) {
+			return i
+		}
+	}
+	return -1
 }
 
 // The other half: a name held by this project's own container is what a second release looks like,

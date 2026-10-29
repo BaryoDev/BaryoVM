@@ -8,6 +8,7 @@
 package backup
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -64,6 +65,27 @@ func (c Config) bkVar() string {
 	return fmt.Sprintf("BK=\"$HOME/%s-backups\"\n", c.Name)
 }
 
+// WriteFileCmd builds the command that stores data as a plain file named name in the backup dir,
+// replacing it in one rename. name is a fixed file name chosen by the caller, never user input. It
+// runs as the SSH user, like the rest of the script's file handling.
+func (c Config) WriteFileCmd(name string, data []byte) string {
+	b64 := base64.StdEncoding.EncodeToString(data)
+	return c.bkVar() + "mkdir -p \"$BK\" && printf %s " + sshx.Quote(b64) + " | base64 -d > \"$BK\"/" + name + ".tmp && mv \"$BK\"/" + name + ".tmp \"$BK\"/" + name
+}
+
+// ReadFileCmd builds the command that prints a file from the backup dir, or nothing when it is not there.
+func (c Config) ReadFileCmd(name string) string {
+	return c.bkVar() + "if [ -f \"$BK\"/" + name + " ]; then cat \"$BK\"/" + name + "; fi"
+}
+
+// DirNote names the backup directory for messages, without resolving $HOME.
+func (c Config) DirNote() string {
+	if c.BackupDir != "" {
+		return c.BackupDir
+	}
+	return "~/" + c.Name + "-backups"
+}
+
 // ValidateEnvFile accepts an empty name (no config copy) or a relative path made of letters,
 // digits, dot, dash, underscore and slash, with no ".." and no leading "/". Anything else is refused
 // before it can reach a remote shell.
@@ -90,8 +112,33 @@ func ValidateEnvFile(name string) error {
 	return nil
 }
 
+// ContainerExists reports whether the configured database container exists on the host, running or
+// not. It lists names rather than inspecting the one container, so an error (docker not reachable,
+// permission denied) comes back as an error and is never mistaken for "no such container".
+func ContainerExists(c sshx.Runner, cfg Config) (bool, error) {
+	out, err := c.Run(cfg.dockerCmd() + ` ps -a --format '{{.Names}}'`)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == cfg.DBContainer {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Backup dumps the DB (custom format) + copies the config, then prunes old ones.
 func Backup(c sshx.Runner, cfg Config) (string, error) {
+	script, err := BackupScript(cfg)
+	if err != nil {
+		return "", err
+	}
+	return c.Run(script)
+}
+
+// BackupScript builds the script Backup runs, without running it.
+func BackupScript(cfg Config) (string, error) {
 	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
 		return "", err
 	}
@@ -103,8 +150,8 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 	b.WriteString(cfg.bkVar())
 	b.WriteString("mkdir -p \"$BK\" && chmod 700 \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	if cfg.EnvFile != "" {
 		// The config file is the reason Sudo exists: it is the one holding the database password, so
 		// it is often root-owned and mode 600. Copy it the same way the rest of the stack is reached,
@@ -116,15 +163,15 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 			chown = " && " + sshx.Sudo(cfg.Sudo, `chown "$(id -u):$(id -g)" "$BK/env-$ts"`)
 		}
 		envPath := q(cfg.Dir + "/" + cfg.EnvFile)
-		b.WriteString(fmt.Sprintf("if [ -f %s ]; then %s %s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
-			envPath, cp, envPath, chown))
+		fmt.Fprintf(&b, "if [ -f %s ]; then %s %s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
+			envPath, cp, envPath, chown)
 	}
 	// Retention: keep the newest N of each kind.
-	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))
-	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))
+	fmt.Fprintf(&b, "ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
+	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
 	b.WriteString("sz=$(du -h \"$BK/db-$ts.dump\" | cut -f1)\n")
 	b.WriteString(`echo "backup ok: db-$ts.dump ($sz) in $BK"` + "\n")
-	return c.Run(b.String())
+	return b.String(), nil
 }
 
 // NoBackupsMarker is what the remote script prints when the glob matches nothing. It is a line for
@@ -186,6 +233,11 @@ func DescribeList(out string) ListResult {
 // Restore replaces the database from a backup (newest if file is empty). The
 // Postgres container must be running; the caller should restart app services after.
 func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
+	return c.Run(RestoreScript(cfg, file))
+}
+
+// RestoreScript builds the script Restore runs, without running it.
+func RestoreScript(cfg Config, file string) string {
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
@@ -198,12 +250,12 @@ func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
 	}
 	b.WriteString(`[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }` + "\n")
 	b.WriteString(`echo "restoring $f"` + "\n")
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	b.WriteString(`echo "restored from $f"` + "\n")
-	return c.Run(b.String())
+	return b.String()
 }

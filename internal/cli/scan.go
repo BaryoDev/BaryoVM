@@ -24,6 +24,8 @@ func newScanCmd() *cobra.Command {
 		url     string
 		failOn  string
 		timeout int
+
+		resolver string
 	)
 	cmd := &cobra.Command{
 		Use:   "scan --url <target>",
@@ -32,12 +34,24 @@ func newScanCmd() *cobra.Command {
 			"deployed site and reports findings worst-first. With --fail-on, it exits\n" +
 			"non-zero when a finding is at or above that severity, so it can gate a\n" +
 			"release in a pipeline. Needs Docker on the machine that runs it.\n\n" +
+			"It also runs passive edge checks on the host: CAA, SPF and DMARC records,\n" +
+			"whether the bare IP serves a site over HTTPS (no SNI) or plain HTTP,\n" +
+			"security.txt (RFC 9116), and the HSTS header as a value. They send five DNS\n" +
+			"lookups and three HTTP requests, and their findings join the ZAP findings.\n" +
+			"The URL must use a DNS name (no user@, no IP address, IDN as punycode).\n\n" +
 			"Scan only targets you are authorised to reach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if url == "" {
 				return fmt.Errorf("--url is required")
 			}
+			if _, err := scan.ParseTarget(url); err != nil {
+				return err
+			}
 			threshold, err := scan.ParseSeverity(failOn)
+			if err != nil {
+				return err
+			}
+			res, err := scan.NewResolver(resolver)
 			if err != nil {
 				return err
 			}
@@ -49,7 +63,18 @@ func newScanCmd() *cobra.Command {
 					URL:            url,
 					TimeoutSeconds: timeout,
 				})
-				return e
+				if e != nil {
+					return e
+				}
+				edge, e := scan.RunEdge(context.Background(), url, scan.EdgeOptions{
+					Resolver: res,
+					Fetcher:  scan.HTTPFetcher{},
+				})
+				if e != nil {
+					return e
+				}
+				rep = rep.WithFindings(edge)
+				return nil
 			})
 			if runErr != nil {
 				ui.Emit(ui.Result{OK: false, Action: "scan", Error: runErr.Error()})
@@ -78,6 +103,8 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&url, "url", "", "target URL to scan (required)")
 	cmd.Flags().StringVar(&failOn, "fail-on", "high",
 		"exit non-zero when a finding is at or above this severity: high | medium | low | informational")
+	cmd.Flags().StringVar(&resolver, "resolver", "",
+		"DNS server for the edge checks, an IP with optional port (default: the system resolver)")
 	cmd.Flags().IntVar(&timeout, "timeout", scan.DefaultTimeoutSeconds, "scan timeout in seconds")
 	return cmd
 }
@@ -117,6 +144,9 @@ func renderScanFindings(r scan.Report) {
 	for _, f := range r.Findings {
 		label := fmt.Sprintf("[%s] %s", f.Severity, f.Name)
 		detail := fmt.Sprintf("%d instance(s)", f.Count)
+		if f.Check != "" {
+			detail = f.Detail
+		}
 		if f.CWE != "" {
 			detail += " · " + f.CWE
 		}

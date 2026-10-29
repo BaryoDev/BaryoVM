@@ -83,8 +83,38 @@ type Finding struct {
 	CWE        string   `json:"cwe,omitempty"`
 	Solution   string   `json:"solution,omitempty"`
 	URLs       []string `json:"urls,omitempty"`
+	// Check names the edge check that produced a finding (caa, spf, dmarc,
+	// bare-ip, security.txt, hsts, edge). Empty for ZAP findings.
+	Check string `json:"check,omitempty"`
+	// Detail is a value the reader wants verbatim, like an HSTS header or the
+	// CAs a CAA record allows. Empty for ZAP findings.
+	Detail string `json:"detail,omitempty"`
 
 	severity Severity // parsed, for gating; not serialised
+}
+
+// WithFindings returns a copy of the report with extra findings merged in,
+// counts recomputed and the list sorted worst-first. Existing findings and the
+// Target are untouched, so a ZAP report plus edge findings is one list.
+func (r Report) WithFindings(extra []Finding) Report {
+	out := Report{Target: r.Target, Findings: append([]Finding{}, r.Findings...), Counts: map[string]int{}}
+	out.Findings = append(out.Findings, extra...)
+	sortFindings(out.Findings)
+	for _, f := range out.Findings {
+		out.Counts[f.Severity]++
+	}
+	return out
+}
+
+// sortFindings orders worst first, then by name so the order is stable for
+// tests and diffs.
+func sortFindings(fs []Finding) {
+	sort.SliceStable(fs, func(i, j int) bool {
+		if fs[i].severity != fs[j].severity {
+			return fs[i].severity > fs[j].severity
+		}
+		return fs[i].Name < fs[j].Name
+	})
 }
 
 // Report is the outcome of a scan.
@@ -133,6 +163,7 @@ const maxURLs = 10
 // ParseReport turns ZAP's baseline JSON into a Report. It is separated from the
 // running of ZAP so it can be tested against a canned report with no host and
 // no Docker, which is the whole point of keeping the engine host-free.
+// Text fields go through cleanText: ZAP copies strings from the scanned site, and the cli prints them.
 func ParseReport(target string, raw []byte) (Report, error) {
 	var zr zapReport
 	if err := json.Unmarshal(raw, &zr); err != nil {
@@ -147,12 +178,12 @@ func ParseReport(target string, raw []byte) (Report, error) {
 				sev = SeverityInformational
 			}
 			f := Finding{
-				Name:       a.Alert,
+				Name:       cleanText(a.Alert),
 				Severity:   sev.String(),
-				Confidence: a.Confidence,
+				Confidence: cleanText(a.Confidence),
 				Count:      atoiOr(a.Count, len(a.Instances)),
-				CWE:        cwe(a.CWEID),
-				Solution:   a.Solution,
+				CWE:        cleanText(cwe(a.CWEID)),
+				Solution:   cleanText(a.Solution),
 				severity:   sev,
 			}
 			for i, inst := range a.Instances {
@@ -160,7 +191,7 @@ func ParseReport(target string, raw []byte) (Report, error) {
 					break
 				}
 				if inst.URI != "" {
-					f.URLs = append(f.URLs, inst.URI)
+					f.URLs = append(f.URLs, cleanText(inst.URI))
 				}
 			}
 			rep.Findings = append(rep.Findings, f)
@@ -168,13 +199,7 @@ func ParseReport(target string, raw []byte) (Report, error) {
 		}
 	}
 
-	// Worst first, then by name so the order is stable for tests and diffs.
-	sort.SliceStable(rep.Findings, func(i, j int) bool {
-		if rep.Findings[i].severity != rep.Findings[j].severity {
-			return rep.Findings[i].severity > rep.Findings[j].severity
-		}
-		return rep.Findings[i].Name < rep.Findings[j].Name
-	})
+	sortFindings(rep.Findings)
 	return rep, nil
 }
 

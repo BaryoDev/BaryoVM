@@ -16,6 +16,7 @@ baryovm deploy [flags]
 ### Options
 
 ```
+      --dry-run               print the docker commands without connecting (env values are masked)
   -e, --env stringArray       environment KEY=value (repeatable)
   -h, --help                  help for deploy
       --image string          container image (required)

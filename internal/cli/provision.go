@@ -23,6 +23,9 @@ type provisionFlags struct {
 	size         string
 	keyPath      string
 	dryRun       bool
+	sshFrom      []string
+	httpFrom     []string
+	httpsFrom    []string
 }
 
 func (f *provisionFlags) bind(cmd *cobra.Command) {
@@ -31,6 +34,28 @@ func (f *provisionFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.size, "size", "", "instance size / bundle (default: provider's smallest)")
 	cmd.Flags().StringVar(&f.keyPath, "key", "", "private SSH key to authorize + connect with (required)")
 	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "print the plan without creating anything")
+	cmd.Flags().StringSliceVar(&f.sshFrom, "ssh-from", nil, "limit port 22 to these CIDRs (default: open to 0.0.0.0/0)")
+	cmd.Flags().StringSliceVar(&f.httpFrom, "http-from", nil, "limit port 80 to these CIDRs or the cloudflare preset (default: open)")
+	cmd.Flags().StringSliceVar(&f.httpsFrom, "https-from", nil, "limit port 443 to these CIDRs or the cloudflare preset (default: open)")
+}
+
+// sourcesFor resolves one flag's list; the cloudflare preset is fetched here,
+// before anything is created, so a failed fetch costs nothing.
+func sourcesFor(ctx context.Context, flag string, in []string) ([]string, error) {
+	out, err := provider.ResolveSources(ctx, provider.HTTPFetch, in)
+	if err != nil {
+		return nil, fmt.Errorf("--%s: %w", flag, err)
+	}
+	return out, nil
+}
+
+// portPlan is the dry-run line for one port.
+func portPlan(port int, spec provider.Spec) string {
+	if !spec.Limited(port) {
+		return fmt.Sprintf("%d from %s", port, provider.AnyIPv4)
+	}
+	v4, v6 := provider.SplitFamilies(spec.CidrsFor(port))
+	return fmt.Sprintf("%d from %d IPv4 + %d IPv6 range(s)", port, len(v4), len(v6))
 }
 
 // provisionVM creates a cloud VM per flags and registers it in the fleet.
@@ -43,6 +68,19 @@ func provisionVM(ctx context.Context, name string, f *provisionFlags) (fleet.VM,
 		return fleet.VM{}, err
 	}
 	spec := provider.Spec{Name: name, Region: f.region, Size: f.size, PublicKey: pub}
+	if spec.SSHFrom, err = sourcesFor(ctx, "ssh-from", f.sshFrom); err != nil {
+		return fleet.VM{}, err
+	}
+	if spec.HTTPFrom, err = sourcesFor(ctx, "http-from", f.httpFrom); err != nil {
+		return fleet.VM{}, err
+	}
+	if spec.HTTPSFrom, err = sourcesFor(ctx, "https-from", f.httpsFrom); err != nil {
+		return fleet.VM{}, err
+	}
+
+	if err := spec.CheckFamilies(); err != nil {
+		return fleet.VM{}, err
+	}
 
 	if f.dryRun {
 		ui.Title("Provision plan (dry run)")
@@ -51,7 +89,7 @@ func provisionVM(ctx context.Context, name string, f *provisionFlags) (fleet.VM,
 		ui.Detail("region", orDefault(f.region, "from ~/.aws"))
 		ui.Detail("size", orDefault(f.size, "provider default"))
 		ui.Detail("key", f.keyPath)
-		ui.Detail("ports", "22, 80, 443")
+		ui.Detail("ports", portPlan(22, spec)+", "+portPlan(80, spec)+", "+portPlan(443, spec))
 		ui.Emit(ui.Result{OK: true, Action: "vm provision", Message: "dry run: nothing created", Data: spec})
 		return fleet.VM{}, errDryRun
 	}

@@ -1,0 +1,4 @@
+user apt: sudo -n apt-get install -y rsync
+root apt: apt-get install -y rsync
+user script: sudo -n /bin/sh /tmp/get-docker.sh
+root script: /bin/sh /tmp/get-docker.sh

@@ -22,7 +22,7 @@ import (
 
 func newVMCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "vm", Short: "Manage the VMs in your fleet"}
-	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRunnerCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd(), newVMForgetKeyCmd())
+	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRunnerCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd(), newVMForgetKeyCmd(), newVMPatchCmd(), newVMPruneCmd())
 	return cmd
 }
 
@@ -207,11 +207,15 @@ func newVMPingCmd() *cobra.Command {
 }
 
 func newVMBootstrapCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "bootstrap <name>",
 		Short: "Install Docker on a VM (idempotent)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryVMBootstrap(args[0])
+			}
 			vm, err := requireVM(args[0])
 			if err != nil {
 				return err
@@ -241,6 +245,8 @@ func newVMBootstrapCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the install script without connecting")
+	return cmd
 }
 
 // requireVM loads a registered VM by name or returns a helpful error.

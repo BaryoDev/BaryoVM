@@ -38,6 +38,7 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm bootstrap oracle --dry-run   # print the install script, no connection
 baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
 baryovm vm runner remove oracle --repo acme/app
 baryovm vm remove oracle         # forget it (does not destroy the machine)
@@ -183,6 +184,7 @@ what that policy is absorbing.
 baryovm vm harden oracle --dry-run   # report what would change, write nothing
 baryovm vm harden oracle             # apply it
 baryovm vm harden oracle --ignore 10.0.0.0/24   # never ban this range
+baryovm vm harden oracle --ssh-from 203.0.113.7/32   # limit port 22 to this range
 
 baryovm vm threats oracle                    # the last 24 hours
 baryovm vm threats oracle --since "7 days ago"
@@ -200,8 +202,44 @@ The policy is:
 - **The surface reductions that cost nothing**: GSSAPI and X11 forwarding off, a
   30 second login grace, root login and password authentication off.
 
+Beyond the policy it audits the host. Each finding is either **fixed** or
+**reported**, and a report is never turned into a change behind your back.
+
+Fixed (a dry run prints these as `would-apply`):
+
+- `~/.ssh` and its files made private (700 and 600).
+- `authorized_keys.*` backups moved to `~/.baryovm-moved-keys/`, with the new path in
+  the output. Nothing is deleted.
+- Post-quantum key exchange put first in the sshd drop-in: `mlkem768x25519-sha256`,
+  `sntrup761x25519-sha512`, then the algorithms sshd already offered. The drop-in sorts
+  before the RHEL `50-redhat.conf` that pulls in the crypto policy, and sshd takes the
+  first value, so this works on Oracle Linux without editing the policy. If `sshd -T`
+  still shows another algorithm first, it reports that the policy needs a subpolicy. If
+  OpenSSH has neither hybrid, it reports that and changes nothing.
+- nginx `server_tokens off`, written to `conf.d` and reloaded only if `nginx -t` passes.
+
+Reported only (shown as warnings, counted separately, never changed):
+
+- stale entries in `authorized_keys` (count and comments; no key is removed)
+- pending security updates, and whether unattended upgrades are on
+- no `default_server` on 443
+- a newer kernel installed than the one running (`needs-restarting -r` or
+  `/var/run/reboot-required`); nothing is rebooted
+- port 22 open to every source in firewalld or ufw
+
+The closing `summary` line says how many findings were changed and how many are left
+for you. In `-o json` the report has a `reported` count next to `changes`, and a
+reported item has `"action": "report"`.
+
+`--ssh-from <cidr,...>` limits port 22 in firewalld (rich rules, the open `ssh` service
+removed) or ufw (`allow from`, the open rule deleted). It refuses to run when none of the
+ranges contains the address in `$SSH_CLIENT`, so it cannot lock out the session you are
+using, and it refuses when that address is unknown. IPv6 ranges are refused up front
+(only `::/0` is accepted), because the lockout check cannot match an IPv6 client against a
+prefix. An IPv6 client is accepted only with `::/0`. Without `--ssh-from`, a 22 open to everyone is only reported.
+
 What it deliberately does not do: change the SSH port, disable public key
-authentication, or touch `authorized_keys`. It validates the sshd configuration
+authentication, or remove an `authorized_keys` entry. It validates the sshd configuration
 before reloading, reloads rather than restarts, and rolls the file back if sshd
 rejects it, so a mistake cannot lock you out of a machine you reach over SSH.
 
@@ -214,6 +252,91 @@ That second one comes from sshd rather than from guesswork. sshd writes "invalid
 only when the account does not exist, so an attempt without that token names a real
 account, and the report marks it. Expect `root` to appear on any public host, since it
 is on every scanner's list; your own login name appearing is the interesting case.
+
+## Patching and pruning a VM
+
+`vm patch` updates the OS packages and proves the stack came back.
+
+```sh
+baryovm vm patch web1 --dry-run   # list pending updates and whether a reboot is required now
+baryovm vm patch web1             # update; ask before rebooting (on a terminal only)
+baryovm vm patch web1 --reboot    # update and reboot without asking if the host needs it
+```
+
+It records the kernel, every container with its health, and nginx first. The update runs
+as a detached `systemd-run` unit (`dnf update -y`, or `apt-get upgrade` on Debian), so a
+dropped session cannot stop it halfway, and it is polled until a deadline. Whether a
+reboot is needed comes from the host: `needs-restarting -r`, or `/var/run/reboot-required`.
+After a reboot it waits for SSH, retrying a bounded number of times, and requires a new
+boot id. Then every container that was running must be running and healthy, nginx must be
+active and `nginx -t` must pass. A container that was already unhealthy before is not a
+failure. The report gives the package count, old and new kernel, whether it rebooted, and
+the containers that did not come back; any of those makes the command exit non-zero and
+name them. It needs `sudo -n`.
+
+`vm prune` frees disk space. It plans by default and deletes nothing.
+
+```sh
+baryovm vm prune web1                          # list item, size and reason
+baryovm vm prune web1 --apply                  # delete the plan; prints freed space and df before/after
+baryovm vm prune web1 --floor 20 --apply       # exit 0 with no changes while 20 GB or more is free
+baryovm vm prune web1 --work-dir /srv/src --worktree-dir /srv/wt --apply
+```
+
+What it plans: Docker build cache, dangling images, anonymous unused volumes, stopped
+containers older than `--stopped-days` (default 14), rollback images past the newest
+`--keep-images` per repository (default 2), `bin`, `obj` and `TestResults` beside a
+`.csproj` or `.fsproj` under `--work-dir`, clean git worktrees under `--worktree-dir`
+whose branch has no commits off the remote, and the npm, go-build, pip and playwright
+caches plus editor server versions other than the newest. Root-owned `obj/` is removed
+with `sudo -n`.
+
+What it never touches: a named volume, an image any running or stopped container uses, a
+`bin/` or `obj/` with no project file beside it, a dirty or unreadable worktree (it uses
+`git worktree remove` without `--force`), and anything outside the folders you name. A
+host without Docker or git skips that section and says so. `--apply` takes a `flock` on
+the VM, so a second apply while one runs exits with a message instead of racing. It needs
+only `sh`, `find`, `du`, `docker` and `git` on the VM. `-o json` gives the plan and the
+result.
+
+## Scanning a deployed site
+
+```sh
+baryovm scan --url https://example.com
+baryovm scan --url https://example.com --fail-on medium
+baryovm scan --url https://example.com --resolver 1.1.1.1 -o json
+```
+
+`scan` runs a ZAP baseline against the site, then a small set of passive edge checks, and
+reports both in one list, worst first. `--fail-on` (default `high`) and the `-o json` envelope
+apply to the whole list. In JSON, edge findings use the same fields as ZAP findings and add
+`check` and `detail`. Those two fields are left out of ZAP findings, so existing consumers see
+no change.
+
+The edge checks use exactly five DNS lookups (CAA, TXT, MX, `_dmarc` TXT and A on the target's
+host) and three HTTP requests: one GET for `/.well-known/security.txt`, and one GET each to the
+first A record's bare IP over HTTPS (no SNI, certificate not verified) and plain HTTP. Nothing
+else is sent: no zone transfers, port scans or guessing.
+
+| Check | Finding |
+| --- | --- |
+| CAA | low when missing, informational with the allowed CAs when present |
+| SPF | low when missing, when there are several records, or when a domain with no MX does not end in `-all` |
+| DMARC | low when missing or the policy is `none`, informational for `quarantine` and `reject` |
+| Bare IP | medium when the IP answers 2xx over HTTPS or over HTTP. A loopback, private, link-local or shared address (10.x, 127.x, 169.254.x, 100.64.0.0/10) is never probed: an informational finding says so |
+| security.txt | low when it has no `Contact`, no valid `Expires`, or has expired; informational when missing |
+| HSTS | informational, the header value as sent (or "not set"); not judged |
+
+Every lookup and request has a 5 second timeout and the edge checks stop after 30 seconds in
+total. Checks that did not finish are reported once, as a low "Edge checks timed out" finding that
+names them. A refused or dropped bare-IP connection is not a finding.
+
+`--url` must be an http or https URL with a registered hostname. A bare IP, a name with
+non-ASCII characters (give the `xn--` form), credentials such as `https://a@b/`, and a host with
+`\` or `%` are refused, for the ZAP scan too.
+
+Lookups use the system resolver. `--resolver 1.1.1.1` (or `ip:port`) sends every lookup,
+including CAA, to that server instead. It takes an IP address, not a name.
 
 ## Stacks: docker compose over SSH (day-to-day deploys)
 
@@ -231,7 +354,20 @@ baryovm stack deploy barako --pull                        # pull images, then re
 baryovm stack pull barako
 baryovm stack logs barako --service api --tail 100
 baryovm stack remove barako                               # forget the registration
+
+# the stack's env file, without ssh
+baryovm stack env set barako MAIL_API_KEY                 # no-echo prompt, or: printf %s "$V" | baryovm stack env set ...
+baryovm stack env set barako MAIL_API_KEY --recreate      # then compose up -d --force-recreate
+baryovm stack env list barako                             # keys only, values masked
+baryovm stack env unset barako MAIL_API_KEY
 ```
+
+`stack env` edits the stack's `--env-file` (default `.env`) under its directory. The value is never an
+argument: it comes from a no-echo prompt or one line of piped stdin, travels on the ssh session's stdin
+and is written by a small remote script, so it is on no command line and in no output. The file is
+created with its directory if missing and kept at mode 600, through sudo when the stack was added with
+`--sudo`. KEY must match `^[A-Za-z_][A-Za-z0-9_]*$`. The value is stored as typed on one line, so it
+cannot hold a line break. `list` cuts the keys on the VM, so values never cross the connection.
 
 Running `stack add` again for a stack that already exists updates it in place. `--vm` and `--path`
 are still required, and any other flag you pass replaces its value, but settings you do not name
@@ -243,7 +379,17 @@ baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy
 ```
 
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
-`--force-recreate`, `--no-deps`.
+`--force-recreate`, `--no-deps`, `--dry-run` (print the compose commands, no connection).
+
+`stack release --dry-run` prints, in the order they would run, the backup script, the rsync
+invocation for each `sync` entry (with `--delete` and the trailing slash as it would be sent), the
+builds, the `preDeploy` hooks, the compose up, the TLS commands, the `postDeploy` hooks and the
+verification checks. Hooks are listed and never run. It opens no connection, takes no lock,
+writes no release record and leaves `fleet.json` alone. Things only the VM can answer (whether the
+database container exists, `container_name` conflicts, the tar listing, the saved rollback images,
+the `--resume` record) are named in the output as not checked. `--dry-run` cannot be combined with
+`--clear`. In `-o json` the plan is in `data`: `commands` (flat, in order), `steps`, `transport`,
+`rsync`, `hooks`, `verify`, `tls` and `notes`.
 
 ### Release: sync source, build, deploy (config-driven)
 
@@ -274,6 +420,8 @@ baryovm stack add baryoclub --vm oracle --path …/deploy \
 
 baryovm stack release baryoclub                 # backup → sync → build → deploy
 baryovm stack release baryoclub --no-backup     # skip the pre-release backup
+# On a first release the database container does not exist yet. The backup is then skipped with one
+# line. A container that exists and fails to dump still stops the release.
 baryovm stack release baryoclub --no-build      # just sync + compose up
 baryovm stack release baryoclub --config ./other.release.json
 ```
@@ -292,10 +440,12 @@ Manifest options:
 | `builds` | none | images to build on the VM after syncing |
 | `sudo` | `false` | run the release's remote steps as root: the far side of the rsync, the image builds, `preDeploy`, `postDeploy` and the closing `compose up`. A stack registered `--sudo` turns this on for its own release and a manifest cannot turn it back off |
 | `noCompose` | `false` | skip `docker compose up` at the end |
+| `requireLocal` | none | paths under `localRoot` that must exist before anything runs. A missing one refuses the release before the backup, the sync and `postDeploy`, and names the path. It catches a missing build artifact, not a stale one |
 | `postDeploy` | none | commands to run on the VM after syncing and building |
 | `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
 | `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
 | `verifyDelaySeconds` | `3` | wait between attempts |
+| `verifyVisual` | none | opens a page in a headless chromium or chrome on the VM after the curl checks. Keys: `url` (http or https, as seen from the VM), `widths` (1 to 10000 px, up to 20), `screenshotDir` (absolute path on the VM; writes `<release>-<width>.png`), `assertNoHorizontalOverflow` (fails when `scrollWidth` exceeds `innerWidth`, naming the width). Needs `screenshotDir` or the assertion. Each browser run is capped at 60 seconds and shares the `verifyAttempts` and `verifyDelaySeconds` bounds. No image comparison. A VM with no browser fails with a message pointing at `baryovm vm bootstrap` |
 
 #### TLS and the nginx vhost
 
@@ -340,22 +490,46 @@ baryovm stack tls app --adopt       # take over a hand-written vhost
 
 A VM you already have is usually running containers started with `docker run`. If your compose file
 gives a service the same `container_name`, compose cannot create it while the old container exists.
-`stack release`, `stack deploy` and `stack update` check this before they back up, sync, build or
-pull, and stop with the container's name and the command that frees it:
+`stack deploy` and `stack update` check this before they back up, sync, build or pull. `stack
+release` checks it after the sync (compose reads the compose file from the VM, and on a first
+release the sync is what puts it there) and before any image build or `compose up`. A stack
+directory that does not exist yet is not warned about. The check stops with the container's name
+and the command that frees it:
 
 ```
 container name "umbraco-pwa-demo" is held by a container compose does not manage, probably started with docker run: check it is safe to remove, then run `docker rm -f 'umbraco-pwa-demo'` on the VM and try again
 ```
 
-BaryoVM never removes that container itself. Check first that its data lives in a volume, not in the
-container. If the old container used a named volume, declare it `external: true` in the compose file.
-Otherwise compose creates a new, empty, project-prefixed volume and the app starts with no data.
+Without `--adopt` BaryoVM never removes that container. Check first that its data lives in a volume,
+not in the container. If the old container used a named volume, declare it `external: true` in the
+compose file. Otherwise compose creates a new, empty, project-prefixed volume and the app starts
+with no data.
 
 ```yaml
 volumes:
   umbraco-pwa-demo-data:
     external: true
 ```
+
+The whole migration:
+
+1. Run `stack release` or `stack deploy`. It stops on the hand-run container.
+2. Add `external: true` for every named volume that container uses, as above.
+3. Run it again with `--adopt`:
+
+```sh
+baryovm stack release app --adopt
+baryovm stack deploy app --adopt
+```
+
+`--adopt` removes the container for good, with no way back: `docker rm -f` drops its writable layer
+and any anonymous volume, and nothing is backed up first. It prints each container it will remove
+(name, image, created time) before it does, then carries on. It never passes `-v`, so volumes stay. Before removing anything it reads the
+container's mounts with `docker inspect`. If a named volume is not declared `external: true`, it
+refuses, removes nothing, and prints the volume name and the YAML above. There is no flag to skip
+that check. Anonymous volumes and bind mounts are not checked. A container that belongs to another
+compose project is never adopted. On `stack release` the removal happens after the release record
+is written. `--adopt` on `stack release` also takes over a hand-written vhost (see above).
 
 #### Verifying a release
 
@@ -373,12 +547,61 @@ not pass**:
 - If neither is set, the release warns that it verified nothing and still succeeds. An interactive
   release is not an unattended update, so this is a warning rather than a refusal.
 
+A passing release says which plan ran and on which attempt, for example `verified by the manifest
+verify list, 2 check(s) passed on attempt 1`. In JSON it is `data.verify`, with `source`
+(`manifest`, `healthUrl` or `none`), `checks` and `attempts`.
+
 The probe runs **on the VM**, not locally. A `healthUrl` is usually loopback, which from your
 laptop either fails or, worse, reaches something local and passes.
 
 One rule worth carrying into any check script: a "must not contain" assertion only means something
 after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
 grep, so assert the status and a minimum size first.
+
+#### A release that stopped part way
+
+Before its first step that changes anything, `stack release` writes a plain JSON record on the VM,
+next to the release directory: `.baryovm-release-<stack>.json`. Read it with `cat`. It holds the
+commit (`git rev-parse HEAD` of the local source, when there is one), the backup taken, each step
+with its status (`started`, `done`, `failed`) and the failed step with its error. A step is
+written as `started` before it runs, so a crash in between reads as "this step may have run". The
+write happens under a lock directory on the host, so two releases starting together cannot both
+find nothing in progress.
+
+A finished release removes the file and writes `.baryovm-release-<stack>.deployed.json` with the
+commit. A host with no record behaves as before.
+
+```sh
+baryovm stack release app            # refuses when a record exists, and prints what it did and did not touch
+baryovm stack release app --resume   # continue from the first step not done, reusing the earlier backup
+baryovm stack release app --clear    # drop the record without running anything
+```
+
+A record whose `deploy` or `tls` step did not finish cannot be resumed, since compose may be half
+applied. The refusal says so, points at `stack rollback` and names the backup it took, for
+`stack restore <name> --file <backup> --yes` if the data needs it. `--resume` also refuses when
+the local commit differs from the recorded one. In JSON the refusal carries `data.stateFile`,
+`steps`, `failedStep`, `failedError`, `backup`, `backupFile`, `resumable` and `hint`. A successful
+release reports `data.commit`.
+
+Clearing a record that cannot be resumed also protects `images-before.json`: the images in it are
+the last good set, and the next release or update would otherwise record over them with what the
+half-applied release left running. The clear reports `data.rollbackProtected`. A release that
+finishes, or a `stack rollback` that puts the images back, lifts the protection.
+
+#### Rolling back the images
+
+```sh
+baryovm stack rollback app --list    # show the images recorded before the last release or update
+baryovm stack rollback app           # retag them and recreate the containers
+```
+
+`stack release` (before `compose up`) and `stack update` (before its first recreate) write
+`images-before.json` into the stack's backup directory on the VM, so the record outlives the CLI.
+Rollback puts those images back and runs `compose up`. It never touches the database: the matching
+backups are printed, and `stack restore --yes` stays the explicit word for the data. In JSON the
+record is `data.record`, the backups `data.backups`, and `data.restoredDatabase` is always
+`false`. Static sites are not covered.
 
 #### Sync transports and excludes
 
@@ -562,6 +785,11 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
+`stack backup --dry-run` prints the backup script and `stack restore --dry-run` prints the restore
+script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
+which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
+restore runs.
+
 Example: recreating the barakoCMS API and the barakoBrew console together is one command:
 
 ```sh
@@ -621,7 +849,11 @@ separately, that a genuine new image is kept when it comes up healthy.
 baryovm deploy --vm oracle --image nginx:alpine --name site -p 80:80
 baryovm deploy --vm oracle --image app:latest --name app \
   -p 127.0.0.1:8080:8080 -e KEY=value --pull
+baryovm deploy --vm oracle --image app:latest --name app -e KEY=value --dry-run
 ```
+
+`--dry-run` prints the docker commands to stderr and in the result's `data`, and opens no
+connection. Env values are masked as `***` in that output.
 
 ## Provision + deploy in one (untested, billable)
 
@@ -635,7 +867,19 @@ baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 \
 
 # On an already-registered VM, up just bootstraps + deploys:
 baryovm up oracle --image app:latest --container app -p 80:8080
+
+# Limit who can reach the ports (Lightsail firewall):
+baryovm vm provision web1 --key ~/.ssh/id_ed25519 \
+  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare
 ```
+
+`--ssh-from`, `--http-from` and `--https-from` take CIDRs (comma separated or
+repeated). A port with no flag stays open to `0.0.0.0/0`, as before. `cloudflare`
+stands for Cloudflare's published IPv4 and IPv6 ranges, fetched from
+cloudflare.com/ips-v4 and ips-v6 when the command runs. If the fetch fails or
+returns an empty list, the command stops before creating anything, and it never
+falls back to an empty or open list. The dry run prints how many ranges each
+port gets. The same flags work on `up`.
 
 ## Prerequisites
 

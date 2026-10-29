@@ -1,0 +1,10 @@
+set -e
+umask 077
+BK="$HOME/app-backups"
+mkdir -p "$BK" && chmod 700 "$BK"
+ts=$(date +%Y%m%d-%H%M%S)
+docker exec 'app-postgres-1' pg_dump -U 'postgres' -Fc 'appdb' > "$BK/db-$ts.dump"
+ls -1t "$BK"/db-*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f
+ls -1t "$BK"/env-* 2>/dev/null | tail -n +15 | xargs -r rm -f
+sz=$(du -h "$BK/db-$ts.dump" | cut -f1)
+echo "backup ok: db-$ts.dump ($sz) in $BK"

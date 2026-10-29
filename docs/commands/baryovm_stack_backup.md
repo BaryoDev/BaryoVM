@@ -9,7 +9,8 @@ baryovm stack backup <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for backup
+      --dry-run   print the backup script without connecting
+  -h, --help      help for backup
 ```
 
 ### Options inherited from parent commands

@@ -54,7 +54,7 @@ func EnsureCLI(name string) (string, error) {
 
 // run executes a local command, surfacing combined output on failure.
 func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- callers pass fixed command names
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %v: %w: %s", name, args, err, string(out))
@@ -93,11 +93,11 @@ func installDocker() error {
 			"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "120",
 			"https://get.docker.com").Output()
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("fetching the docker install script: %w", err)
 		}
 		if _, err := f.Write(out); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		// Checked, not deferred: a write that only fails at close leaves a truncated
@@ -157,10 +157,17 @@ func installLinuxPackage(pkg string) error {
 // rootRun runs a package manager as root, skipping sudo when we already are it:
 // a container image that has no sudo installed is a normal place to land here.
 func rootRun(name string, args ...string) error {
-	if os.Geteuid() == 0 {
-		return run(name, args...)
+	bin, full := rootCmd(os.Geteuid(), name, args)
+	return run(bin, full...)
+}
+
+// rootCmd is the command rootRun executes for a given effective uid, split out so the
+// sudo prefix can be pinned without running anything.
+func rootCmd(euid int, name string, args []string) (string, []string) {
+	if euid == 0 {
+		return name, args
 	}
 	// sudo -n, per CLAUDE.md: under -o json there is no TTY to answer a password
 	// prompt, so a bare sudo hangs where -n fails immediately and legibly.
-	return run("sudo", append([]string{"-n", name}, args...)...)
+	return "sudo", append([]string{"-n", name}, args...)
 }

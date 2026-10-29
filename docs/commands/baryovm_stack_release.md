@@ -16,11 +16,14 @@ baryovm stack release <name> [flags]
 ### Options
 
 ```
-      --adopt           with a tls block: take over a vhost file BaryoVM did not write (backed up first)
+      --adopt           take over what BaryoVM did not create: a hand-run container holding a container_name (removed with docker rm -f and NOT recoverable: its writable layer and anonymous volumes are lost; refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)
+      --clear           drop the record of an earlier release that stopped, without running anything
       --config string   release manifest path (overrides the stack's --release-file)
+      --dry-run         print the rsync, build, hook, backup and compose commands without connecting or changing anything
   -h, --help            help for release
       --no-backup       skip the automatic pre-release DB backup
       --no-build        skip building images (just sync + compose up)
+      --resume          continue an earlier release that stopped, from the first step not done, reusing its backup
 ```
 
 ### Options inherited from parent commands

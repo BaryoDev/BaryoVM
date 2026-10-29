@@ -4,7 +4,10 @@
 
 package harden
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseApplyReadsFactsAndChanges(t *testing.T) {
 	out := `FACT|os|ol
@@ -89,4 +92,29 @@ func contains(hay, needle string) bool {
 		}
 	}
 	return false
+}
+
+// An authorized_keys comment is chosen by whoever added the key, and the audit passes it through
+// as Detail. A terminal obeys escape sequences, so parseApply must drop them.
+func TestParseApplyStripsControlCharactersFromRemoteText(t *testing.T) {
+	out := "FACT|os|deb\x1b[2Jian\nFACT|sshVersion|9.2\x1b]0;x\x07p1\n" +
+		"CHANGE|key\x1b[31m|report|comment \x1b]0;pwned\x07 \u202eevil\n"
+	r := parseApply(out)
+	got := r.OS + r.SSHVersion + r.Changes[0].Item + r.Changes[0].Action + r.Changes[0].Detail
+	if strings.ContainsAny(got, "\x1b\x07\u202e") {
+		t.Errorf("control or format character survived: %q", got)
+	}
+	if r.Changes[0].Detail != "comment ]0;pwned evil" {
+		t.Errorf("detail = %q", r.Changes[0].Detail)
+	}
+}
+
+func TestParseApplyRestrictsActionAndCleansErrorLines(t *testing.T) {
+	r := parseApply("CHANGE|x|applied\x1b[31m|d\nCHANGE|y|report|d\n")
+	if r.Changes[0].Action != "unknown" || r.Changes[1].Action != "report" || r.Reported != 1 {
+		t.Errorf("actions = %q %q reported %d", r.Changes[0].Action, r.Changes[1].Action, r.Reported)
+	}
+	if got := firstError("ERROR|sshd \x1b]0;x\x07failed\n"); got != "sshd ]0;xfailed" {
+		t.Errorf("error text = %q", got)
+	}
 }

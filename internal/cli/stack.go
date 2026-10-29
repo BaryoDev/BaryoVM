@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/release"
+	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -30,9 +33,21 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(), newStackEnvCmd(),
+		newStackRollbackCmd(),
 	)
 	return cmd
+}
+
+var stackNameRe = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
+
+// validStackName keeps the name safe to use in a file name on the host (the release record) and
+// in messages. Names already stored are not checked again.
+func validStackName(name string) error {
+	if !stackNameRe.MatchString(name) {
+		return fmt.Errorf("stack name %q is not allowed: use letters, digits, '-', '_' and '.', and do not start with '.'", name)
+	}
+	return nil
 }
 
 func newStackAddCmd() *cobra.Command {
@@ -45,6 +60,9 @@ func newStackAddCmd() *cobra.Command {
 		Short: "Register a compose stack (a project dir on a VM)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validStackName(args[0]); err != nil {
+				return err
+			}
 			store, err := fleet.Load()
 			if err != nil {
 				return err
@@ -110,16 +128,57 @@ func newStackAddCmd() *cobra.Command {
 // checkContainerNames refuses a compose up that would collide with a container this project does
 // not own. A failure to read the names is a warning rather than a refusal: compose up reads the same
 // file and reports what is wrong with it, and these commands ran without this check before.
-func checkContainerNames(c sshx.Runner, cs compose.Stack) error {
+//
+// With adopt, a conflict held only by hand-run containers is resolved by removing them (#7), after
+// their mounts are read: a named volume the compose file does not declare external refuses the
+// adoption, with nothing removed. A container owned by another compose project is never adopted.
+func checkContainerNames(c sshx.Runner, cs compose.Stack, adopt bool) error {
 	err := compose.CheckContainerNames(c, cs)
 	var conflict *compose.NameConflictError
 	if errors.As(err, &conflict) {
-		return err
+		if !adopt {
+			return err
+		}
+		var names []string
+		for _, cf := range conflict.Conflicts {
+			if cf.Project != "" {
+				return err
+			}
+			names = append(names, cf.Name)
+		}
+		plan, perr := compose.PlanAdoption(c, cs, names)
+		if perr != nil {
+			return perr
+		}
+		for _, a := range plan {
+			ui.Notef("adopting: removing container %s (image %s, created %s); there is no way back", a.Name, a.Image, a.Created)
+		}
+		return compose.Adopt(c, cs, plan)
 	}
 	if err != nil {
+		// A stack dir that does not exist yet has no compose file to read, so there is nothing
+		// to collide with and nothing worth a warning (#121).
+		// Match the stack's own path: any other missing file (an env file, a bind mount) is a real
+		// problem the operator should hear about.
+		if strings.Contains(err.Error(), strings.TrimRight(cs.Dir, "/")+": No such file or directory") {
+			return nil
+		}
 		ui.Warnf("could not check container names before compose up: %v", err)
 	}
 	return nil
+}
+
+// backupCause turns a failed pre-release backup into a message that names the cause. The raw error
+// carries the whole remote script, which says nothing about why it failed.
+func backupCause(err error, container string) string {
+	msg := err.Error()
+	if strings.Contains(msg, "No such container") {
+		return fmt.Sprintf("no container named %s", container)
+	}
+	if i := strings.LastIndex(msg, "`: "); i >= 0 {
+		msg = msg[i+3:]
+	}
+	return strings.TrimSpace(msg)
 }
 
 // runLocal runs a local command (e.g. rsync) and returns combined output. A variable so a release
@@ -168,7 +227,7 @@ var knownHostsFileFor = func(vm *fleet.VM) (string, func(), error) {
 		if err != nil {
 			return "", func() {}, err
 		}
-		c.Close()
+		_ = c.Close()
 		if keys, err = store.KnownHostsFor(addr); err != nil {
 			return "", func() {}, err
 		}
@@ -180,9 +239,9 @@ var knownHostsFileFor = func(vm *fleet.VM) (string, func(), error) {
 	if err != nil {
 		return "", func() {}, err
 	}
-	cleanup := func() { os.Remove(f.Name()) }
+	cleanup := func() { _ = os.Remove(f.Name()) }
 	if _, err := f.WriteString(keys); err != nil {
-		f.Close()
+		_ = f.Close()
 		cleanup()
 		return "", func() {}, err
 	}
@@ -210,7 +269,7 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 
 func newStackReleaseCmd() *cobra.Command {
 	var config string
-	var noBuild, noBackup, adopt bool
+	var noBuild, noBackup, adopt, resume, clearState, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "release <name>",
 		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
@@ -245,40 +304,39 @@ func newStackReleaseCmd() *cobra.Command {
 				return err
 			}
 
+			// rr is the progress record once a release has begun one. Until then a failure has
+			// nothing on the host to report or clean up.
+			var rr *relRun
 			fail := func(e error) error {
-				ui.Emit(ui.Result{OK: false, Action: "stack release", Error: e.Error()})
+				res := ui.Result{OK: false, Action: "stack release", Error: e.Error()}
+				if rr != nil && rr.st != nil {
+					if len(rr.st.Steps) == 0 {
+						_ = releasestate.Remove(rr.sc, rr.loc)
+					} else {
+						res.Data = stateData(rr.loc, rr.st, args[0])
+						ui.Notef("release state kept at %s: %s", rr.loc.File, stateHint(args[0], rr.st))
+					}
+				}
+				ui.Emit(res)
 				return e
 			}
 
-			// A container_name held by a container this project does not own, typically one started
-			// by hand with docker run, fails compose up at the very end: after the backup, the rsync
-			// and a full image build (#1). So it is checked before any of them.
-			if !m.NoCompose {
-				if err := ui.Step("check container names", func() error {
-					c, err := dialRelease(vm)
-					if err != nil {
-						return err
-					}
-					defer c.Close()
-					return checkContainerNames(c, releaseComposeStack(st, m))
-				}); err != nil {
-					return fail(err)
+			if resume && clearState {
+				return fail(fmt.Errorf("--resume and --clear cannot be used together: resume continues the earlier release, clear drops its record"))
+			}
+			loc := releasestate.For(m.RemoteRoot, args[0], m.Sudo)
+			if clearState {
+				if dryRun {
+					return fail(fmt.Errorf("--dry-run and --clear cannot be used together: clear changes the release record"))
 				}
+				return runReleaseClear(vm, loc, releaseBackupConfig(st, m), args[0])
 			}
 
-			// Safety first: back up before releasing (unless opted out / no DB configured).
-			if !noBackup && st.DBContainer != "" && st.DBName != "" {
-				if err := ui.Step("backup", func() error {
-					c, err := dialRelease(vm)
-					if err != nil {
-						return err
-					}
-					defer c.Close()
-					_, err = backup.Backup(c, releaseBackupConfig(st, m))
-					return err
-				}); err != nil {
-					return fail(fmt.Errorf("pre-release backup failed: %w", err))
-				}
+			// Local checks first, so a refusal that needs no host never touches the state file.
+			// A static site's artifact is built outside the release. Refuse before anything is
+			// backed up, synced or run if it is not there (#68).
+			if err := m.CheckRequireLocal(); err != nil {
+				return fail(err)
 			}
 
 			// The compose dir holds a root-owned .env. Refuse before anything is transferred, rather
@@ -288,24 +346,103 @@ func newStackReleaseCmd() *cobra.Command {
 				return fail(err)
 			}
 
-			// 1. Sync each source subdir. The compose dir (with .env) is never synced. rsync when the
-			// operator's machine has it, otherwise a tar stream over the SSH session.
-			transport := release.PickTransport(lookPath)
-			ui.Notef("sync transport: %s", transport)
-			for _, sub := range m.Sync {
-				sub := sub
-				if err := ui.Step("sync "+sub, func() error {
-					if transport == release.TransportTar {
-						return syncTar(m, vm, sub)
+			// A dry run stops here: it has read only local files and fleet.json, and opens no
+			// connection, takes no lock and writes no record.
+			if dryRun {
+				emitDryRun("stack release", planRelease(args[0], st, vm, m, releaseDryOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt, Resume: resume}))
+				return nil
+			}
+
+			// The progress record. It is written under the host lock before the first step that
+			// changes anything, so two releases cannot both read "nothing in progress" (#136).
+			sc, err := dialRelease(vm)
+			if err != nil {
+				return fail(err)
+			}
+			defer sc.Close()
+			commit := gitHead(m.LocalPath())
+			rr = &relRun{sc: sc, loc: loc}
+			if resume {
+				prev, err := releasestate.Open(sc, loc)
+				if err != nil {
+					rr = nil
+					return fail(err)
+				}
+				if prev == nil {
+					rr = nil
+					return fail(fmt.Errorf("nothing to resume: no release record at %s", loc.File))
+				}
+				// Resuming while the first release is still running would start a second one over the
+				// same build and containers. The record's last write is the only sign of life we have.
+				if prev.Active(time.Now()) {
+					rr = nil
+					return fail(fmt.Errorf("the earlier release of %s wrote its record at %s and may still be running: wait about %d minutes with no new write, or drop the record with `baryovm stack release %s --clear` if you know it is dead",
+						args[0], prev.Updated, int(releasestate.ActiveWindow/time.Minute), args[0]))
+				}
+				if _, bad := prev.Unsafe(); bad {
+					rr = nil
+					return refuseState(loc, prev, args[0])
+				}
+				if commit != "" && prev.Commit != "" && commit != prev.Commit {
+					rr = nil
+					return fail(fmt.Errorf("the earlier release was at commit %s and the source is now at %s: check out the earlier commit to resume, or drop the record with `baryovm stack release %s --clear`",
+						prev.Commit, commit, args[0]))
+				}
+				rr.st, rr.resume = prev, true
+				ui.Notef("resuming the earlier release of %s", args[0])
+			} else {
+				cur, existing, err := releasestate.Begin(sc, loc, releasestate.New(args[0], commit))
+				if err != nil {
+					rr = nil
+					return fail(err)
+				}
+				if existing != nil {
+					rr = nil
+					return refuseState(loc, existing, args[0])
+				}
+				rr.st = cur
+			}
+
+			// Safety first: back up before releasing (unless opted out / no DB configured).
+			if !noBackup && st.DBContainer != "" && st.DBName != "" {
+				// A first release has no database container yet, so there is nothing to dump. That is
+				// skipped with one line. A container that exists and fails to dump still stops the
+				// release, and so does a probe that cannot tell (it falls through to the backup).
+				bcfg := releaseBackupConfig(st, m)
+				if err := rr.step("backup", func() error {
+					skip := false
+					if err := ui.Step("check database container", func() error {
+						c, err := dialRelease(vm)
+						if err != nil {
+							return err
+						}
+						defer c.Close()
+						if ok, e := backup.ContainerExists(c, bcfg); e == nil && !ok {
+							skip = true
+						}
+						return nil
+					}); err != nil {
+						return fmt.Errorf("pre-release backup failed: %w", err)
 					}
-					khFile, cleanup, e := knownHostsFileFor(vm)
-					if e != nil {
-						return e
+					if skip {
+						ui.Notef("no database container named %s yet, skipping the pre-release backup", st.DBContainer)
+						return nil
 					}
-					defer cleanup()
-					out, e := runLocal(m.RsyncCmdKnownHosts(sub, vm.User, vm.Host, vm.Port, vm.KeyPath, khFile))
-					if e != nil {
-						return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
+					if err := ui.Step("backup", func() error {
+						c, err := dialRelease(vm)
+						if err != nil {
+							return err
+						}
+						defer c.Close()
+						out, err := backup.Backup(c, bcfg)
+						if err == nil {
+							// Recorded at once, so a failure further on names the backup to restore.
+							rr.st.Backup, rr.st.BackupFile = bcfg.DirNote(), releasestate.ParseBackupFile(out)
+							_ = releasestate.Write(rr.sc, rr.loc, rr.st)
+						}
+						return err
+					}); err != nil {
+						return fmt.Errorf("pre-release backup failed: %s", backupCause(err, st.DBContainer))
 					}
 					return nil
 				}); err != nil {
@@ -313,22 +450,68 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
-			// 2 + 3: build images on the VM, then compose up.
-			c, err := dialRelease(vm)
-			if err != nil {
-				return fail(err)
+			// 1. Sync each source subdir. The compose dir (with .env) is never synced. rsync when the
+			// operator's machine has it, otherwise a tar stream over the SSH session.
+			transport := release.PickTransport(lookPath)
+			ui.Notef("sync transport: %s", transport)
+			for _, sub := range m.Sync {
+				sub := sub
+				if err := rr.step("sync:"+sub, func() error {
+					return ui.Step("sync "+sub, func() error {
+						if transport == release.TransportTar {
+							return syncTar(m, vm, sub)
+						}
+						khFile, cleanup, e := knownHostsFileFor(vm)
+						if e != nil {
+							return e
+						}
+						defer cleanup()
+						out, e := runLocal(m.RsyncCmdKnownHosts(sub, vm.User, vm.Host, vm.Port, vm.KeyPath, khFile))
+						if e != nil {
+							return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
+						}
+						return nil
+					})
+				}); err != nil {
+					return fail(err)
+				}
 			}
-			defer c.Close()
+
+			// 2 + 3: build images on the VM, then compose up.
+			c := sc
+
+			// A container_name held by a container this project does not own, typically one started
+			// by hand with docker run, fails compose up at the very end. It is checked here, after
+			// the sync, because compose reads the compose file from the VM and on a first release
+			// that file is not there until the sync has put it there (#150). It still comes before
+			// the image builds and compose up, which are the expensive and disruptive steps.
+			if !m.NoCompose {
+				if err := rr.step("check-names", func() error {
+					return ui.Step("check container names", func() error {
+						return checkContainerNames(c, releaseComposeStack(st, m), adopt)
+					})
+				}); err != nil {
+					return fail(err)
+				}
+				// The images the stack runs now, saved next to the backups for `stack rollback`
+				// (#37). After the name check because that is the first `compose config`. Not on
+				// a resume past deploy, where "now" is already the new release.
+				if !rr.st.Done("deploy") {
+					recordRollback(c, st, m, args[0])
+				}
+			}
 
 			if !noBuild {
 				for _, b := range m.Builds {
 					b := b
-					if err := ui.Step("build "+b.Image, func() error {
-						out, e := c.Run(m.BuildCmd(b))
-						if e != nil {
-							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-						}
-						return nil
+					if err := rr.step("build:"+b.Image, func() error {
+						return ui.Step("build "+b.Image, func() error {
+							out, e := c.Run(m.BuildCmd(b))
+							if e != nil {
+								return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+							}
+							return nil
+						})
 					}); err != nil {
 						return fail(err)
 					}
@@ -342,12 +525,14 @@ func newStackReleaseCmd() *cobra.Command {
 			for i, cmdStr := range preCmds {
 				cmdStr := cmdStr
 				label := fmt.Sprintf("pre %d/%d", i+1, len(preCmds))
-				if err := ui.Step(label, func() error {
-					out, e := c.Run(cmdStr)
-					if e != nil {
-						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-					}
-					return nil
+				if err := rr.step(fmt.Sprintf("pre:%d", i+1), func() error {
+					return ui.Step(label, func() error {
+						out, e := c.Run(cmdStr)
+						if e != nil {
+							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+						}
+						return nil
+					})
 				}); err != nil {
 					return fail(err)
 				}
@@ -357,9 +542,11 @@ func newStackReleaseCmd() *cobra.Command {
 			// Running compose up there fails after the sync has already landed, which is the
 			// worst place to fail, so the manifest says up front that there is nothing to bring up.
 			if !m.NoCompose {
-				if err := ui.Step("deploy", func() error {
-					_, e := compose.Up(c, releaseComposeStack(st, m), compose.UpOptions{})
-					return e
+				if err := rr.step("deploy", func() error {
+					return ui.Step("deploy", func() error {
+						_, e := compose.Up(c, releaseComposeStack(st, m), compose.UpOptions{})
+						return e
+					})
 				}); err != nil {
 					return fail(err)
 				}
@@ -368,7 +555,7 @@ func newStackReleaseCmd() *cobra.Command {
 			// The vhost and certificate, when the manifest declares them. After compose up so the
 			// upstream exists, before postDeploy so a hook that reloads nginx sees the new vhost.
 			if m.TLS != nil {
-				if err := m.ApplyTLS(c, tlsOptions(adopt), ui.Step); err != nil {
+				if err := rr.step("tls", func() error { return m.ApplyTLS(c, tlsOptions(adopt), ui.Step) }); err != nil {
 					return fail(err)
 				}
 			}
@@ -380,12 +567,14 @@ func newStackReleaseCmd() *cobra.Command {
 			for i, cmdStr := range postCmds {
 				cmdStr := cmdStr
 				label := fmt.Sprintf("post %d/%d", i+1, len(postCmds))
-				if err := ui.Step(label, func() error {
-					out, e := c.Run(cmdStr)
-					if e != nil {
-						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-					}
-					return nil
+				if err := rr.step(fmt.Sprintf("post:%d", i+1), func() error {
+					return ui.Step(label, func() error {
+						out, e := c.Run(cmdStr)
+						if e != nil {
+							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+						}
+						return nil
+					})
 				}); err != nil {
 					return fail(err)
 				}
@@ -396,37 +585,73 @@ func newStackReleaseCmd() *cobra.Command {
 			// the site can still serve the wrong thing: that is how the umbraco-pwa demo served
 			// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
 			// every listing pointed at.
+			m.ReleaseTag = commit
+			if m.ReleaseTag == "" {
+				m.ReleaseTag = time.Now().UTC().Format("20060102T150405Z")
+			}
 			plan := m.Verification(st.HealthURL)
+			attemptsUsed := 0
 			if len(plan.Commands) == 0 {
 				ui.Warnf("nothing to verify: set verify in the manifest or healthUrl on the stack")
 			} else {
-				if err := ui.Step("verify", func() error {
-					var last error
-					for attempt := 1; attempt <= plan.Attempts; attempt++ {
-						last = nil
-						for _, cmdStr := range plan.Commands {
-							out, e := c.Run(cmdStr)
-							if e != nil {
-								last = fmt.Errorf("%w: %s", e, lastLines(out, 8))
-								break
+				if err := rr.step("verify", func() error {
+					return ui.Step("verify", func() error {
+						var last error
+						for attempt := 1; attempt <= plan.Attempts; attempt++ {
+							attemptsUsed = attempt
+							last = nil
+							for _, cmdStr := range plan.Commands {
+								out, e := c.Run(cmdStr)
+								if e != nil {
+									last = fmt.Errorf("%w: %s", e, lastLines(out, 8))
+									break
+								}
+							}
+							if last == nil {
+								return nil
+							}
+							// A service that restarts is normal; one that never answers is not.
+							if attempt < plan.Attempts {
+								time.Sleep(plan.Delay)
 							}
 						}
-						if last == nil {
-							return nil
-						}
-						// A service that restarts is normal; one that never answers is not.
-						if attempt < plan.Attempts {
-							time.Sleep(plan.Delay)
-						}
-					}
-					return last
+						return last
+					})
 				}); err != nil {
 					return fail(fmt.Errorf("released but failed verification, the stack may need attention: %w", err))
 				}
 			}
 
+			// Finished: drop the progress record and note which commit is deployed.
+			if err := releasestate.Remove(sc, loc); err != nil {
+				ui.Warnf("release done but the record at %s could not be removed, clear it with `baryovm stack release %s --clear`: %v", loc.File, args[0], err)
+			}
+			// A finished release is a good state again, so the next one may record over it. Not only
+			// for compose manifests: a clear protects whatever the manifest, so the finish lifts it the same way.
+			if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
+				ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
+			}
+			if commit != "" {
+				if err := releasestate.RecordDeployed(sc, loc, args[0], commit); err != nil {
+					ui.Warnf("could not record the deployed commit: %v", err)
+				}
+			}
+
+			// Say which check ran, so a release that verified nothing cannot read as one that did.
 			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released",
-				Data: map[string]string{"transport": string(transport)}})
+				Data: map[string]any{
+					"transport": string(transport),
+					"commit":    commit,
+					"verify": map[string]any{
+						"source":   plan.Source,
+						"checks":   len(plan.Commands),
+						"attempts": attemptsUsed,
+					},
+				}})
+			if len(plan.Commands) > 0 {
+				ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", args[0],
+					verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)
+			}
 			ui.Successf("%s: release done", args[0])
 			return nil
 		},
@@ -434,8 +659,24 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
-	cmd.Flags().BoolVar(&adopt, "adopt", false, "with a tls block: take over a vhost file BaryoVM did not write (backed up first)")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed with docker rm -f and NOT recoverable: its writable layer and anonymous volumes are lost; refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
+	cmd.Flags().BoolVar(&resume, "resume", false, "continue an earlier release that stopped, from the first step not done, reusing its backup")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the rsync, build, hook, backup and compose commands without connecting or changing anything")
+	cmd.Flags().BoolVar(&clearState, "clear", false, "drop the record of an earlier release that stopped, without running anything")
 	return cmd
+}
+
+// verifyLabel names a verify plan's source for the success line.
+func verifyLabel(source string) string {
+	switch source {
+	case "manifest":
+		return "the manifest verify list"
+	case "healthUrl":
+		return "the stack healthUrl"
+	case "verifyVisual":
+		return "the manifest verifyVisual block"
+	}
+	return source
 }
 
 func lastLines(s string, n int) string {
@@ -518,17 +759,23 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 }
 
 func newStackBackupCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "backup <name>",
 		Short: "Back up the stack's database + config (pg_dump + .env)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackBackup(args[0])
+			}
 			return runStackBackup(args[0], "stack backup", fmt.Sprintf("backing up %s", args[0]),
 				func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
 					return bareOutput(backup.Backup(c, backupConfig(st)))
 				})
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the backup script without connecting")
+	return cmd
 }
 
 func newStackBackupsCmd() *cobra.Command {
@@ -554,7 +801,7 @@ func newStackBackupsCmd() *cobra.Command {
 
 func newStackRestoreCmd() *cobra.Command {
 	var file string
-	var yes bool
+	var yes, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "restore <name>",
 		Short: "Restore the stack's database from a backup (REPLACES current data)",
@@ -562,6 +809,9 @@ func newStackRestoreCmd() *cobra.Command {
 		Example: "  baryovm stack restore baryoclub --yes\n" +
 			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackRestore(args[0], file)
+			}
 			if !yes {
 				return fmt.Errorf("restore REPLACES the %q database: re-run with --yes to confirm", args[0])
 			}
@@ -573,6 +823,7 @@ func newStackRestoreCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "", "backup to restore (name or path); default: newest")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the destructive restore")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the restore script and the backup it would use, without connecting (needs no --yes)")
 	return cmd
 }
 
@@ -626,7 +877,7 @@ func newStackRemoveCmd() *cobra.Command {
 
 func newStackDeployCmd() *cobra.Command {
 	var svcs []string
-	var pull, force, noDeps bool
+	var pull, force, noDeps, adopt, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
@@ -634,9 +885,12 @@ func newStackDeployCmd() *cobra.Command {
 		Example: "  baryovm stack deploy barako --force-recreate --service api,console\n" +
 			"  baryovm stack deploy barako --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackDeploy(args[0], compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
+			}
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (string, error) {
-					if err := checkContainerNames(c, cs); err != nil {
+					if err := checkContainerNames(c, cs, adopt); err != nil {
 						return "", err
 					}
 					return compose.Up(c, cs, compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
@@ -645,8 +899,10 @@ func newStackDeployCmd() *cobra.Command {
 	}
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit to these services (comma-separated)")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull images before recreating")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the compose commands without connecting")
 	cmd.Flags().BoolVar(&force, "force-recreate", false, "recreate containers even if unchanged")
 	cmd.Flags().BoolVar(&noDeps, "no-deps", false, "don't touch linked services")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "remove a container started by hand that holds a container_name the compose file wants (docker rm -f, NOT recoverable: its writable layer and anonymous volumes are lost; refused if it uses a named volume the compose file does not declare external)")
 	return cmd
 }
 

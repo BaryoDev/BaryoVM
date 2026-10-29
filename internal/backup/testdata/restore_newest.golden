@@ -1,0 +1,9 @@
+set -e
+BK="$HOME/app-backups"
+f=$(ls -1t "$BK"/db-*.dump | head -1)
+[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }
+echo "restoring $f"
+docker exec -i 'app-postgres-1' dropdb -U 'postgres' --force --if-exists 'appdb'
+docker exec -i 'app-postgres-1' createdb -U 'postgres' 'appdb'
+docker exec -i 'app-postgres-1' pg_restore -U 'postgres' -d 'appdb' < "$f"
+echo "restored from $f"

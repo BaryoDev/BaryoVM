@@ -78,11 +78,11 @@ func mustRefuseAndLearnNothing(t *testing.T, s *Store, key ssh.PublicKey) error 
 func TestCertificateFromAKnownHostIsRefused(t *testing.T) {
 	s := newStore(t)
 	record(t, s.path, "", newKey(t))
-	mustRefuseAndLearnNothing(t, s, hostCert(t))
+	_ = mustRefuseAndLearnNothing(t, s, hostCert(t))
 }
 
 func TestCertificateFromAnUnknownHostIsNotLearned(t *testing.T) {
-	mustRefuseAndLearnNothing(t, newStore(t), hostCert(t))
+	_ = mustRefuseAndLearnNothing(t, newStore(t), hostCert(t))
 }
 
 func TestUnreadableOwnFileRefusesInsteadOfLearning(t *testing.T) {

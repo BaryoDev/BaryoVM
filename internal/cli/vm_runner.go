@@ -174,7 +174,7 @@ func runWithTimeout(name string, d time.Duration, args ...string) (string, strin
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	var out, errb bytes.Buffer
-	c := exec.CommandContext(ctx, name, args...)
+	c := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass fixed binary names
 	c.Stdout = &out
 	c.Stderr = &errb
 	if err := c.Run(); err != nil {

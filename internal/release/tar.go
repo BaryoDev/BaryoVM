@@ -168,6 +168,21 @@ func guard(root, dest string) string {
 // The remote command builders are separate from the logic above so another host OS can have its
 // own set (tar.exe on Windows) without touching it.
 
+// TarExtractCmd is the command the tar transport runs on the host to unpack one sync entry,
+// without running it. A directory unpacks into its destination, a single file into remoteRoot.
+// The listing and pruning TarSync does around it need the host and are not part of this.
+func (m *Manifest) TarExtractCmd(sub string) (string, error) {
+	root, dest, err := m.tarDest(sub)
+	if err != nil {
+		return "", err
+	}
+	src := filepath.Join(expand(m.LocalRoot), filepath.FromSlash(path.Clean(filepath.ToSlash(sub))))
+	if fi, err := os.Stat(src); err == nil && !fi.IsDir() {
+		dest = root
+	}
+	return m.extractCmd(root, dest), nil
+}
+
 // extractCmd makes the destination and unpacks stdin into it. -p keeps the modes the archive
 // carries, and --no-same-owner leaves ownership to whoever runs it (the SSH user, or root under
 // Sudo) rather than trusting numeric ids from the operator's machine.
@@ -330,7 +345,7 @@ func streamArchive(c sshx.StdinRunner, cmd string, write func(io.Writer) ([]stri
 	}()
 	_, runErr := c.RunStdin(cmd, pr)
 	if runErr != nil {
-		pr.CloseWithError(runErr)
+		_ = pr.CloseWithError(runErr)
 		res := <-done
 		if res.err != nil && !errors.Is(res.err, runErr) {
 			return nil, fmt.Errorf("writing archive: %w (host said: %v)", res.err, runErr)
@@ -465,7 +480,7 @@ func writeTarFile(w io.Writer, file string) error {
 }
 
 func copyFile(w io.Writer, file string) error {
-	f, err := os.Open(file)
+	f, err := os.Open(file) // #nosec G304 -- local file chosen by the user; the tar writer guards what it archives
 	if err != nil {
 		return err
 	}
