@@ -303,3 +303,20 @@ func TestReleaseGoesAheadWhenTheRequiredLocalPathExists(t *testing.T) {
 		t.Error("the sync should have run")
 	}
 }
+
+// Only a missing stack dir means a first release. Some other missing path (an env file, a
+// bind-mounted directory) is a real problem and keeps its warning.
+func TestAMissingPathOtherThanTheStackDirStillWarns(t *testing.T) {
+	releasePathFixture(t, nil, "")
+	f := failingRunner{
+		fakeRunner: &fakeRunner{answers: map[string]string{"--format '{{.Names}}'": "some-other-container\n", "up -d": ""}},
+		fail: map[string]string{
+			"config --format json": "remote `docker compose config`: exit status 1: env file /etc/other/app.env: No such file or directory",
+		},
+	}
+	var local []string
+	_, stderr, _ := releaseOn(t, f, &local, false)
+	if !strings.Contains(stderr, "could not check container names") {
+		t.Errorf("a missing path that is not the stack dir should warn:\n%s", stderr)
+	}
+}

@@ -157,7 +157,9 @@ func checkContainerNames(c sshx.Runner, cs compose.Stack, adopt bool) error {
 	if err != nil {
 		// A stack dir that does not exist yet has no compose file to read, so there is nothing
 		// to collide with and nothing worth a warning (#121).
-		if strings.Contains(err.Error(), "No such file or directory") {
+		// Match the stack's own path: any other missing file (an env file, a bind mount) is a real
+		// problem the operator should hear about.
+		if strings.Contains(err.Error(), strings.TrimRight(cs.Dir, "/")+": No such file or directory") {
 			return nil
 		}
 		ui.Warnf("could not check container names before compose up: %v", err)
