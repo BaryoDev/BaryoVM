@@ -381,7 +381,8 @@ func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
 	} {
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		err := runGroup(t, args...)
-		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
+		// --config-env is refused earlier, by the alias rule, with its own message.
+		if err == nil || len(*ran) != 0 || (!strings.Contains(err.Error(), "absolute path") && !strings.Contains(err.Error(), "--config-env")) {
 			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
 		}
 	}

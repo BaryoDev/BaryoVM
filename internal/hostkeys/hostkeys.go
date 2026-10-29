@@ -25,6 +25,7 @@
 package hostkeys
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- OpenSSH hashed known_hosts entries are HMAC-SHA1, the format requires it
 	"encoding/base64"
@@ -35,6 +36,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -144,6 +146,31 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 			return fmt.Errorf("%s offered a host certificate (%s); BaryoVM checks plain host keys only and will not trust it", hostname, key.Type())
 		}
 
+		// A key pinned for this run must also agree with what the machine already trusts or has
+		// revoked, checked with the real hostname and address (an entry may be keyed by IP). An
+		// unknown host in the stores is fine. Then the offered key must equal the pin. Nothing is
+		// learned or written.
+		if pk := pinFor(hostname); pk != nil {
+			// knownhosts looks up the hostname only when one is given, so the address is a second pass.
+			names := []string{hostname}
+			if remote != nil && remote.String() != hostname {
+				names = append(names, remote.String())
+			}
+			for _, path := range []string{s.path, s.extraPath} {
+				for _, name := range names {
+					if err := s.check(path, name, remote, key); err != nil {
+						if err := s.refusal(err, path, hostname, offered); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			if bytes.Equal(pk.Marshal(), key.Marshal()) {
+				return nil
+			}
+			return &ErrChanged{Host: hostname, Stored: ssh.FingerprintSHA256(pk), Offered: offered, Store: "the project file"}
+		}
+
 		// Our own file first. A key we recorded is the one we mean to check against.
 		err := s.check(s.path, hostname, remote, key)
 		if err == nil {
@@ -225,6 +252,9 @@ func PlainAlgorithms() []string {
 // is used only when ours has nothing. A host with no recorded key gets PlainAlgorithms, so a fresh
 // VM can still be learned. Certificate types are never offered: Callback refuses certificates.
 func (s *Store) Algorithms(hostname string) []string {
+	if pk := pinFor(hostname); pk != nil {
+		return keyAlgorithms(pk)
+	}
 	for _, path := range []string{s.path, s.extraPath} {
 		stored := algorithmsIn(path, hostname)
 		if len(stored) == 0 {
@@ -406,6 +436,58 @@ func (s *Store) add(hostname string, key ssh.PublicKey) error {
 	return nil
 }
 
+// sessionPins are host keys a project file names for this run only. They are never written to a
+// known_hosts file: a committed file must not change what this machine trusts for good. Guarded
+// because dials can run concurrently.
+var (
+	pinMu       sync.RWMutex
+	sessionPins = map[string]ssh.PublicKey{}
+)
+
+func pinFor(hostport string) ssh.PublicKey {
+	pinMu.RLock()
+	defer pinMu.RUnlock()
+	return sessionPins[knownhosts.Normalize(hostport)]
+}
+
+// ResetSessionPins forgets every key pinned for the run.
+func ResetSessionPins() {
+	pinMu.Lock()
+	sessionPins = map[string]ssh.PublicKey{}
+	pinMu.Unlock()
+}
+
+// PinForRun trusts a host key given in authorized_keys form ("ssh-ed25519 AAAA...", a comment is
+// ignored) for hostport until ResetSessionPins, so a runner with no memory checks the key a project
+// file names instead of learning whatever answers. Nothing is written to disk.
+//
+// A pin that contradicts a key either persistent store records for the host (BaryoVM's own file or
+// the user's ~/.ssh/known_hosts) is refused as a changed key: a committed file does not get to
+// override a key somebody already checked.
+func (s *Store) PinForRun(hostport, authorized string) error {
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorized))
+	if err != nil {
+		return fmt.Errorf("host key for %s is not an authorized_keys line (type, base64 key): %w", hostport, err)
+	}
+	if _, ok := key.(*ssh.Certificate); ok {
+		return fmt.Errorf("host key for %s is a certificate; BaryoVM checks plain host keys only", hostport)
+	}
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+	for _, path := range []string{s.path, s.extraPath} {
+		err := s.check(path, hostport, remote, key)
+		if err == nil {
+			continue
+		}
+		if err := s.refusal(err, path, hostport, ssh.FingerprintSHA256(key)); err != nil {
+			return err
+		}
+	}
+	pinMu.Lock()
+	sessionPins[knownhosts.Normalize(hostport)] = key
+	pinMu.Unlock()
+	return nil
+}
+
 // Forget removes every recorded key for a host from BaryoVM's own file, so the next connection
 // learns the new one. It reports how many entries it dropped, so "forgot 0 keys" is visible rather
 // than looking like success.
@@ -464,6 +546,9 @@ func (s *Store) Path() string { return s.path }
 // ours has nothing, the same order Callback checks in. Only plain keys are returned, never
 // @revoked or @cert-authority entries. An empty result means the host is not known yet.
 func (s *Store) KnownHostsFor(hostport string) (string, error) {
+	if pk := pinFor(hostport); pk != nil {
+		return knownhosts.Line([]string{knownhosts.Normalize(hostport)}, pk) + "\n", nil
+	}
 	for _, path := range []string{s.path, s.extraPath} {
 		if path == "" {
 			continue

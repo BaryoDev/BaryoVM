@@ -21,8 +21,22 @@ set, any host is allowed:
 
   git config --add baryovm.allowedHosts github.com
 
-Flags after "git" belong to git, so this command takes none of its own. For
-JSON output of a refusal set BARYOVM_OUTPUT=json.
+It also applies rules that each repository can switch off (git config --add
+baryovm.rules.off <rule>): protected-branches (no direct or force push to the
+default branch or baryovm.protectedBranches; --force-with-lease only on
+baryovm.forceLeaseBranches), destructive (reset --hard with uncommitted work,
+clean -fdx and deleting a tag on the remote need the target name typed back, or
+--confirm <name> with no terminal or under JSON), files (.env, key and keystore
+files, service account JSON and files over baryovm.maxFileSize, on the staged
+files and the pushed range), text (no AI attribution in commit messages;
+baryovm.houseStyle true adds style checks), gate (baryovm.gate script runs
+before a push unless it passed on this commit) and audit (each guarded command
+goes to the activity log). A refusal says how to pass it. Aliases are expanded
+and checked as the command they stand for.
+
+Flags after "git" belong to git, so this command takes none of its own, except
+--confirm <name>, which baryovm consumes. For JSON output of a refusal set
+BARYOVM_OUTPUT=json.
 
 ```
 baryovm git <git arguments> [flags]

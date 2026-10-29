@@ -20,6 +20,7 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
 // Runner is the side-effecting surface, kept as an interface so the decision logic can be tested
@@ -50,7 +51,7 @@ type Options struct {
 	Auto bool
 	// AutoUpdate is the stack's opt-in flag.
 	AutoUpdate bool
-	// HasHealthCheck is false when the stack defines no health URL.
+	// HasHealthCheck is false when the stack defines no health URL and no verify spec.
 	HasHealthCheck bool
 	// HasBackup is false when the stack has no database configured.
 	HasBackup bool
@@ -64,6 +65,9 @@ type Options struct {
 	// HealthAttempts and HealthDelay bound how long we wait for the stack to come back.
 	HealthAttempts int
 	HealthDelay    time.Duration
+	// HealthTimeout is the total time across all attempts. Zero means verify.DefaultTimeout. The
+	// wait is always bounded: running out of time is a failed health check, which rolls back.
+	HealthTimeout time.Duration
 }
 
 // Result describes what happened, in enough detail to explain an unattended run after the fact.
@@ -84,7 +88,7 @@ type Result struct {
 var ErrNotAutoUpdatable = errors.New("stack is not marked autoUpdate")
 
 // ErrNoHealthCheck is returned when an unattended update has no way to verify itself.
-var ErrNoHealthCheck = errors.New("stack has no healthUrl, so an update cannot be verified or rolled back")
+var ErrNoHealthCheck = errors.New("stack has no healthUrl or verify spec, so an update cannot be verified or rolled back")
 
 // ErrNoBackup is returned when an unattended update has no backup to go back to. It is the same rule
 // that refuses --auto with --no-backup: a stack with no database configured has no way back either,
@@ -102,7 +106,7 @@ func Run(r Runner, o Options) (Result, error) {
 			return Result{Skipped: "not marked autoUpdate"}, ErrNotAutoUpdatable
 		}
 		if !o.HasHealthCheck {
-			return Result{Skipped: "no healthUrl"}, ErrNoHealthCheck
+			return Result{Skipped: "no healthUrl or verify spec"}, ErrNoHealthCheck
 		}
 		// A dry run is exempt because it recreates nothing, so it has nothing to go back from.
 		if !o.HasBackup && !o.NoDatabase && !o.DryRun {
@@ -176,11 +180,7 @@ func Run(r Runner, o Options) (Result, error) {
 		res.Health = "healthy"
 		return res, nil
 	}
-	why := "health check did not pass"
-	if err != nil {
-		why = "health check errored: " + err.Error()
-	}
-	return rollback(r, o, before, changed, res, errors.New(why))
+	return rollback(r, o, before, changed, res, errors.New(healthWhy(err)))
 }
 
 // rollback restores the images recorded before the update and brings the services back up.
@@ -223,6 +223,28 @@ func rollback(r Runner, o Options, before []compose.Image, changed []string, res
 	return res, fmt.Errorf("%w; rolled back to the previous images", cause)
 }
 
+// healthWhy words a failed wait. A failed assertion and a timeout are said as what they are, and
+// only a fault in running the check is "errored".
+func healthWhy(err error) string {
+	var failed *verify.FailedError
+	var timeout *verify.TimeoutError
+	switch {
+	case err == nil:
+		return "health check did not pass"
+	case errors.As(err, &timeout):
+		return "health check " + timeout.Error()
+	case errors.As(err, &failed):
+		return "health check did not pass: " + failed.Reason
+	}
+	return "health check errored: " + err.Error()
+}
+
+// clock is the time source of the health wait, replaced by tests.
+var clock = verify.RealClock()
+
+// waitHealthy polls Healthy under a bounded budget: at most the attempts and the total time. Both
+// are clamped by verify, so an options struct or a spec that asks for more cannot make an update
+// wait without end. A timeout comes back as a *verify.TimeoutError, never as a pass.
 func waitHealthy(r Runner, o Options) (bool, error) {
 	attempts := o.HealthAttempts
 	if attempts <= 0 {
@@ -233,15 +255,22 @@ func waitHealthy(r Runner, o Options) (bool, error) {
 		delay = 3 * time.Second
 	}
 	var lastErr error
-	for i := 0; i < attempts; i++ {
+	out := verify.Retry(verify.Budget{Attempts: attempts, Delay: delay, Timeout: o.HealthTimeout}, clock, func() (bool, string) {
 		ok, err := r.Healthy()
-		if ok {
-			return true, nil
-		}
 		lastErr = err
-		if i < attempts-1 {
-			time.Sleep(delay)
+		if ok {
+			return true, ""
 		}
+		if err != nil {
+			return false, err.Error()
+		}
+		return false, "not healthy"
+	})
+	switch {
+	case out.OK:
+		return true, nil
+	case out.TimedOut:
+		return false, &verify.TimeoutError{Elapsed: out.Elapsed, Attempts: out.Attempts, Reason: out.Reason}
 	}
 	return false, lastErr
 }
@@ -282,10 +311,11 @@ func contains(ss []string, s string) bool {
 
 // SSHRunner is the real Runner: compose over SSH.
 type SSHRunner struct {
-	Client    *sshx.Client
-	Stack     compose.Stack
-	HealthURL string
-	DoBackup  func() (string, error)
+	Client *sshx.Client
+	Stack  compose.Stack
+	// Verify is the stack's verify plan, built for an update. Release reads the same spec.
+	Verify   verify.Plan
+	DoBackup func() (string, error)
 }
 
 func (s SSHRunner) Images(svcs []string) ([]compose.Image, error) {
@@ -316,33 +346,27 @@ func (s SSHRunner) Retag(id, ref string) (string, error) {
 	return compose.Retag(s.Client, s.Stack, id, ref)
 }
 
-func (s SSHRunner) Healthy() (bool, error) {
-	if s.HealthURL == "" {
+func (s SSHRunner) Healthy() (bool, error) { return healthy(s.Client, s.Verify) }
+
+// healthy runs the verify plan once, from the VM, so a stack bound to localhost is reachable and no
+// port has to be exposed publicly just to be checked.
+//
+// A container that is still starting, or has just died, refuses the connection, and curl exits
+// non-zero. That is the ordinary case while waiting, not a fault in the check, so it reports "not
+// healthy" with the failed assertion as the reason rather than as a broken check. Treating it as an
+// error made a failed update read as though the health check itself had broken.
+func healthy(r verify.Runner, plan verify.Plan) (bool, error) {
+	if plan.Empty() {
 		return false, errors.New("no health url")
 	}
-	// Probed from the VM, so a stack bound to localhost is reachable and no port has to be exposed
-	// publicly just to be checked.
-	//
-	// A container that is still starting, or has just died, refuses the connection, and curl exits
-	// non-zero. That is the ordinary case while waiting, not a fault in the check, so it reports "not
-	// healthy" rather than an error. Treating it as an error made a failed update read as though the
-	// health check itself had broken.
-	out, err := s.Client.Run("curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + sshx.Quote(s.HealthURL))
-	return healthyFromProbe(out, err), nil
+	if ok, why := verify.Pass(r, plan.Steps); !ok {
+		return false, &verify.FailedError{Reason: why}
+	}
+	return true, nil
 }
 
-// healthyFromProbe reads a curl probe.
-//
-// A container that is still starting, or has just died, refuses the connection and curl exits
-// non-zero (7). That is the ordinary case while waiting, not a fault in the check. Reporting it as an
-// error made a failed update read as though the health check itself had broken, which sent the reader
-// looking in the wrong place.
-func healthyFromProbe(out string, runErr error) bool {
-	if runErr != nil {
-		return false
-	}
-	return strings.HasPrefix(strings.TrimSpace(out), "2")
-}
+// healthyFromProbe reads a curl probe: see verify.HealthyFromProbe.
+func healthyFromProbe(out string, runErr error) bool { return verify.HealthyFromProbe(out, runErr) }
 
 func (s SSHRunner) Backup() (string, error) {
 	if s.DoBackup == nil {

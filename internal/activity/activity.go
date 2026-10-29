@@ -17,11 +17,14 @@ import (
 // Entry is one line of the log. The field names are stable. Nothing outside these fields is ever
 // recorded: no flag values, arguments or tokens.
 type Entry struct {
-	TS         string `json:"ts"`
-	Version    string `json:"version"`
-	Action     string `json:"action"`
-	VM         string `json:"vm,omitempty"`
-	Stack      string `json:"stack,omitempty"`
+	TS      string `json:"ts"`
+	Version string `json:"version"`
+	Action  string `json:"action"`
+	VM      string `json:"vm,omitempty"`
+	Stack   string `json:"stack,omitempty"`
+	// Target is what a guarded git or gh command acts on (a branch, a remote, a repository name).
+	// The guard passes it through SafeTarget first, so it never holds a key or a URL credential.
+	Target     string `json:"target,omitempty"`
 	OK         bool   `json:"ok"`
 	DurationMS int64  `json:"duration_ms"`
 	Error      string `json:"error,omitempty"`

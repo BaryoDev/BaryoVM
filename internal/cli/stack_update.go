@@ -16,6 +16,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/BaryoDev/BaryoVM/internal/update"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +44,14 @@ func newStackUpdateCmd() *cobra.Command {
 			"  baryovm stack update playground\n" +
 			"  baryovm stack update playground --auto    # what cron runs",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A flag left alone must not override the stack's verify spec, which carries its own
+			// patience. 0 means "not given": the spec's value, then the default.
+			if !cmd.Flags().Changed("health-attempts") {
+				attempts = 0
+			}
+			if !cmd.Flags().Changed("health-delay") {
+				delay = 0
+			}
 			return runStackUpdate(args[0], svcs, auto, dryRun, noBackup, attempts, delay)
 		},
 	}
@@ -86,8 +95,19 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	if auto && st.HealthURL == "" {
-		err := fmt.Errorf("%w: %s has no healthUrl", update.ErrNoHealthCheck, name)
+	// The same builder `stack release` uses, so the two cannot disagree about what healthy means.
+	// Built before any connection: a spec that cannot be read is refused with nothing touched.
+	vctx := verify.Context{
+		Mode: verify.ForUpdate, HealthURL: st.HealthURL, Dir: st.Dir, Sudo: st.Sudo,
+		DefaultAttempts: 20, DefaultDelay: 3 * time.Second,
+	}
+	vplan, verr := st.Verify.Plan(vctx)
+	if verr != nil {
+		ui.Emit(ui.Result{OK: false, Action: action, Error: verr.Error()})
+		return verr
+	}
+	if auto && vplan.Empty() {
+		err := fmt.Errorf("%w: %s has no healthUrl or verify spec", update.ErrNoHealthCheck, name)
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
@@ -123,9 +143,9 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		defer c.Close()
 
 		runner := update.SSHRunner{
-			Client:    c,
-			Stack:     composeStack(st),
-			HealthURL: st.HealthURL,
+			Client: c,
+			Stack:  composeStack(st),
+			Verify: vplan,
 		}
 		if hasBackup {
 			runner.DoBackup = func() (string, error) { return backup.Backup(c, backupConfig(st)) }
@@ -147,13 +167,14 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 			Services:       svcs,
 			Auto:           auto,
 			AutoUpdate:     st.AutoUpdate,
-			HasHealthCheck: st.HealthURL != "",
+			HasHealthCheck: !vplan.Empty(),
 			HasBackup:      hasBackup,
 			NoDatabase:     st.NoDatabase,
 			SkipBackup:     noBackup,
 			DryRun:         dryRun,
-			HealthAttempts: attempts,
-			HealthDelay:    delay,
+			HealthAttempts: pick(attempts, vplan.Budget.Attempts),
+			HealthDelay:    pickDur(delay, vplan.Budget.Delay),
+			HealthTimeout:  vplan.Budget.Timeout,
 		})
 		return err
 	})
@@ -188,6 +209,22 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		ui.Successf("%s: nothing to do", name)
 	}
 	return nil
+}
+
+// pick is the flag when it was given, else the plan's value, which already holds the spec's setting
+// or the default.
+func pick(flag, planned int) int {
+	if flag > 0 {
+		return flag
+	}
+	return planned
+}
+
+func pickDur(flag, planned time.Duration) time.Duration {
+	if flag > 0 {
+		return flag
+	}
+	return planned
 }
 
 // recordingRunner remembers the images update.Run read first (they are what runs before any Up)
@@ -251,8 +288,8 @@ func newStackSetUpdateCmd() *cobra.Command {
 				st.NoDatabase = noDB
 			}
 			if auto {
-				if st.HealthURL == "" {
-					return fmt.Errorf("set --health-url before --auto: an unattended update needs a way to tell success from a crash loop")
+				if st.HealthURL == "" && !st.Verify.HasChecks() {
+					return fmt.Errorf("set --health-url (or a verify spec with `stack set-verify`) before --auto: an unattended update needs a way to tell success from a crash loop")
 				}
 				st.AutoUpdate = true
 			}

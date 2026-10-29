@@ -13,6 +13,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -102,9 +103,22 @@ func runStackRollback(name string, list bool) error {
 			if _, e := rollback.SetProtected(c, backupConfig(st), false); e != nil {
 				ui.Warnf("could not unprotect the rollback record, the next release or update will keep it: %v", e)
 			}
-			if st.HealthURL != "" {
-				out, perr := c.Run("curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + sshx.Quote(st.HealthURL))
-				data["healthy"] = perr == nil && strings.HasPrefix(strings.TrimSpace(out), "2")
+			// The stack's verify spec, the one release and update read, judged once: a rollback has
+			// no waiting loop, so a service still starting reports false rather than blocking.
+			vplan, perr := st.Verify.Plan(verify.Context{
+				Mode: verify.ForUpdate, HealthURL: st.HealthURL, Dir: st.Dir, Sudo: st.Sudo,
+				DefaultAttempts: 1,
+			})
+			switch {
+			case perr != nil:
+				data["healthy"] = false
+				data["healthReason"] = perr.Error()
+			case !vplan.Empty():
+				ok, why := verify.Pass(c, vplan.Steps)
+				data["healthy"] = ok
+				if !ok {
+					data["healthReason"] = why
+				}
 			}
 			text = b.String()
 			return opOutput{}, nil

@@ -24,7 +24,17 @@ type Policy struct {
 	// AllowedRegistries are the package registries `publish` may reach, as hosts. Empty means no
 	// restriction.
 	AllowedRegistries []string
+	// AllowedCloudProjects are the cloud project ids `cloud` may deploy to. Empty means no
+	// restriction.
+	AllowedCloudProjects []string
+	// AllowShellAliases are the `!` aliases the guard may let through unchecked.
+	AllowShellAliases []string
 }
+
+// ShellAliasKey is the git config key listing the shell aliases the guard lets through:
+//
+//	git config --add baryovm.allowShellAliases deploy
+const ShellAliasKey = "baryovm.allowShellAliases"
 
 // RegistryPolicyKey is the git config key for the registries a repository may publish to:
 //

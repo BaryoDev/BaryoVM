@@ -614,16 +614,54 @@ not pass**:
 
 - If the manifest sets `verify`, those commands run. Point this at a check script the repository
   already has rather than reimplementing one here.
-- Otherwise, if the stack has a `healthUrl`, it becomes a `curl --fail` probe.
-- If neither is set, the release warns that it verified nothing and still succeeds. An interactive
+- Otherwise, if the stack has a `verify` spec (below), its checks run.
+- Otherwise, if the stack has a `healthUrl`, it becomes a one-check spec and a `curl --fail` probe.
+- If none is set, the release warns that it verified nothing and still succeeds. An interactive
   release is not an unattended update, so this is a warning rather than a refusal.
 
 A passing release says which plan ran and on which attempt, for example `verified by the manifest
 verify list, 2 check(s) passed on attempt 1`. In JSON it is `data.verify`, with `source`
-(`manifest`, `healthUrl` or `none`), `checks` and `attempts`.
+(`manifest`, `verify`, `healthUrl` or `none`), `checks` and `attempts`.
 
 The probe runs **on the VM**, not locally. A `healthUrl` is usually loopback, which from your
 laptop either fails or, worse, reaches something local and passes.
+
+##### The stack verify spec
+
+`healthUrl` only proves a page answers. A stack can store a fuller spec instead, in `fleet.json`
+under `verify`, and `stack release`, `stack update` and `stack rollback` all read the same one:
+
+```json
+{
+  "baseUrl": "http://127.0.0.1:8080",
+  "checks": [
+    {"path": "/", "status": 200, "minBytes": 200,
+     "contains": ["baryodev-pwa.js"], "absent": ["Welcome to your Umbraco installation"]},
+    {"path": "/health", "jsonMatch": {"status": "Healthy"}},
+    {"command": "sh scripts/check.sh"}
+  ],
+  "attempts": 20, "delaySeconds": 3, "timeoutSeconds": 300
+}
+```
+
+Set it with `baryovm stack set-verify <name> --file spec.json`, or remove it with `--clear`. The
+file is checked before it is saved.
+
+- A check is a URL check (`path`) or a `command`, never both. A command runs under `timeout` (the spec `timeoutSeconds`, default 300 seconds) in the stack
+  directory and passes on exit 0.
+- A URL check fetches `path` on the origin of `baseUrl` (or of `healthUrl` when there is no
+  `baseUrl`). There is no full-URL field, a path must start with a single `/`, and redirects are
+  not followed, so nothing in a spec can send the probe to another host.
+- Assertions run in order: `status` (default 200), `minBytes`, `contains`, `jsonMatch` (dotted
+  paths), then `absent`. `absent` is judged only after the earlier ones pass, so a 502 or an empty
+  body is reported as what it is and never as "the placeholder text is not there".
+- A key the spec does not know is refused, so a mistyped assertion cannot quietly check nothing.
+- Attempts are capped at 100, the delay at 1 minute, and the total time at `timeoutSeconds`
+  (at most 30 minutes). Without `timeoutSeconds` the time is attempts x (delay + 10s), at least 5
+  minutes, so `--health-attempts 60 --health-delay 10s` gets about 20. Running out of time fails
+  with a timeout message, never a pass.
+- A stack with only a `healthUrl` verifies exactly as before. The manifest `verify` list still wins
+  for a release.
 
 One rule worth carrying into any check script: a "must not contain" assertion only means something
 after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
@@ -758,6 +796,94 @@ What the check does not do:
   resolve symlinks or `..`, and it does not look at the VM, so a destination that reaches the
   compose directory through a symlink is not caught.
 - It is the same with or without `--sudo`.
+
+### Project files: one fleet definition for a team and for CI
+
+`fleet.json` is one file on one machine. It holds an absolute key path and an absolute path to each
+release manifest, so a second person, or a CI job, cannot use it. A project file is the shareable
+half: a committed, secret-free `baryovm.project.json` that `project release` reads on its own.
+
+It uses the same field names as `fleet.json` (`vms`, `keyPath`, `stacks`, `vm`, `dir`, `releaseFile`,
+`healthUrl`, and the rest), parsed into the same structs, plus `project` and `order`:
+
+```json
+{
+  "project": "rckoronadal",
+  "vms": [
+    { "name": "client-vm", "host": "203.0.113.10", "user": "deploy",
+      "keyPath": "env:DEPLOY_KEY_PATH", "hostKey": "ssh-ed25519 AAAA..." }
+  ],
+  "stacks": [
+    { "name": "api",     "vm": "client-vm", "dir": "/opt/barako/api",     "releaseFile": "api.release.json" },
+    { "name": "console", "vm": "client-vm", "dir": "/opt/barako/console", "releaseFile": "console.release.json" }
+  ],
+  "order": ["api", "console"]
+}
+```
+
+```sh
+baryovm project release                          # reads ./baryovm.project.json
+baryovm project release --file deploy/baryovm.project.json --no-backup
+```
+
+What the file may and may not hold:
+
+- `releaseFile` is relative to the directory holding the project file, so the file means the same on
+  every checkout. An absolute path or `~` is refused. (`envFile` is unchanged: it is the file on the
+  VM, relative to `dir`.)
+- `keyPath` is a reference: `env:NAME` (the variable holds the path to the key, which is how a CI
+  runner passes a key it wrote from a secret) or a path. A relative path is read from the project
+  file's directory. A literal private key, token or password in any field, including fields this
+  version does not know, is refused with the field named, before anything connects. The error never
+  repeats the value.
+- `hostKey` is the VM's public host key (`ssh-keyscan -t ed25519 <host>`, then check the
+  fingerprint). It is public, so it is committed.
+- `order` lists the stacks to release. Leave it out and every stack is released in the order written.
+
+`project release` stops at the first failed release or verify and leaves later stacks untouched. The
+`-o json` report lists every stack as `released`, `failed` or `skipped`, so a partial release reads as
+partial. Each stack goes through the same code as `stack release` (backup first, sync, build,
+compose up, verify), so a safeguard added to one is in the other.
+
+It never trusts a host on first use. Each VM needs a pinned `hostKey`, or the run needs
+`--strict-host-keys` (or `BARYOVM_STRICT_HOST_KEYS=1`) with the key already in known_hosts. A pinned
+key is held for that run only and never written to disk, so a committed file cannot change what the
+machine trusts. If `$BARYOVM_HOME/known_hosts` or `~/.ssh/known_hosts` already holds a different key
+for the host, the release stops, as any changed key does. A fresh runner has no recorded keys, so the
+pinned key is the only one it will accept.
+
+The project file is not merged with `fleet.json`. `project release` does not read it, write it, or
+let it override the file, so a person and a CI job release exactly what the file says. Stacks you
+register by hand with `stack add` are not seen by `project release`, and the project's are not seen
+by `stack release`.
+
+#### Moving an existing fleet to a project file
+
+```sh
+baryovm project export --out deploy/baryovm.project.json --name rckoronadal \
+  --stack api --stack console
+```
+
+`--stack` picks the stacks and sets their order (default: all of them). Export turns manifest paths
+under the output directory into relative ones, replaces the key path with `env:DEPLOY_KEY_PATH`
+(`--key-env` names another variable; with several VMs each gets `DEPLOY_KEY_PATH_<NAME>`), and pins a
+host key found in known_hosts. It reads the result back through the same parser `project release`
+uses, so a file it writes is a file release accepts. It refuses, naming the field, a manifest outside
+the output directory (move it, or write the file higher up) and a stack with no manifest. A VM with
+no known host key is exported without one and a warning: add `hostKey` before releasing from CI.
+Export will not replace an existing file without `--force`.
+
+In CI, with only the project file, the key as a secret and the binary:
+
+```yaml
+- run: echo "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key" && chmod 600 "$RUNNER_TEMP/deploy_key"
+  env: { DEPLOY_KEY: "${{ secrets.DEPLOY_KEY }}" }
+- run: baryovm project release
+  env: { DEPLOY_KEY_PATH: "${{ runner.temp }}/deploy_key" }
+```
+
+This is how two people share a fleet: commit the project file, and each person (or runner) supplies
+only their own key path.
 
 ### Static sites (no containers)
 
@@ -925,6 +1051,7 @@ result is not healthy:
 ```sh
 baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
 baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
+baryovm stack set-verify barako --file verify.json   # store a verify spec, or --clear
 
 baryovm stack update barako --dry-run   # report what is pending, change nothing
 baryovm stack update barako             # apply, verify, roll back if it does not come up
@@ -934,12 +1061,12 @@ baryovm stack update barako --auto      # what a scheduler runs
 What it does: pull, compare each container against what its reference now points at, and stop if
 nothing is stale. An unchanged stack is never recreated, so a nightly job is not a nightly restart.
 When something is stale it backs up the database, recreates only the affected services, and polls the
-health URL from the VM. If health does not come back, it points the references at the images that were
+health URL (or the stack verify spec) from the VM. If health does not come back, it points the references at the images that were
 running before and brings those back up, then checks again and says which of the two states it ended in.
 
 `--auto` refuses four things, all for the same reason: an unattended update has to be able to tell a
 healthy start from a crash loop, and to go back when it cannot. It refuses a stack without
-`autoUpdate`, a stack without a `healthUrl`, the flag combination `--auto --no-backup`, and a stack
+`autoUpdate`, a stack with neither a `healthUrl` nor a `verify` spec, the flag combination `--auto --no-backup`, and a stack
 with no database backup configured at all. Set `autoUpdate` on the tiers you are willing to have
 change unattended: playground, not production.
 
@@ -1072,6 +1199,33 @@ git config --add baryovm.allowedHosts github.com
 export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
 ```
 
+#### Rules beyond keys
+
+`baryovm git` and `baryovm gh` also apply the rules below. Every rule is on by default and each can be
+switched off for one repository: `git config --add baryovm.rules.off <rule>` (or
+`BARYOVM_RULES_OFF=rule,rule`). A refusal names the rule and how to pass it. Keys are read with one
+`git config --get-regexp` call, so a broken config refuses instead of switching rules off.
+
+Fail-closed details: with protected-branches on, a push whose destination cannot be told (a glob or empty
+refspec, a detached HEAD, `remote.<name>.push`, `push.default=matching`) is refused; name the branch to
+pass it. The gate needs a recorded pass for every commit pushed. Every `!` git alias is refused unless
+listed with `git config --add baryovm.allowShellAliases <alias>`.
+
+| Rule | What it does | Settings |
+| --- | --- | --- |
+| `protected-branches` | Refuses a push, force push or delete of the default branch (from `refs/remotes/<remote>/HEAD`, else `main` and `master`) and of listed branches. `--force-with-lease` is allowed only on branches the policy lists. `--all` and `--mirror` are refused. | `baryovm.protectedBranches`, `baryovm.forceLeaseBranches` |
+| `destructive` | `gh repo delete`, `gh release delete`, `git push --delete` of a tag, `git reset --hard` with uncommitted work and `git clean -fdx` print what goes and need the target name typed back. With no terminal, or under `BARYOVM_OUTPUT=json`, there is no prompt: pass `--confirm <name>` (consumed by baryovm, never sent to git or gh). | none |
+| `files` | Refuses `.env` and `.env.*` (not `.env.example`), `*.pem`, `*.p12`, `*.jks`, `*.keystore`, JSON with `"type": "service_account"` and files over the size limit. Checked on the staged files at commit and on the pushed range at push, and by the pre-commit hook. | `baryovm.maxFileSize` (default 10M), `baryovm.allowFiles` (path or name) |
+| `text` | Refuses AI attribution (`Co-Authored-By` naming an AI tool, `Generated with ...`) in commit messages, `--trailer`, and the text `gh pr`, `gh issue` and `gh release` publish; the commit-msg hook too. House style (no em dash, subject up to 72 characters, no trailing period) only when the repository opts in. | `baryovm.houseStyle true` |
+| `visibility` | `gh repo create` needs `--public`, `--private` or `--internal`, and the one the policy names. Nothing is defaulted. | `baryovm.visibility` |
+| `gate` | When a gate script is named, `git push` runs it first, or skips it when it already passed on the same HEAD. A pass is recorded in `baryovm.gatepass`. | `baryovm.gate` |
+| `audit` | Each guarded command, its target and the result go to the activity log (`target` field). Targets lose URL credentials and key-like values; error text is a fixed string. | none |
+
+Aliases cannot get round the guard: `git ci` with `alias.ci=commit` is checked as a commit, a `!` shell
+alias that runs `git commit` or `git push` is refused, an alias that cannot be resolved is refused,
+and `-c alias.*=` and `--config-env` before the subcommand are refused. `git commit
+--pathspec-from-file` is refused (pass the paths as arguments), since the guard cannot see that file.
+
 ### Publishing packages
 
 `baryovm publish npm` and `baryovm publish nuget` check a package before it leaves the machine, then
@@ -1117,6 +1271,51 @@ export BARYOVM_ALLOWED_REGISTRIES=registry.npmjs.org,api.nuget.org   # alternati
 
 A refusal exits 1, names `file:line (rule)` and never prints the value. Flags belong to npm and dotnet;
 set `BARYOVM_OUTPUT=json` for a JSON refusal. OTP and Trusted Publishing stay with you.
+
+### Deploying to the cloud
+
+`baryovm cloud wrangler`, `baryovm cloud firebase` and `baryovm cloud gcloud` check a deploy before the
+real CLI runs, then run it with your arguments unchanged. Put options after the command.
+
+```sh
+baryovm cloud wrangler deploy --env production
+baryovm cloud firebase deploy --only hosting --project my-project-id
+baryovm cloud gcloud iam service-accounts keys create ~/.config/gcloud/key.json --iam-account sa@p.iam.gserviceaccount.com
+```
+
+- wrangler: for `deploy`, `publish` and `versions upload`, `wrangler ... --dry-run --outdir <scratch>`
+  builds the Worker and every bundle file is scanned. `wrangler.toml` (or `.json`, `.jsonc`, or the
+  `--config` file) and a `--var NAME:value` argument are scanned too. A key in `vars` is refused and the
+  message points at `wrangler secret put NAME`. If the dry run fails, the deploy is refused.
+  The `--assets` directory and the `directory` under `[assets]` in the config are scanned too (assets
+  are not in the dry-run bundle); assets in the config with no readable directory are refused. A failed
+  dry run shows only the last 4 lines of its output. `pages deploy <dir>` and `pages publish <dir>` scan
+  the directory. Other commands pass through.
+- firebase: for `deploy` and `hosting:channel:deploy`, the project id is read from `--project` (an id or
+  an alias in `.firebaserc`), then the `.firebaserc` default, and printed. If it cannot be determined,
+  the deploy is refused. The files in each hosting `public` directory and functions source from
+  `firebase.json` are scanned, minus that entry's `ignore` globs. A hosting `source` (web frameworks)
+  is refused because what it builds cannot be listed. An entry with `predeploy` is refused, because the
+  build would run after the scan: build first and remove `predeploy`.
+- gcloud: everything passes through except commands that write a key or secret to a file
+  (`iam service-accounts keys create <file>`, `secrets versions access --out-file`,
+  `kms decrypt --plaintext-file`). If the file is inside a git working tree, the command is refused. A
+  key command that cannot be read, or a path git cannot place, is refused. The command words are found
+  anywhere among the arguments, and every word after them is checked as a possible file, so an unknown
+  option cannot hide the command.
+
+To limit which cloud projects a repository may deploy to, list the project ids. With none set, any
+project is allowed. While a list is set, `firebase deploy` needs `--project`, because the active project
+from `firebase use` is kept outside the repository and cannot be read. If the setting cannot be read,
+the command is refused.
+
+```sh
+git config --add baryovm.allowedCloudProjects my-project-id
+export BARYOVM_ALLOWED_CLOUD_PROJECTS=my-project-id,my-staging-id   # alternative
+```
+
+A refusal exits 1, names `file:line (rule)` and never prints the value. Set `BARYOVM_OUTPUT=json` for a
+JSON refusal.
 
 `guard install-hooks` writes `pre-commit`, `commit-msg` and `pre-push` hooks into the current
 repository so commits made without the wrapper are checked too. It leaves a hook

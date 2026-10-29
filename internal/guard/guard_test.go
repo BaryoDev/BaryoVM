@@ -468,7 +468,11 @@ func TestCheckGh(t *testing.T) {
 		{"clean file", []string{"pr", "create", "--body-file", "clean.md"}, true, ""},
 		{"stdin refused", []string{"pr", "create", "--body-file", "-"}, false, ""},
 		{"missing file refused", []string{"pr", "create", "--body-file", "gone.md"}, false, ""},
-		{"other gh command not scanned", []string{"pr", "merge", "--body", fakeGoogle}, true, ""},
+		{"other gh command not scanned", []string{"pr", "view", "--body", fakeGoogle}, true, ""},
+		{"pr merge body scanned", []string{"pr", "merge", "1", "--body", fakeGoogle}, false, ""},
+		{"pr merge subject scanned", []string{"pr", "merge", "1", "-t", fakeGoogle}, false, ""},
+		{"issue close comment scanned", []string{"issue", "close", "1", "-c", fakeGoogle}, false, ""},
+		{"pr review -c is not a text flag", []string{"pr", "review", "1", "-c", "-b", "fine"}, true, ""},
 		{"pr list", []string{"pr", "list"}, true, ""},
 		{"no args", nil, true, ""},
 	}

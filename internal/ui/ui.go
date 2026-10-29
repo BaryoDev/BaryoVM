@@ -173,3 +173,6 @@ func Step(msg string, fn func() error) error {
 	Successf("%s", msg)
 	return nil
 }
+
+// IsTTY reports whether both stdin and stderr are terminals, so a prompt can be shown and read.
+func IsTTY() bool { return isTTY() && term.IsTerminal(int(os.Stdin.Fd())) }

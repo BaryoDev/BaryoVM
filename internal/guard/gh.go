@@ -14,6 +14,7 @@ var ghChecked = map[string]bool{
 	"pr create": true, "pr edit": true, "pr comment": true, "pr review": true,
 	"issue create": true, "issue edit": true, "issue comment": true,
 	"release create": true, "release edit": true,
+	"pr merge": true, "issue close": true,
 }
 
 // ghTextLong and ghTextShort are the flags that carry text or name a file with text. Short flags
@@ -21,8 +22,9 @@ var ghChecked = map[string]bool{
 var (
 	ghTextLong = map[string]string{
 		"--body": "text", "--title": "text", "--notes": "text", "--notes-file": "file", "--body-file": "file",
+		"--subject": "text", "--comment": "text",
 	}
-	ghTextShort = map[byte]string{'b': "text", 't': "text", 'n': "text", 'F': "file"}
+	ghTextShort = map[byte]string{'b': "text", 't': "text", 'n': "text", 'F': "file", 'c': "text"}
 )
 
 // ghShortFlags lists, per scanned subcommand, the short flags that take a value we do not scan
@@ -39,6 +41,8 @@ var ghShortFlags = map[string]struct{ other, bool string }{
 	"issue comment":  {"R", "ew"},
 	"release create": {"R", "dp"},
 	"release edit":   {"R", ""},
+	"pr merge":       {"AR", "dmrs"},
+	"issue close":    {"rR", ""},
 }
 
 type shortGroup struct {
@@ -58,7 +62,11 @@ func walkShort(a string, sub string) shortGroup {
 		c := a[j]
 		g := shortGroup{val: a[j+1:]}
 		g.needNext = g.val == ""
-		if kind, ok := ghTextShort[c]; ok {
+		kind, ok := ghTextShort[c]
+		if c == 'c' {
+			ok, kind = sub == "issue close", "text" // -c is --comment only on issue close
+		}
+		if ok {
 			g.letter, g.kind = c, kind
 			return g
 		}
@@ -75,7 +83,11 @@ func walkShort(a string, sub string) shortGroup {
 // CheckGh scans the text a gh create command would publish. Every other gh command is allowed
 // through. A body read from stdin (-F -) is refused because it cannot be read here and still reach
 // gh; write it to a file instead.
-func CheckGh(r Runner, args []string) Verdict {
+func CheckGh(r Runner, args []string) Verdict { return checkGh(r, args, nil) }
+
+// checkGh is CheckGh with a hook that receives every text the command would publish (a flag value
+// or a file's content), so the text rules read what the key scan reads.
+func checkGh(r Runner, args []string, collect func(name, text string)) Verdict {
 	var words []string
 	// The group and verb are the first two words that are not flags. -R and --repo take a value
 	// that is not a word, so it is skipped: `gh pr -R o/r create` is still `pr create`.
@@ -111,6 +123,9 @@ func CheckGh(r Runner, args []string) Verdict {
 	check := func(flag, kind, val string) *Verdict {
 		if kind == "text" {
 			fs = append(fs, ScanText(flag, val)...)
+			if collect != nil {
+				collect(flag, val)
+			}
 			return nil
 		}
 		if val == "-" {
@@ -123,6 +138,9 @@ func CheckGh(r Runner, args []string) Verdict {
 			return &v
 		}
 		fs = append(fs, ScanText(val, string(b))...)
+		if collect != nil {
+			collect(val, string(b))
+		}
 		return nil
 	}
 

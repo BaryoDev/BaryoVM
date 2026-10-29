@@ -310,7 +310,10 @@ func planRelease(name string, st *fleet.Stack, vm *fleet.VM, m *release.Manifest
 	}
 
 	// 4. Verification.
-	vp := m.Verification(st.HealthURL)
+	vp, err := releaseVerification(m, st)
+	if err != nil {
+		p.note("verify plan not built: %v", err)
+	}
 	p.Verify = &dryVerify{Source: vp.Source, Commands: vp.Commands, Attempts: vp.Attempts}
 	for _, c := range vp.Commands {
 		p.add("verify ("+vp.Source+")", c)

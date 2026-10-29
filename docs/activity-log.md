@@ -16,6 +16,7 @@ processes running at once leave two whole lines.
 | `action` | the command path, for example `stack release` |
 | `vm` | the VM, when the command's name argument is a registered VM (or the stack's VM) |
 | `stack` | the stack, when the command's name argument is a registered stack |
+| `target` | for a guarded `git` or `gh` command, the branch, remote or repository it acts on; URL credentials and key-like values are removed |
 | `ok` | `true` when the command succeeded |
 | `duration_ms` | wall time of the command |
 | `error` | on failure only, a fixed string: `remote command failed (exit N)` or `failed` |
