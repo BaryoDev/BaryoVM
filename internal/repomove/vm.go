@@ -7,6 +7,7 @@ package repomove
 import (
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"strings"
 
@@ -24,6 +25,7 @@ type Remote interface {
 // a root-owned directory is only readable with it.
 type VMTarget struct {
 	Name  string
+	User  string // the SSH user: with root, the only checkout owner accepted
 	Sudo  bool
 	Roots []string // directories to search for checkouts
 }
@@ -96,16 +98,16 @@ func FindCmd(sudo bool, roots []string) string {
 	for i, r := range roots {
 		q[i] = sshx.Quote(r)
 	}
-	return sshx.Sudo(sudo, "find "+strings.Join(q, " ")+" -maxdepth 5 -name .git -prune -print 2>/dev/null; true")
+	return sshx.Sudo(sudo, "find "+strings.Join(q, " ")+" -maxdepth 5 -name .git -prune -print0 2>/dev/null; true")
 }
 
-// ParseFinds turns find output into checkout directories.
+// ParseFinds turns find -print0 output into checkout directories. A name with a control character
+// (a newline included) or a .. element is dropped, since the later prefix check is lexical.
 func ParseFinds(out string) []string {
 	var dirs []string
 	seen := map[string]bool{}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasSuffix(line, "/.git") {
+	for _, line := range strings.Split(out, "\x00") {
+		if !strings.HasSuffix(line, "/.git") || !safePath(line) {
 			continue
 		}
 		d := strings.TrimSuffix(line, "/.git")
@@ -115,6 +117,24 @@ func ParseFinds(out string) []string {
 		}
 	}
 	return dirs
+}
+
+// safePath accepts an absolute, already clean path with no control characters and no .. element.
+func safePath(p string) bool {
+	if !strings.HasPrefix(p, "/") || path.Clean(p) != p {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	for _, el := range strings.Split(p, "/") {
+		if el == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // GetURLCmd reads the origin URL of a checkout.

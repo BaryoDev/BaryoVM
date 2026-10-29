@@ -62,7 +62,7 @@ func Parse(raw string) (Repo, error) {
 				// Azure's own clone URL is https://<org>@dev.azure.com/<org>/..., a name and not a
 				// secret. Anything else in front of the @ may be a token.
 				org := strings.SplitN(path, "/", 2)[0]
-				if !(strings.EqualFold(host, "dev.azure.com") && strings.EqualFold(u.User.Username(), org)) {
+				if !strings.EqualFold(host, "dev.azure.com") || !strings.EqualFold(u.User.Username(), org) {
 					return Repo{}, fmt.Errorf("the repository URL carries a user or token before the host: remove it and let git or the host CLI sign in")
 				}
 			}

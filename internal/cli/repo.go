@@ -179,7 +179,7 @@ func runRepoMove(stack string, f repoMoveFlags) error {
 			notes = append(notes, fmt.Sprintf("VM %s only runs a forced command and was not searched", vm.Name))
 			continue
 		}
-		t := repomove.VMTarget{Name: vm.Name}
+		t := repomove.VMTarget{Name: vm.Name, User: vm.User}
 		for _, s := range store.Stacks {
 			if s.VM == vm.Name {
 				t.Roots = append(t.Roots, s.Dir)
