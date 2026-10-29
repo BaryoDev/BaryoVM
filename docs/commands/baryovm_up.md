@@ -25,6 +25,8 @@ baryovm up <name> [flags]
       --dry-run               print the plan without creating anything
   -e, --env stringArray       environment KEY=value (repeatable)
   -h, --help                  help for up
+      --http-from strings     limit port 80 to these CIDRs or the cloudflare preset (default: open)
+      --https-from strings    limit port 443 to these CIDRs or the cloudflare preset (default: open)
       --image string          container image (required)
       --key string            private SSH key to authorize + connect with (required)
       --provider string       cloud provider: lightsail (oci coming) (default "lightsail")
@@ -32,6 +34,7 @@ baryovm up <name> [flags]
       --pull                  pull the image before running
       --region string         cloud region (default: from ~/.aws)
       --size string           instance size / bundle (default: provider's smallest)
+      --ssh-from strings      limit port 22 to these CIDRs (default: open to 0.0.0.0/0)
 ```
 
 ### Options inherited from parent commands

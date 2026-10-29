@@ -183,6 +183,7 @@ what that policy is absorbing.
 baryovm vm harden oracle --dry-run   # report what would change, write nothing
 baryovm vm harden oracle             # apply it
 baryovm vm harden oracle --ignore 10.0.0.0/24   # never ban this range
+baryovm vm harden oracle --ssh-from 203.0.113.7/32   # limit port 22 to this range
 
 baryovm vm threats oracle                    # the last 24 hours
 baryovm vm threats oracle --since "7 days ago"
@@ -200,8 +201,43 @@ The policy is:
 - **The surface reductions that cost nothing**: GSSAPI and X11 forwarding off, a
   30 second login grace, root login and password authentication off.
 
+Beyond the policy it audits the host. Each finding is either **fixed** or
+**reported**, and a report is never turned into a change behind your back.
+
+Fixed (a dry run prints these as `would-apply`):
+
+- `~/.ssh` and its files made private (700 and 600).
+- `authorized_keys.*` backups moved to `~/.baryovm-moved-keys/`, with the new path in
+  the output. Nothing is deleted.
+- Post-quantum key exchange put first in the sshd drop-in: `mlkem768x25519-sha256`,
+  `sntrup761x25519-sha512`, then the algorithms sshd already offered. The drop-in sorts
+  before the RHEL `50-redhat.conf` that pulls in the crypto policy, and sshd takes the
+  first value, so this works on Oracle Linux without editing the policy. If `sshd -T`
+  still shows another algorithm first, it reports that the policy needs a subpolicy. If
+  OpenSSH has neither hybrid, it reports that and changes nothing.
+- nginx `server_tokens off`, written to `conf.d` and reloaded only if `nginx -t` passes.
+
+Reported only (shown as warnings, counted separately, never changed):
+
+- stale entries in `authorized_keys` (count and comments; no key is removed)
+- pending security updates, and whether unattended upgrades are on
+- no `default_server` on 443
+- a newer kernel installed than the one running (`needs-restarting -r` or
+  `/var/run/reboot-required`); nothing is rebooted
+- port 22 open to every source in firewalld or ufw
+
+The closing `summary` line says how many findings were changed and how many are left
+for you. In `-o json` the report has a `reported` count next to `changes`, and a
+reported item has `"action": "report"`.
+
+`--ssh-from <cidr,...>` limits port 22 in firewalld (rich rules, the open `ssh` service
+removed) or ufw (`allow from`, the open rule deleted). It refuses to run when none of the
+ranges contains the address in `$SSH_CLIENT`, so it cannot lock out the session you are
+using, and it refuses when that address is unknown. An IPv6 client is accepted only with
+`::/0`. Without `--ssh-from`, a 22 open to everyone is only reported.
+
 What it deliberately does not do: change the SSH port, disable public key
-authentication, or touch `authorized_keys`. It validates the sshd configuration
+authentication, or remove an `authorized_keys` entry. It validates the sshd configuration
 before reloading, reloads rather than restarts, and rolls the file back if sshd
 rejects it, so a mistake cannot lock you out of a machine you reach over SSH.
 
@@ -635,7 +671,19 @@ baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 \
 
 # On an already-registered VM, up just bootstraps + deploys:
 baryovm up oracle --image app:latest --container app -p 80:8080
+
+# Limit who can reach the ports (Lightsail firewall):
+baryovm vm provision web1 --key ~/.ssh/id_ed25519 \
+  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare
 ```
+
+`--ssh-from`, `--http-from` and `--https-from` take CIDRs (comma separated or
+repeated). A port with no flag stays open to `0.0.0.0/0`, as before. `cloudflare`
+stands for Cloudflare's published IPv4 and IPv6 ranges, fetched from
+cloudflare.com/ips-v4 and ips-v6 when the command runs. If the fetch fails or
+returns an empty list, the command stops before creating anything, and it never
+falls back to an empty or open list. The dry run prints how many ranges each
+port gets. The same flags work on `up`.
 
 ## Prerequisites
 

@@ -18,7 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lightsail"
-	"github.com/aws/aws-sdk-go-v2/service/lightsail/types"
 )
 
 const (
@@ -94,11 +93,7 @@ func (p *Provider) Provision(ctx context.Context, spec provider.Spec) (provider.
 	// 4. Open the web + SSH ports.
 	if _, err := p.client.PutInstancePublicPorts(ctx, &lightsail.PutInstancePublicPortsInput{
 		InstanceName: aws.String(spec.Name),
-		PortInfos: []types.PortInfo{
-			{FromPort: 22, ToPort: 22, Protocol: types.NetworkProtocolTcp},
-			{FromPort: 80, ToPort: 80, Protocol: types.NetworkProtocolTcp},
-			{FromPort: 443, ToPort: 443, Protocol: types.NetworkProtocolTcp},
-		},
+		PortInfos:    portInfos(spec),
 	}); err != nil {
 		return provider.Instance{}, fmt.Errorf("open ports: %w", err)
 	}
