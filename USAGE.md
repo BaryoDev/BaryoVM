@@ -253,6 +253,50 @@ only when the account does not exist, so an attempt without that token names a r
 account, and the report marks it. Expect `root` to appear on any public host, since it
 is on every scanner's list; your own login name appearing is the interesting case.
 
+## Checking a VM's health
+
+`vm health` asks a machine the questions an owner should ask monthly. It is read only: it changes
+nothing on the host.
+
+```sh
+baryovm vm health oracle
+baryovm vm health --all -o json
+```
+
+Each line is a check with a verdict of `ok`, `warn`, `fail`, `unknown` or `skip`:
+
+| Check | Looks at | Verdict |
+| --- | --- | --- |
+| `disk-root` | `df` on `/` | warn at 80% used, fail at 90% |
+| `disk-docker` | `df` on the docker root, plus image and volume sizes from `docker system df` | same thresholds |
+| `updates` | pending updates, security and other (`dnf check-update` and `--security`, or `apt list --upgradable`) | any security update fails, more than 25 others warn |
+| `reboot` | `needs-restarting -r`, or `/var/run/reboot-required`; uptime in the detail | a required reboot warns |
+| `containers` | restarting, dead, unhealthy, or exited with a non-zero code or under `restart: always`; running ones that restarted more than 5 times warn | any problem fails |
+| `unattended-updates` | `APT::Periodic::Unattended-Upgrade`, or a dnf-automatic timer that applies updates | off warns |
+
+The limits are flags, shown here with their defaults:
+
+```sh
+baryovm vm health oracle --disk-warn 80 --disk-fail 90 --max-updates 25 --max-restarts 5
+```
+
+`--disk-warn` and `--disk-fail` are percent used, both 1 to 100, with warn below fail.
+`--max-updates` is how many non-security updates may be pending, and `--max-restarts` is how many
+restarts a running container may have; more than that warns. `--max-updates 0` warns on any
+pending update. A negative count is refused. A bad value is refused before any connection is opened.
+The limits used are echoed in `thresholds` in the JSON report.
+
+It needs `sudo -n` for docker and the package manager. A check it cannot answer (no docker, no
+sudo, no supported package manager) is `unknown` or `skip` with the reason, and the rest still run.
+`apt list` reads the host's cached index, which this command does not refresh. The command exits
+non-zero when any check is a `fail`. With `--all`, an unreachable VM is a failed report and the
+run goes on to the next one; a Windows VM is skipped.
+
+In `-o json`, a single VM puts one report in `data` (`vm`, `verdict`, `packageManager`, `checks`),
+and `--all` puts a list of reports there. Each check has `name`, `verdict`, `detail`, optional
+`items` (the containers at fault) and `metrics` (numbers such as `usedPercent`, `security`,
+`other`, `uptimeDays`).
+
 ## Patching and pruning a VM
 
 `vm patch` updates the OS packages and proves the stack came back.
