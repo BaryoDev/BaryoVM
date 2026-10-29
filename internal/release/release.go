@@ -141,7 +141,7 @@ type Manifest struct {
 // hooks, so one missing thread was reported three times from three commands.
 func Load(path string, stackSudo bool) (*Manifest, error) {
 	path = expand(path)
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- the manifest path the operator passed or registered
 	if err != nil {
 		return nil, err
 	}
