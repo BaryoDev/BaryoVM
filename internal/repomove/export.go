@@ -164,8 +164,8 @@ func (e *Export) Write(dir string) error {
 			return err
 		}
 		tmp := filepath.Join(dir, "."+f.name+".tmp")
-		_ = os.Remove(tmp) // a stale temp name, or a link planted there, is replaced
-		h, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		_ = os.Remove(tmp)                                                   // a stale temp name, or a link planted there, is replaced
+		h, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- temp name inside the export directory flag
 		if err != nil {
 			cleanup()
 			return err
@@ -201,7 +201,7 @@ func ExportPresent(dir string) bool {
 		if err != nil || !st.Mode().IsRegular() {
 			return false
 		}
-		b, err := os.ReadFile(p)
+		b, err := os.ReadFile(p) // #nosec G304 -- fixed file name inside the export directory flag
 		if err != nil || !json.Valid(b) {
 			return false
 		}
