@@ -276,7 +276,7 @@ func TestRunChangesNothing(t *testing.T) {
 	r := rhelRunner()
 	_, _ = Run(r, "oracle", DefaultOptions())
 	for _, c := range r.cmds {
-		for _, bad := range []string{"update -y", "upgrade", "systemctl reboot", "docker rm", "docker stop", "docker restart", "docker prune", "rm ", "apt-get update", "systemd-run"} {
+		for _, bad := range []string{"update -y", "apt-get upgrade", "dnf upgrade", "yum upgrade", "apt upgrade", "systemctl reboot", "docker rm", "docker stop", "docker restart", "docker prune", "rm ", "apt-get update", "systemd-run"} {
 			if strings.Contains(c, bad) {
 				t.Errorf("read only check ran %q in: %s", bad, c)
 			}
