@@ -37,21 +37,21 @@ func newStatusCmd() *cobra.Command {
 	var vmName, stackName string
 	var timeout time.Duration
 	var workers int
-	var noVerify bool
+	var runVerify bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Every registered stack on one screen (read only)",
 		Long: "Asks each registered VM once, over one SSH connection, and prints a row per stack: whether its\n" +
 			"containers are up, the commit of the last finished release, a release that failed or stopped part\n" +
-			"way, the verify assertions run now, and the database backups on the VM.\n\n" +
+			"way, and the database backups on the VM. With --verify it also runs the stacks' verify assertions.\n\n" +
 			"A dash means the column is not configured for that stack, which is not a failure. A question\n" +
 			"mark means it is configured and could not be read; the reason is in the notes. A VM that does\n" +
 			"not answer within --timeout is shown as unreachable with the reason, and every other row still\n" +
 			"prints. A VM behind a forced command (`vm remote set`) is asked its status request only and\n" +
 			"shows as limited.\n\n" +
-			"Nothing is changed on any host. The verify assertions are the stack's own and are run once;\n" +
-			"--no-verify skips them. The command exits zero when it produced a report, however many rows\n" +
-			"need a look; read `attention` in -o json.",
+			"Nothing runs on a VM beyond reads unless --verify is set: a verify `command:` check is a shell\n" +
+			"command (with sudo when the stack uses it), so it is opt-in. The command exits zero when it\n" +
+			"produced a report, however many rows need a look; read `attention` in -o json.",
 		Example: "  baryovm status\n" +
 			"  baryovm status --vm oracle -o json\n" +
 			"  baryovm status --stack shop --timeout 10s",
@@ -78,7 +78,7 @@ func newStatusCmd() *cobra.Command {
 			}
 			var rep status.Report
 			_ = ui.Step("asking the fleet", func() error {
-				rep = status.Run(jobs, status.Options{Workers: workers, Timeout: timeout, NoVerify: noVerify})
+				rep = status.Run(jobs, status.Options{Workers: workers, Timeout: timeout, Verify: runVerify})
 				return nil
 			})
 			msg := fmt.Sprintf("%d stack(s) on %d VM(s), %d need a look", rep.Summary.Stacks, rep.Summary.VMs, rep.Summary.Attention)
@@ -93,7 +93,7 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&stackName, "stack", "", "only this stack")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "how long one VM may take, connection included")
 	cmd.Flags().IntVar(&workers, "concurrency", 4, "VMs asked at once")
-	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "do not run the stacks' verify assertions")
+	cmd.Flags().BoolVar(&runVerify, "verify", false, "also run the stacks' verify assertions on the VM (off by default: a verify command check runs a shell command)")
 	return cmd
 }
 
@@ -114,6 +114,9 @@ func statusJobs(store *fleet.Store, vmName, stackName string) ([]status.Job, err
 	if len(store.VMs) == 0 {
 		return nil, errors.New("no VMs registered yet: add one with `baryovm vm add`")
 	}
+	// The dial funcs are read once here: a Dial that outlives its deadline runs on its own
+	// goroutine and must not read a package variable a test or caller may reassign.
+	dialForced, dialPlain := dialForcedSession, dialRelease
 	var jobs []status.Job
 	for i := range store.VMs {
 		vm := store.VMs[i]
@@ -134,7 +137,7 @@ func statusJobs(store *fleet.Store, vmName, stackName string) ([]status.Job, err
 		vmCopy := vm
 		switch {
 		case vmCopy.Forced():
-			j.Dial = func() (status.Session, error) { return dialForcedSession(&vmCopy) }
+			j.Dial = func() (status.Session, error) { return dialForced(&vmCopy) }
 			j.Call = callForced
 		default:
 			if err := requireLinux(&vmCopy, "status"); err != nil {
@@ -142,7 +145,7 @@ func statusJobs(store *fleet.Store, vmName, stackName string) ([]status.Job, err
 				j.Dial = func() (status.Session, error) { return nil, e }
 				break
 			}
-			j.Dial = func() (status.Session, error) { return dialRelease(&vmCopy) }
+			j.Dial = func() (status.Session, error) { return dialPlain(&vmCopy) }
 		}
 		jobs = append(jobs, j)
 	}

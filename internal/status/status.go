@@ -71,10 +71,12 @@ type Job struct {
 
 // Options bound the work.
 type Options struct {
-	Workers  int           // VMs queried at once, at least 1
-	Timeout  time.Duration // per VM, connection included
-	NoVerify bool          // skip the verify assertions
-	Now      func() time.Time
+	Workers int           // VMs queried at once, at least 1
+	Timeout time.Duration // per VM, connection included
+	// Verify runs the stacks' verify assertions. Off by default: a verify command check is a shell
+	// command on the VM, and status only reads.
+	Verify bool
+	Now    func() time.Time
 }
 
 // VM is one machine's line.
@@ -201,30 +203,45 @@ func Run(jobs []Job, o Options) Report {
 	return rep
 }
 
-// runJob bounds one VM by o.Timeout. A VM that does not answer in time is unreachable with the
-// reason, and its session is closed so the goroutine behind it is not left holding a connection.
+// progress is what one VM has produced so far. The collector adds each stack as it finishes, so a
+// timeout keeps what was already read.
+type progress struct {
+	mu     sync.Mutex
+	dialed bool
+	closed bool // the deadline passed: late results are dropped
+	sess   Session
+	kernel string
+	stacks []Stack
+}
+
+// runJob bounds one VM by o.Timeout. A VM that never connected is unreachable with the reason. One
+// that connected but ran out of time keeps the stacks it finished, and only the rest are marked
+// timed out. The session is closed at the deadline so the goroutine behind it stops.
 func runJob(j Job, o Options) (VM, []Stack) {
 	start := time.Now()
 	done := make(chan outcome, 1)
-	var mu sync.Mutex
-	var sess Session
-	timedOut := false
+	p := &progress{}
 	go func() {
 		s, err := j.Dial()
 		if err != nil {
 			done <- unreachable(j, err.Error(), start)
 			return
 		}
-		mu.Lock()
-		if timedOut {
-			mu.Unlock()
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
 			_ = s.Close()
 			return
 		}
-		sess = s
-		mu.Unlock()
+		p.sess, p.dialed = s, true
+		p.mu.Unlock()
 		defer s.Close()
-		vm, st := collect(s, j, o, start)
+		collect(s, j, o, p)
+		p.mu.Lock()
+		vm := VM{Name: j.Name, Host: j.Host, Reachable: true, Forced: j.Forced, Kernel: p.kernel,
+			ElapsedMs: time.Since(start).Milliseconds()}
+		st := append([]Stack(nil), p.stacks...)
+		p.mu.Unlock()
 		done <- outcome{vm, st}
 	}()
 	var timeout <-chan time.Time
@@ -237,14 +254,31 @@ func runJob(j Job, o Options) (VM, []Stack) {
 	case r := <-done:
 		return r.vm, r.stacks
 	case <-timeout:
-		mu.Lock()
-		timedOut = true
-		if sess != nil {
-			_ = sess.Close()
+		p.mu.Lock()
+		p.closed = true
+		if p.sess != nil {
+			_ = p.sess.Close()
 		}
-		mu.Unlock()
-		r := unreachable(j, fmt.Sprintf("no answer within %s", o.Timeout), start)
-		return r.vm, r.stacks
+		dialed, kernel := p.dialed, p.kernel
+		finished := append([]Stack(nil), p.stacks...)
+		p.mu.Unlock()
+		reason := fmt.Sprintf("no answer within %s", o.Timeout)
+		if !dialed {
+			r := unreachable(j, reason, start)
+			return r.vm, r.stacks
+		}
+		vm := VM{Name: j.Name, Host: j.Host, Reachable: true, Forced: j.Forced, Kernel: kernel,
+			Error: reason, ElapsedMs: time.Since(start).Milliseconds()}
+		stacks := finished
+		for _, in := range j.Stacks[len(finished):] {
+			stacks = append(stacks, Stack{
+				Name: in.Name, VM: j.Name, State: StateUnknown, Runtime: runtimeName(in.Runtime),
+				Managed: in.Managed, Limited: j.Forced,
+				Attention: []string{"timed out: " + reason},
+				Notes:     []string{"timed out before this stack was read"},
+			})
+		}
+		return vm, stacks
 	}
 }
 
@@ -272,13 +306,14 @@ func runtimeName(r string) string {
 	return r
 }
 
-func collect(r sshx.Runner, j Job, o Options, start time.Time) (VM, []Stack) {
-	vm := VM{Name: j.Name, Host: j.Host, Reachable: true, Forced: j.Forced}
-	stacks := make([]Stack, 0, len(j.Stacks))
+// collect reads the stacks in order and records each in p as it completes.
+func collect(r sshx.Runner, j Job, o Options, p *progress) {
 	if !j.Forced {
 		// One cheap command that proves the session executes what it is sent.
 		if k, err := r.Run("uname -sr"); err == nil {
-			vm.Kernel = strings.TrimSpace(k)
+			p.mu.Lock()
+			p.kernel = strings.TrimSpace(k)
+			p.mu.Unlock()
 		}
 	}
 	for _, in := range j.Stacks {
@@ -288,10 +323,14 @@ func collect(r sshx.Runner, j Job, o Options, start time.Time) (VM, []Stack) {
 		} else {
 			s = stackStatus(r, j.Name, in, o)
 		}
-		stacks = append(stacks, s)
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return
+		}
+		p.stacks = append(p.stacks, s)
+		p.mu.Unlock()
 	}
-	vm.ElapsedMs = time.Since(start).Milliseconds()
-	return vm, stacks
 }
 
 // forcedStack asks a forced VM for its status op and nothing else.
@@ -367,7 +406,7 @@ func stackStatus(r sshx.Runner, vm string, in StackInput, o Options) Stack {
 		}
 	}
 
-	if !o.NoVerify && !in.Verify.Empty() {
+	if o.Verify && !in.Verify.Empty() {
 		ok, why := verify.Pass(r, in.Verify.Steps)
 		s.Verify = &Verify{Pass: ok, Steps: len(in.Verify.Steps), Reason: why}
 		if !ok {

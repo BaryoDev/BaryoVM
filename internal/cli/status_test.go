@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/remote"
@@ -182,8 +183,13 @@ func TestStatusHealthyVMIsOneConnectionAndReadOnly(t *testing.T) {
 	if s.Release != nil {
 		t.Fatalf("a finished release leaves no record, got %+v", s.Release)
 	}
-	if s.Verify == nil || !s.Verify.Pass {
-		t.Fatalf("verify: %+v", s.Verify)
+	if s.Verify != nil {
+		t.Fatalf("verify is opt-in, got %+v", s.Verify)
+	}
+	for _, c := range host.seen {
+		if strings.Contains(c, "curl") {
+			t.Fatalf("default status ran a verify check: %s", c)
+		}
 	}
 	if s.Backups == nil || s.Backups.Count != 2 || s.Backups.Latest != "2026-10-01T02:00:00" {
 		t.Fatalf("backups: %+v", s.Backups)
@@ -338,7 +344,7 @@ func TestStatusFailedReleaseAndFailingVerifyNeedALook(t *testing.T) {
 	}
 	stubStatusDial(t, map[string]func() (remoteSession, error){"vm1": func() (remoteSession, error) { return closableRunner{host}, nil }})
 
-	d, _, _ := runStatus(t)
+	d, _, _ := runStatus(t, "--verify")
 	s := d.Stacks[0]
 	if s.Release == nil || s.Release.State != "failed" || s.Release.Failed != "build" {
 		t.Fatalf("release: %+v", s.Release)
@@ -350,10 +356,16 @@ func TestStatusFailedReleaseAndFailingVerifyNeedALook(t *testing.T) {
 		t.Fatalf("attention: %v %+v", s.Attention, d.Summary)
 	}
 
-	// --no-verify leaves the column unasked.
-	d, _, _ = runStatus(t, "--no-verify")
+	// Without --verify the column is unasked and nothing is run on the VM for it.
+	host.seen = nil
+	d, _, _ = runStatus(t)
 	if d.Stacks[0].Verify != nil {
-		t.Fatalf("verify ran despite --no-verify: %+v", d.Stacks[0].Verify)
+		t.Fatalf("verify ran without --verify: %+v", d.Stacks[0].Verify)
+	}
+	for _, c := range host.seen {
+		if strings.Contains(c, "curl") {
+			t.Fatalf("verify check sent without --verify: %s", c)
+		}
 	}
 }
 
@@ -374,7 +386,7 @@ func TestStatusAColumnThatCannotBeReadIsANoteNotAFailure(t *testing.T) {
 	})
 	stubStatusDial(t, map[string]func() (remoteSession, error){"vm1": func() (remoteSession, error) { return closableRunner{broken}, nil }})
 
-	d, _, _ := runStatus(t)
+	d, _, _ := runStatus(t, "--verify")
 	s := d.Stacks[0]
 	if s.Backups != nil || s.State != "up" || s.Deployed == nil || s.Verify == nil {
 		t.Fatalf("%+v", s)
@@ -424,14 +436,14 @@ func TestStatusJSONAndTableComeFromTheSameReport(t *testing.T) {
 }
 
 func TestStatusTerminalEscapesFromAVMNeverReachTheTerminal(t *testing.T) {
-	esc := "\x1b[31mevil\x1b]0;pwned\x07"
+	esc := "\x1b[31mevil\x1b]0;pwned\x07\u202egnp.exe\u200b"
 	statusFleet(t, []fleet.VM{vmNamed("vm1"), vmNamed("gone")}, []fleet.Stack{fullStack()})
 	host := &statusHost{
 		release: `{"stack":"app","started":"2026-10-02T00:00:00Z","steps":[{"name":"build","status":"failed"}],"failed":"build\u001b[31m","error":"boom\u001b[2J"}`,
 		answers: func(cmd string) (string, bool) {
 			switch {
 			case strings.Contains(cmd, "ps --format json"):
-				return `[{"Name":"app\u001b[31m-web","Service":"web","State":"run\u001b[31mning","Image":"web:1"}]`, true
+				return `[{"Name":"app\u001b[31m-web","Service":"web","State":"run\u001b[31m\u202ening\u200b","Image":"web:1"}]`, true
 			case strings.Contains(cmd, "deployed.json"):
 				return `{"stack":"app","commit":"abc\u001b[31mdef","at":"2026-10-01T00:00:00Z"}`, true
 			case strings.Contains(cmd, "ls -1t"):
@@ -455,7 +467,7 @@ func TestStatusTerminalEscapesFromAVMNeverReachTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stdout+stderr, "\x1b") || strings.Contains(stdout+stderr, "\x07") {
+	if strings.ContainsAny(stdout+stderr, "\x1b\x07\u202e\u200b") {
 		t.Fatalf("a terminal escape from a VM reached the output:\n%q", stdout+stderr)
 	}
 	if !strings.Contains(stderr, "abc") || !strings.Contains(stderr, "evil") {
@@ -472,6 +484,93 @@ func TestStatusTerminalEscapesFromAVMNeverReachTheTerminal(t *testing.T) {
 	}
 	if !strings.Contains(jsonOut, `\u001b`) {
 		t.Fatalf("JSON should keep the value, escaped: %s", jsonOut)
+	}
+}
+
+func TestStatusTimeoutKeepsTheStacksAlreadyRead(t *testing.T) {
+	slow := fullStack()
+	slow.Name, slow.Dir = "slow", "/opt/slow"
+	statusFleet(t, []fleet.VM{vmNamed("vm1")}, []fleet.Stack{fullStack(), slow})
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	host := &statusHost{answers: func(cmd string) (string, bool) {
+		if strings.Contains(cmd, "/opt/slow") {
+			<-gate
+		}
+		return "", false
+	}}
+	stubStatusDial(t, map[string]func() (remoteSession, error){"vm1": func() (remoteSession, error) { return closableRunner{host}, nil }})
+
+	d, _, _ := runStatus(t, "--timeout", "300ms")
+	if !d.VMs[0].Reachable || !strings.Contains(d.VMs[0].Error, "no answer within") {
+		t.Fatalf("a VM that connected is reachable but slow: %+v", d.VMs[0])
+	}
+	if len(d.Stacks) != 2 {
+		t.Fatalf("stacks: %+v", d.Stacks)
+	}
+	if d.Stacks[0].Name != "app" || d.Stacks[0].State != "up" || d.Stacks[0].Deployed == nil {
+		t.Fatalf("the stack read before the deadline must survive: %+v", d.Stacks[0])
+	}
+	if d.Stacks[1].State != "unknown" || len(d.Stacks[1].Attention) != 1 || !strings.Contains(d.Stacks[1].Attention[0], "timed out") {
+		t.Fatalf("only the unfinished stack is timed out: %+v", d.Stacks[1])
+	}
+}
+
+func TestStatusConcurrencyBoundsVMsInFlight(t *testing.T) {
+	var vms []fleet.VM
+	dials := map[string]func() (remoteSession, error){}
+	var inFlight, peak int32
+	for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+		vms = append(vms, vmNamed(n))
+		dials[n] = func() (remoteSession, error) {
+			cur := atomic.AddInt32(&inFlight, 1)
+			for {
+				p := atomic.LoadInt32(&peak)
+				if cur <= p || atomic.CompareAndSwapInt32(&peak, p, cur) {
+					break
+				}
+			}
+			time.Sleep(60 * time.Millisecond)
+			atomic.AddInt32(&inFlight, -1)
+			return closableRunner{&statusHost{}}, nil
+		}
+	}
+	statusFleet(t, vms, nil)
+	stubStatusDial(t, dials)
+
+	runStatus(t, "--concurrency", "2")
+	if p := atomic.LoadInt32(&peak); p != 2 {
+		t.Fatalf("peak in flight %d, want exactly 2", p)
+	}
+	atomic.StoreInt32(&peak, 0)
+	runStatus(t, "--concurrency", "1")
+	if p := atomic.LoadInt32(&peak); p != 1 {
+		t.Fatalf("peak in flight %d, want 1", p)
+	}
+}
+
+func TestStatusOutputOrderIsTheFleetOrderWhenVMsFinishOutOfOrder(t *testing.T) {
+	names := []string{"v1", "v2", "v3"}
+	var vms []fleet.VM
+	var stacks []fleet.Stack
+	dials := map[string]func() (remoteSession, error){}
+	for i, n := range names {
+		vms = append(vms, vmNamed(n))
+		stacks = append(stacks, fleet.Stack{Name: "s-" + n, VM: n, Dir: "/opt/" + n, NoDatabase: true})
+		delay := time.Duration(len(names)-i) * 80 * time.Millisecond // the first VM is the slowest
+		dials[n] = func() (remoteSession, error) {
+			time.Sleep(delay)
+			return closableRunner{&statusHost{}}, nil
+		}
+	}
+	statusFleet(t, vms, stacks)
+	stubStatusDial(t, dials)
+
+	d, _, _ := runStatus(t, "--concurrency", "3")
+	for i, n := range names {
+		if d.VMs[i].Name != n || d.Stacks[i].Name != "s-"+n {
+			t.Fatalf("row %d out of order: vm %s stack %s", i, d.VMs[i].Name, d.Stacks[i].Name)
+		}
 	}
 }
 
