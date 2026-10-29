@@ -36,6 +36,10 @@ type Record struct {
 	At     string  `json:"at"`
 	Source string  `json:"source"` // "release" or "update"
 	Images []Image `json:"images"`
+	// Protected is set when `stack release --clear` drops a half-applied release. The images
+	// recorded before it are then the last known good set, and the next release would otherwise
+	// replace them with whatever the half-applied one left running. A release that finishes clears it.
+	Protected bool `json:"protected,omitempty"`
 }
 
 // FromCompose keeps the services that have a running image to go back to. A service with no
@@ -59,6 +63,32 @@ func Save(c sshx.Runner, cfg backup.Config, r Record) error {
 	}
 	_, err = c.Run(cfg.WriteFileCmd(File, append(b, '\n')))
 	return err
+}
+
+// SaveUnlessProtected writes the record unless the one on the host is protected, and says which
+// happened. A record it cannot read is not overwritten either, since it may be the protected one.
+func SaveUnlessProtected(c sshx.Runner, cfg backup.Config, r Record) (kept bool, err error) {
+	cur, err := Load(c, cfg)
+	if err != nil {
+		return false, err
+	}
+	if cur != nil && cur.Protected {
+		return true, nil
+	}
+	return false, Save(c, cfg, r)
+}
+
+// SetProtected marks the record on the host protected or not. False when there is no record.
+func SetProtected(c sshx.Runner, cfg backup.Config, on bool) (bool, error) {
+	cur, err := Load(c, cfg)
+	if err != nil || cur == nil {
+		return false, err
+	}
+	if cur.Protected == on {
+		return true, nil
+	}
+	cur.Protected = on
+	return true, Save(c, cfg, *cur)
 }
 
 // Load reads the record. Nil when nothing was recorded yet.

@@ -21,6 +21,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -328,7 +329,7 @@ func newStackReleaseCmd() *cobra.Command {
 				if dryRun {
 					return fail(fmt.Errorf("--dry-run and --clear cannot be used together: clear changes the release record"))
 				}
-				return runReleaseClear(vm, loc, args[0])
+				return runReleaseClear(vm, loc, releaseBackupConfig(st, m), args[0])
 			}
 
 			// Local checks first, so a refusal that needs no host never touches the state file.
@@ -624,6 +625,12 @@ func newStackReleaseCmd() *cobra.Command {
 			// Finished: drop the progress record and note which commit is deployed.
 			if err := releasestate.Remove(sc, loc); err != nil {
 				ui.Warnf("release done but the record at %s could not be removed, clear it with `baryovm stack release %s --clear`: %v", loc.File, args[0], err)
+			}
+			// A finished release is a good state again, so the next one may record over it.
+			if !m.NoCompose {
+				if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
+					ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
+				}
 			}
 			if commit != "" {
 				if err := releasestate.RecordDeployed(sc, loc, args[0], commit); err != nil {

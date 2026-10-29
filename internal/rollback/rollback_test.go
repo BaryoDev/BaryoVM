@@ -5,7 +5,9 @@
 package rollback
 
 import (
+	"encoding/base64"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -114,5 +116,56 @@ func TestApplyChangesNothingWhenAnImageIsMissing(t *testing.T) {
 		if strings.Contains(c, " tag ") || strings.Contains(c, " up") {
 			t.Errorf("changed something before the check passed: %s", c)
 		}
+	}
+}
+
+// store is a host holding one record file.
+type store struct{ raw string }
+
+func (s *store) Run(cmd string) (string, error) {
+	if m := b64.FindStringSubmatch(cmd); m != nil {
+		b, err := base64.StdEncoding.DecodeString(m[1])
+		if err != nil {
+			return "", err
+		}
+		s.raw = string(b)
+		return "", nil
+	}
+	return s.raw, nil
+}
+
+var b64 = regexp.MustCompile(`printf %s '([A-Za-z0-9+/=]+)'`)
+
+func TestAProtectedRecordIsNotReplaced(t *testing.T) {
+	cfg := backup.Config{}
+	s := &store{}
+	if kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "good"}}}); err != nil || kept {
+		t.Fatalf("first save: kept=%v err=%v", kept, err)
+	}
+	if ok, err := SetProtected(s, cfg, true); err != nil || !ok {
+		t.Fatalf("protect: %v %v", ok, err)
+	}
+	kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "half"}}})
+	if err != nil || !kept {
+		t.Fatalf("protected save: kept=%v err=%v", kept, err)
+	}
+	if got, _ := Load(s, cfg); got.Images[0].ID != "good" || !got.Protected {
+		t.Errorf("record was replaced: %+v", got)
+	}
+	if _, err := SetProtected(s, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "next"}}}); err != nil || kept {
+		t.Fatalf("unprotected save: kept=%v err=%v", kept, err)
+	}
+	if got, _ := Load(s, cfg); got.Images[0].ID != "next" {
+		t.Errorf("record: %+v", got)
+	}
+}
+
+func TestSetProtectedWithNoRecordWritesNothing(t *testing.T) {
+	r := &rec{}
+	if ok, err := SetProtected(r, backup.Config{}, true); err != nil || ok || len(r.seen) != 1 {
+		t.Errorf("ok=%v err=%v seen=%v", ok, err, r.seen)
 	}
 }

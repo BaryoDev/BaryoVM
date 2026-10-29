@@ -584,6 +584,11 @@ the local commit differs from the recorded one. In JSON the refusal carries `dat
 `steps`, `failedStep`, `failedError`, `backup`, `backupFile`, `resumable` and `hint`. A successful
 release reports `data.commit`.
 
+Clearing a record that cannot be resumed also protects `images-before.json`: the images in it are
+the last good set, and the next release or update would otherwise record over them with what the
+half-applied release left running. The clear reports `data.rollbackProtected`. A release that
+finishes lifts the protection.
+
 #### Rolling back the images
 
 ```sh

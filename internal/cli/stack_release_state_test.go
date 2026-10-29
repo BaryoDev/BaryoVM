@@ -17,6 +17,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/update"
 )
@@ -606,5 +607,63 @@ func TestResumeRefusesWhileTheEarlierReleaseIsStillWriting(t *testing.T) {
 	}
 	if didRun(inner.seen, "docker build") || didRun(inner.seen, "pg_dump") {
 		t.Errorf("nothing should have run:\n%s", strings.Join(inner.seen, "\n"))
+	}
+}
+
+// Clearing a half-applied release protects the rollback record, so the next release cannot replace
+// the last good images with what the broken one left running, and a release that finishes lifts it.
+func TestClearAfterAHalfAppliedReleaseProtectsTheRollbackRecord(t *testing.T) {
+	releaseFixture(t)
+	host := newStateHost(nil)
+	good := `{"stack":"demo","at":"2026-10-29T00:00:00Z","source":"release","images":[{"service":"demo","ref":"umbraco-pwa-demo:arm64","id":"sha256:good"}]}`
+	host.files["images-before.json"] = good
+	inner := &fakeRunner{answers: stateAnswers(ownedDemo)}
+	if _, err := stateRelease(t, host, inner, map[string]string{"up -d": "up failed"}); err == nil {
+		t.Fatal("the release should fail at deploy")
+	}
+	if _, bad := host.state(t).Unsafe(); !bad {
+		t.Fatal("a failed deploy should leave an unsafe record")
+	}
+	host.files["images-before.json"] = good
+
+	stdout, err := stateRelease(t, host, inner, nil, "--clear")
+	if err != nil {
+		t.Fatalf("clear failed: %v", err)
+	}
+	if d := releaseData(t, stdout); d["rollbackProtected"] != true {
+		t.Errorf("data.rollbackProtected: %v", d)
+	}
+	var r rollback.Record
+	if err := json.Unmarshal([]byte(host.files["images-before.json"]), &r); err != nil || !r.Protected || r.Images[0].ID != "sha256:good" {
+		t.Fatalf("record after clear: %v %s", err, host.files["images-before.json"])
+	}
+
+	if _, err := stateRelease(t, host, inner, nil); err != nil {
+		t.Fatalf("release after clear: %v", err)
+	}
+	r = rollback.Record{}
+	if err := json.Unmarshal([]byte(host.files["images-before.json"]), &r); err != nil || r.Protected {
+		t.Errorf("a finished release should lift the protection: %v %s", err, host.files["images-before.json"])
+	}
+}
+
+// Clearing a record that can still be resumed leaves the rollback record as it is.
+func TestClearOfAResumableReleaseDoesNotProtect(t *testing.T) {
+	releaseFixture(t)
+	host := newStateHost(nil)
+	inner := &fakeRunner{answers: stateAnswers(ownedDemo)}
+	if _, err := stateRelease(t, host, inner, map[string]string{"docker build": "build failed"}); err == nil {
+		t.Fatal("first release should fail")
+	}
+	host.files["images-before.json"] = `{"stack":"demo","at":"t","source":"release","images":[]}`
+	stdout, err := stateRelease(t, host, inner, nil, "--clear")
+	if err != nil {
+		t.Fatalf("clear failed: %v", err)
+	}
+	if d := releaseData(t, stdout); d["rollbackProtected"] != false {
+		t.Errorf("data.rollbackProtected: %v", d)
+	}
+	if strings.Contains(host.files["images-before.json"], "protected") {
+		t.Errorf("record: %s", host.files["images-before.json"])
 	}
 }

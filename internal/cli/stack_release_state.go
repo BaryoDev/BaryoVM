@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/release"
@@ -111,8 +112,10 @@ func refuseState(l releasestate.Loc, s *releasestate.State, name string) error {
 	return e
 }
 
-// runReleaseClear drops the record and the lock.
-func runReleaseClear(vm *fleet.VM, l releasestate.Loc, name string) error {
+// runReleaseClear drops the record and the lock. When the release it drops was half applied, the
+// rollback record is protected first, so the next release cannot replace the last good images with
+// what the broken one left running.
+func runReleaseClear(vm *fleet.VM, l releasestate.Loc, bcfg backup.Config, name string) error {
 	sc, err := dialRelease(vm)
 	if err != nil {
 		ui.Emit(ui.Result{OK: false, Action: "stack release", Error: err.Error()})
@@ -120,6 +123,14 @@ func runReleaseClear(vm *fleet.VM, l releasestate.Loc, name string) error {
 	}
 	defer sc.Close()
 	prev, err := releasestate.Read(sc, l)
+	protected := false
+	if err == nil && prev != nil {
+		if _, bad := prev.Unsafe(); bad {
+			if protected, err = rollback.SetProtected(sc, bcfg, true); err != nil {
+				err = fmt.Errorf("the record was not cleared because the rollback record could not be protected: %w", err)
+			}
+		}
+	}
 	if err == nil {
 		err = releasestate.Remove(sc, l)
 	}
@@ -132,7 +143,11 @@ func runReleaseClear(vm *fleet.VM, l releasestate.Loc, name string) error {
 	if prev != nil {
 		data = stateData(l, prev, name)
 		data["cleared"] = true
+		data["rollbackProtected"] = protected
 		msg = name + ": release record cleared"
+		if protected {
+			msg += ", the rollback record is kept until a release finishes"
+		}
 	}
 	ui.Emit(ui.Result{OK: true, Action: "stack release", Message: msg, Data: data})
 	ui.Successf("%s", msg)
@@ -143,8 +158,12 @@ func runReleaseClear(vm *fleet.VM, l releasestate.Loc, name string) error {
 // release changes them. It never stops a release: a missing record only means no rollback target.
 func recordRollback(c sshx.Runner, st *fleet.Stack, m *release.Manifest, name string) {
 	imgs, err := compose.Images(c, releaseComposeStack(st, m), nil)
+	kept := false
 	if err == nil {
-		err = rollback.Save(c, releaseBackupConfig(st, m), rollback.FromCompose(name, "release", imgs))
+		kept, err = rollback.SaveUnlessProtected(c, releaseBackupConfig(st, m), rollback.FromCompose(name, "release", imgs))
+	}
+	if kept {
+		ui.Notef("keeping the rollback record from before the half-applied release that was cleared")
 	}
 	if err != nil {
 		ui.Notef("could not record the images to roll back to: %v", err)
