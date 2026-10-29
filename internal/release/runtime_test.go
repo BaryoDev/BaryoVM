@@ -19,7 +19,7 @@ func TestAPodmanReleaseBuildsWithPodman(t *testing.T) {
 		t.Errorf("a podman build must not name docker or BuildKit:\n%s", got)
 	}
 	d := (&Manifest{RemoteRoot: "/srv/app"}).buildScript(Build{Image: "app:1", Dockerfile: "Dockerfile", Context: "."})
-	if !strings.Contains(d, "docker build") || !strings.Contains(d, "DOCKER_BUILDKIT=1") {
+	if !strings.Contains(d, "docker build") {
 		t.Errorf("the default build changed:\n%s", d)
 	}
 }

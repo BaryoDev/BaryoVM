@@ -129,7 +129,7 @@ func TestRecipeReleaseDeploysTwoServicesInOrder(t *testing.T) {
 	api := host.index("up -d --no-deps 'api'", 0)
 	web := host.index("up -d --no-deps 'web'", 0)
 	health := host.index("curl -fsS", 0)
-	if pull < 0 || api < 0 || web < 0 || !(pull < api && api < web && web < health) {
+	if pull < 0 || api < 0 || web < 0 || pull >= api || api >= web || web >= health {
 		t.Fatalf("want pull, api up, web up, web health in that order, got:\n%s", strings.Join(host.seen, "\n"))
 	}
 	w := host.index("base64 -d", 0)

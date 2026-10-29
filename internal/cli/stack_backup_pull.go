@@ -68,7 +68,7 @@ func writePulled(dir, name string, data []byte) (PulledFile, error) {
 		return PulledFile{}, err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		_ = os.Remove(tmp)
 		return PulledFile{}, err
 	}
