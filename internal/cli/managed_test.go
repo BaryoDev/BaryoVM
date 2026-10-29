@@ -126,7 +126,7 @@ func TestManagedSnapshotRunsEachCallAndKeepsTheRecord(t *testing.T) {
 	if id != "baryovm-20261030-010203" || len(calls) != 3 {
 		t.Fatalf("id %q calls %d", id, len(calls))
 	}
-	if calls[2].Argv[len(calls[2].Argv)-3] != "wait" || calls[2].ExitCode != 0 || calls[2].Output != "ok" {
+	if calls[2].Argv[len(calls[2].Argv)-4] != "wait" || calls[2].ExitCode != 0 || calls[2].Output != "ok" {
 		t.Errorf("wait call: %+v", calls[2])
 	}
 }

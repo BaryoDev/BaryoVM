@@ -104,6 +104,9 @@ func TestBackupPullNeverReadsAPartialFile(t *testing.T) {
 	r := newPullRunner()
 	runCmd(t, newStackBackupCmd(), r, true, "app", "--pull")
 	for _, c := range r.seen {
+		if strings.Contains(c, "set -e") {
+			continue // the backup script itself writes .partial and renames it
+		}
 		if strings.Contains(c, ".partial") {
 			t.Errorf("a .partial file was requested: %q", c)
 		}

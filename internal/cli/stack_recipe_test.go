@@ -6,6 +6,7 @@ package cli
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -122,7 +123,10 @@ func TestRecipeReleaseDeploysTwoServicesInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release failed: %v\n%s", err, strings.Join(host.seen, "\n"))
 	}
-	if !strings.Contains(stdout, `"ok":true`) {
+	var env struct {
+		OK bool `json:"ok"`
+	}
+	if jerr := json.Unmarshal([]byte(stdout), &env); jerr != nil || !env.OK {
 		t.Fatalf("expected an ok envelope: %s", stdout)
 	}
 	pull := host.index("pull", 0)
