@@ -32,13 +32,11 @@ func newVMHealthCmd() *cobra.Command {
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := o.Validate(); err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-				return err
+				return failHealth(err)
 			}
 			if all == (len(args) == 1) {
 				err := errors.New("give a VM name, or --all for every registered VM")
-				ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-				return err
+				return failHealth(err)
 			}
 			if all {
 				return healthAll(o)
@@ -57,12 +55,10 @@ func newVMHealthCmd() *cobra.Command {
 func healthOne(name string, o health.Options) error {
 	vm, err := requireVM(name)
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-		return err
+		return failHealth(err)
 	}
 	if err := requireLinux(&vm, "vm health"); err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-		return err
+		return failHealth(err)
 	}
 	rep := checkVM(vm, o)
 	return emitHealth([]health.Report{rep}, false)
@@ -71,13 +67,11 @@ func healthOne(name string, o health.Options) error {
 func healthAll(o health.Options) error {
 	store, err := fleet.Load()
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-		return err
+		return failHealth(err)
 	}
 	if len(store.VMs) == 0 {
 		err := errors.New("no VMs registered yet: add one with `baryovm vm add`")
-		ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
-		return err
+		return failHealth(err)
 	}
 	var reps []health.Report
 	for _, vm := range store.VMs {
@@ -137,10 +131,14 @@ func emitHealth(reps []health.Report, all bool) error {
 		}
 	}
 	if failed > 0 {
+		msg := fmt.Sprintf("%s has a failing check", reps[0].VM)
 		if all {
-			return fmt.Errorf("%d of %d VMs have a failing check", failed, len(reps))
+			msg = fmt.Sprintf("%d of %d VMs have a failing check", failed, len(reps))
 		}
-		return fmt.Errorf("%s has a failing check", reps[0].VM)
+		// The envelope (JSON) or the report (human) is already out; silent stops reportError from
+		// adding a second document.
+		ui.Errorf("%s", msg)
+		return &exitError{code: 1, msg: msg, silent: true}
 	}
 	return nil
 }
@@ -175,4 +173,11 @@ func printHealth(r health.Report) {
 func withThresholds(r health.Report, o health.Options) health.Report {
 	r.Thresholds = o
 	return r
+}
+
+// failHealth emits a failed result and returns the silent exit error, so Execute exits non-zero
+// without printing a second JSON document. Every path that emits goes through here.
+func failHealth(err error) error {
+	ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
+	return &exitError{code: 1, msg: err.Error(), silent: true}
 }
