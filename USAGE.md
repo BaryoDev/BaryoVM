@@ -215,6 +215,52 @@ only when the account does not exist, so an attempt without that token names a r
 account, and the report marks it. Expect `root` to appear on any public host, since it
 is on every scanner's list; your own login name appearing is the interesting case.
 
+## Patching and pruning a VM
+
+`vm patch` updates the OS packages and proves the stack came back.
+
+```sh
+baryovm vm patch web1 --dry-run   # list pending updates and whether a reboot is required now
+baryovm vm patch web1             # update; ask before rebooting (on a terminal only)
+baryovm vm patch web1 --reboot    # update and reboot without asking if the host needs it
+```
+
+It records the kernel, every container with its health, and nginx first. The update runs
+as a detached `systemd-run` unit (`dnf update -y`, or `apt-get upgrade` on Debian), so a
+dropped session cannot stop it halfway, and it is polled until a deadline. Whether a
+reboot is needed comes from the host: `needs-restarting -r`, or `/var/run/reboot-required`.
+After a reboot it waits for SSH, retrying a bounded number of times, and requires a new
+boot id. Then every container that was running must be running and healthy, nginx must be
+active and `nginx -t` must pass. A container that was already unhealthy before is not a
+failure. The report gives the package count, old and new kernel, whether it rebooted, and
+the containers that did not come back; any of those makes the command exit non-zero and
+name them. It needs `sudo -n`.
+
+`vm prune` frees disk space. It plans by default and deletes nothing.
+
+```sh
+baryovm vm prune web1                          # list item, size and reason
+baryovm vm prune web1 --apply                  # delete the plan; prints freed space and df before/after
+baryovm vm prune web1 --floor 20 --apply       # exit 0 with no changes while 20 GB or more is free
+baryovm vm prune web1 --work-dir /srv/src --worktree-dir /srv/wt --apply
+```
+
+What it plans: Docker build cache, dangling images, anonymous unused volumes, stopped
+containers older than `--stopped-days` (default 14), rollback images past the newest
+`--keep-images` per repository (default 2), `bin`, `obj` and `TestResults` beside a
+`.csproj` or `.fsproj` under `--work-dir`, clean git worktrees under `--worktree-dir`
+whose branch has no commits off the remote, and the npm, go-build, pip and playwright
+caches plus editor server versions other than the newest. Root-owned `obj/` is removed
+with `sudo -n`.
+
+What it never touches: a named volume, an image any running or stopped container uses, a
+`bin/` or `obj/` with no project file beside it, a dirty or unreadable worktree (it uses
+`git worktree remove` without `--force`), and anything outside the folders you name. A
+host without Docker or git skips that section and says so. `--apply` takes a `flock` on
+the VM, so a second apply while one runs exits with a message instead of racing. It needs
+only `sh`, `find`, `du`, `docker` and `git` on the VM. `-o json` gives the plan and the
+result.
+
 ## Stacks: docker compose over SSH (day-to-day deploys)
 
 Your real workloads (barakoCMS, BaryoClub) run as compose projects, so this is
