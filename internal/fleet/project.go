@@ -218,6 +218,9 @@ func checkKeyRef(field, v string) error {
 		case r.Kind == secretref.Cmd:
 			return fmt.Errorf("%s: cmd: is not accepted in a project file: use env:NAME or file:PATH", field)
 		}
+		if err := secretref.Default().Confine("").Check(v); err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
 		return nil
 	}
 	if strings.ContainsAny(v, "\r\n") || strings.Contains(v, "PRIVATE KEY") || strings.HasPrefix(v, "ssh-") {
@@ -328,7 +331,7 @@ func (p *Project) Store(dir string, getenv func(string) string) (*Store, error) 
 
 func resolveKey(field, ref, dir string, getenv func(string) string) (string, error) {
 	if secretref.IsRef(ref) {
-		res := secretref.Default()
+		res := secretref.Default().Confine(dir)
 		res.Getenv = getenv
 		v, err := res.Resolve(ref)
 		if err != nil {

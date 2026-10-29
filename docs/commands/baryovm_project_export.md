@@ -23,7 +23,7 @@ baryovm project export [flags]
 ```
       --force            replace the output file if it exists
   -h, --help             help for export
-      --key-env string   environment variable that holds the key path in CI (default DEPLOY_KEY_PATH)
+      --key-env string   environment variable that holds the key path in CI (default BARYOVM_DEPLOY_KEY_PATH)
       --name string      project name (default: the output directory's name)
       --out string       file to write (default "baryovm.project.json")
       --stack strings    stack to include, in release order (repeatable; default: all)

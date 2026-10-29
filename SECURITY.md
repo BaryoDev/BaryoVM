@@ -38,7 +38,12 @@ down.
   --env-file` or into the build's own shell, and is never on a local or remote command line. It is
   absent from errors, `-o json` output, the audit log and `--dry-run` output. A `cmd:` reference is
   run without a shell, with a timeout and with stderr discarded, and is refused when it comes from a
-  committed file (a project file or release manifest).
+  committed file (a project file or release manifest). Any other reference from a committed file is
+  confined, because that file may come from someone else's branch and its Dockerfile runs on your VM:
+  an `env:` name must start with `BARYOVM_` (map the secret to that name in CI), and a `file:` path
+  must be relative, with no `~` or `..`, and resolve inside the committed file's own directory after
+  symlinks. Anything else is refused with the reference and the rule, never a value. References typed
+  on the command line are not confined.
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.

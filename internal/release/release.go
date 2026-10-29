@@ -39,6 +39,7 @@ type Build struct {
 
 // Manifest is the whole release recipe. Kept in the project (e.g. baryovm.release.json).
 type Manifest struct {
+	Dir        string   `json:"-"`                 // directory of the manifest file, set by Load; confines file: references
 	LocalRoot  string   `json:"localRoot"`         // local source root (~ ok)
 	RemoteRoot string   `json:"remoteRoot"`        // remote dest root (absolute)
 	Sync       []string `json:"sync"`              // paths under localRoot to rsync; a trailing "/" syncs CONTENTS
@@ -139,7 +140,8 @@ type Manifest struct {
 // wrong before. The stack's setting reached the compose up and not the image build, and not the
 // hooks, so one missing thread was reported three times from three commands.
 func Load(path string, stackSudo bool) (*Manifest, error) {
-	b, err := os.ReadFile(expand(path))
+	path = expand(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- the manifest path the operator passed or registered
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +152,10 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 	if stackSudo {
 		m.Sudo = true
 	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	m.Dir = filepath.Dir(path)
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
 	}
@@ -159,7 +165,7 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 		}
 	}
 	for _, b := range m.Builds {
-		if err := b.Validate(); err != nil {
+		if err := b.Validate(secretref.Default().Confine(m.Dir)); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -244,13 +250,13 @@ func (m *Manifest) RsyncCmdKnownHosts(sub, user, host string, port int, key, kno
 
 // Validate checks what can be checked without touching the machine: arg names, secret ids, and
 // that every reference parses. A reference that does not parse is an error and not a literal.
-func (b Build) Validate() error {
+func (b Build) Validate(res secretref.Resolver) error {
 	for k, v := range b.Args {
 		if !secretref.ValidName(k) {
 			return fmt.Errorf("build %s: arg %q is not a valid name", b.Image, k)
 		}
 		if secretref.IsRef(v) {
-			if _, err := secretref.Parse(v); err != nil {
+			if err := res.Check(v); err != nil {
 				return fmt.Errorf("build %s: arg %s: %w", b.Image, k, err)
 			}
 		}
@@ -259,7 +265,7 @@ func (b Build) Validate() error {
 		if id == "" || strings.ContainsAny(id, ", =\t") {
 			return fmt.Errorf("build %s: secret id %q must be a plain word", b.Image, id)
 		}
-		if _, err := secretref.Parse(ref); err != nil {
+		if err := res.Check(ref); err != nil {
 			return fmt.Errorf("build %s: secret %s: %w", b.Image, id, err)
 		}
 	}
