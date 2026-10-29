@@ -163,6 +163,7 @@ const maxURLs = 10
 // ParseReport turns ZAP's baseline JSON into a Report. It is separated from the
 // running of ZAP so it can be tested against a canned report with no host and
 // no Docker, which is the whole point of keeping the engine host-free.
+// Text fields go through cleanText: ZAP copies strings from the scanned site, and the cli prints them.
 func ParseReport(target string, raw []byte) (Report, error) {
 	var zr zapReport
 	if err := json.Unmarshal(raw, &zr); err != nil {
@@ -177,12 +178,12 @@ func ParseReport(target string, raw []byte) (Report, error) {
 				sev = SeverityInformational
 			}
 			f := Finding{
-				Name:       a.Alert,
+				Name:       cleanText(a.Alert),
 				Severity:   sev.String(),
-				Confidence: a.Confidence,
+				Confidence: cleanText(a.Confidence),
 				Count:      atoiOr(a.Count, len(a.Instances)),
-				CWE:        cwe(a.CWEID),
-				Solution:   a.Solution,
+				CWE:        cleanText(cwe(a.CWEID)),
+				Solution:   cleanText(a.Solution),
 				severity:   sev,
 			}
 			for i, inst := range a.Instances {
@@ -190,7 +191,7 @@ func ParseReport(target string, raw []byte) (Report, error) {
 					break
 				}
 				if inst.URI != "" {
-					f.URLs = append(f.URLs, inst.URI)
+					f.URLs = append(f.URLs, cleanText(inst.URI))
 				}
 			}
 			rep.Findings = append(rep.Findings, f)

@@ -261,3 +261,23 @@ func TestRunRejectsEmptyURL(t *testing.T) {
 		t.Error("Run should reject an empty URL")
 	}
 }
+
+// ZAP copies text from the scanned site, so a finding can carry an escape sequence that a
+// terminal would obey when the report is printed.
+func TestParseReportStripsControlCharactersFromSiteText(t *testing.T) {
+	raw := []byte(`{"site":[{"alerts":[{"alert":"Bad\u001b]0;x\u0007 title","riskcode":"1","confidence":"2",
+"cweid":"79","count":"1","solution":"Fix\u001b[2J it","instances":[{"uri":"https://a.test/\u001b[31mx"}]}]}]}`)
+	rep, err := ParseReport("a.test", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := rep.Findings[0]
+	for _, s := range append([]string{f.Name, f.Solution}, f.URLs...) {
+		if strings.ContainsAny(s, "\x1b\x07") {
+			t.Errorf("control character survived: %q", s)
+		}
+	}
+	if f.Name != "Bad]0;x title" {
+		t.Errorf("name = %q", f.Name)
+	}
+}
