@@ -15,6 +15,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/scan"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/status"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -186,7 +187,59 @@ func statusInput(st *fleet.Stack) status.StackInput {
 
 // ---- rendering: the table is drawn from the same status.Report the JSON carries ----
 
+// cleanReport returns a copy of rep with every string a VM could have chosen run through the one
+// rule the repo has for text off the network (scan.CleanText). Container output, record contents
+// and error text all come from the host, and a terminal obeys the escapes in them. The JSON keeps
+// the raw values, which encoding/json escapes.
+func cleanReport(rep status.Report) status.Report {
+	c := scan.CleanText
+	out := rep
+	out.VMs = make([]status.VM, len(rep.VMs))
+	for i, v := range rep.VMs {
+		v.Name, v.Host, v.Kernel, v.Error = c(v.Name), c(v.Host), c(v.Kernel), c(v.Error)
+		out.VMs[i] = v
+	}
+	out.Stacks = make([]status.Stack, len(rep.Stacks))
+	for i, s := range rep.Stacks {
+		s.Name, s.VM, s.State, s.Runtime, s.Managed = c(s.Name), c(s.VM), c(s.State), c(s.Runtime), c(s.Managed)
+		if s.Deployed != nil {
+			d := *s.Deployed
+			d.Commit, d.At = c(d.Commit), c(d.At)
+			s.Deployed = &d
+		}
+		if s.Release != nil {
+			r := *s.Release
+			r.State, r.Failed, r.Error, r.Commit, r.Since = c(r.State), c(r.Failed), c(r.Error), c(r.Commit), c(r.Since)
+			s.Release = &r
+		}
+		if s.Verify != nil {
+			v := *s.Verify
+			v.Reason = c(v.Reason)
+			s.Verify = &v
+		}
+		if s.Backups != nil {
+			b := *s.Backups
+			b.Latest, b.File = c(b.Latest), c(b.File)
+			s.Backups = &b
+		}
+		s.Containers = nil // never printed in the table
+		s.Attention = cleanAll(s.Attention)
+		s.Notes = cleanAll(s.Notes)
+		out.Stacks[i] = s
+	}
+	return out
+}
+
+func cleanAll(in []string) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = scan.CleanText(s)
+	}
+	return out
+}
+
 func printStatus(rep status.Report) {
+	rep = cleanReport(rep)
 	if len(rep.Stacks) == 0 && len(rep.VMs) == 0 {
 		ui.Notef("nothing registered")
 		return

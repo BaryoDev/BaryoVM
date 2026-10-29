@@ -423,6 +423,58 @@ func TestStatusJSONAndTableComeFromTheSameReport(t *testing.T) {
 	}
 }
 
+func TestStatusTerminalEscapesFromAVMNeverReachTheTerminal(t *testing.T) {
+	esc := "\x1b[31mevil\x1b]0;pwned\x07"
+	statusFleet(t, []fleet.VM{vmNamed("vm1"), vmNamed("gone")}, []fleet.Stack{fullStack()})
+	host := &statusHost{
+		release: `{"stack":"app","started":"2026-10-02T00:00:00Z","steps":[{"name":"build","status":"failed"}],"failed":"build\u001b[31m","error":"boom\u001b[2J"}`,
+		answers: func(cmd string) (string, bool) {
+			switch {
+			case strings.Contains(cmd, "ps --format json"):
+				return `[{"Name":"app\u001b[31m-web","Service":"web","State":"run\u001b[31mning","Image":"web:1"}]`, true
+			case strings.Contains(cmd, "deployed.json"):
+				return `{"stack":"app","commit":"abc\u001b[31mdef","at":"2026-10-01T00:00:00Z"}`, true
+			case strings.Contains(cmd, "ls -1t"):
+				return "/bk/db-\x1b[31m20261001.dump\n", true
+			case strings.Contains(cmd, "-w '%{http_code}'"):
+				return "502", true
+			}
+			return "", false
+		},
+	}
+	prev := dialRelease
+	dialRelease = func(vm *fleet.VM) (remoteSession, error) {
+		if vm.Name == "gone" {
+			return nil, errors.New("handshake: " + esc)
+		}
+		return closableRunner{host}, nil
+	}
+	t.Cleanup(func() { dialRelease = prev })
+
+	stdout, stderr, err := runCmdE(t, newStatusCmd(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout+stderr, "\x1b") || strings.Contains(stdout+stderr, "\x07") {
+		t.Fatalf("a terminal escape from a VM reached the output:\n%q", stdout+stderr)
+	}
+	if !strings.Contains(stderr, "abc") || !strings.Contains(stderr, "evil") {
+		t.Fatalf("the text around the escapes should still show:\n%s", stderr)
+	}
+
+	// JSON keeps the raw value; encoding/json escapes it, so it is safe on a terminal too.
+	jsonOut, _, err := runCmdE(t, newStatusCmd(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(jsonOut, "\x1b") {
+		t.Fatalf("raw ESC byte in JSON: %q", jsonOut)
+	}
+	if !strings.Contains(jsonOut, `\u001b`) {
+		t.Fatalf("JSON should keep the value, escaped: %s", jsonOut)
+	}
+}
+
 func TestStatusScopeAndUnknownNames(t *testing.T) {
 	other := fullStack()
 	other.Name, other.VM = "site", "vm2"
