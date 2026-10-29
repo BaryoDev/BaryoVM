@@ -35,8 +35,18 @@ var (
 
 var jsonMode bool
 
-// SetJSON switches to machine-readable output (no color, no spinners).
-func SetJSON(on bool) { jsonMode = on }
+// emitted is set once a JSON document has been written, so a run prints at most one.
+var emitted bool
+
+// SetJSON switches to machine-readable output (no color, no spinners). It also starts a fresh run:
+// the next Emit is allowed to write a document again.
+func SetJSON(on bool) {
+	jsonMode = on
+	emitted = false
+}
+
+// Emitted reports whether a JSON document was already written in this run.
+func Emitted() bool { return emitted }
 
 // JSON reports whether machine-readable mode is active.
 func JSON() bool { return jsonMode }
@@ -105,8 +115,15 @@ type Result struct {
 
 // Emit writes the final result: JSON to stdout in machine mode, or a styled
 // banner to stderr in human mode (the step spinners already told the story).
+// In machine mode only the first call in a run writes: stdout is one document, so
+// a handler that emits its own failure and then returns the error does not get
+// a second one from the caller's fallback.
 func Emit(r Result) {
 	if jsonMode {
+		if emitted {
+			return
+		}
+		emitted = true
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(r)

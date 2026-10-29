@@ -940,8 +940,21 @@ func newStackPsCmd() *cobra.Command {
 		Short: "Show the stack's containers",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStackOp(args[0], "stack ps", fmt.Sprintf("querying stack %s", args[0]),
-				func(c sshx.Runner, cs compose.Stack) (string, error) { return compose.Ps(c, cs) })
+			return runStackOpDescribed(args[0], "stack ps", fmt.Sprintf("querying stack %s", args[0]),
+				func(c sshx.Runner, cs compose.Stack) (opOutput, error) {
+					out, err := compose.Ps(c, cs)
+					o, err := bareOutput(out, err)
+					if err != nil || !ui.JSON() {
+						return o, err
+					}
+					// Added beside "output", which stays as it was. A compose too old for
+					// --format json, or output that does not parse, leaves containers out
+					// rather than failing a command that already worked.
+					if list, perr := compose.PsJSON(c, cs); perr == nil {
+						o.data = map[string]any{"output": out, "containers": list}
+					}
+					return o, nil
+				})
 		},
 	}
 }

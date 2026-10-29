@@ -417,6 +417,25 @@ type LogsResult struct {
 	Lines  int    `json:"lines"`
 	State  string `json:"state"`
 	Note   string `json:"note,omitempty"`
+	// Entries is the same read as one record per line, so a consumer does not split the blob.
+	Entries []LogLine `json:"entries"`
+}
+
+// LogLine is one line of `compose logs --no-color`. Service is the label compose put before the
+// bar, which is the container name (app-web-1) in compose v2; empty when the line had none.
+type LogLine struct {
+	Service string `json:"service"`
+	Line    string `json:"line"`
+}
+
+var logPrefix = regexp.MustCompile(`^([^\s|]+)\s*\| ?(.*)$`)
+
+// splitLogLine splits "label  | text". A line with no bar is all text.
+func splitLogLine(l string) LogLine {
+	if m := logPrefix.FindStringSubmatch(l); m != nil {
+		return LogLine{Service: m[1], Line: m[2]}
+	}
+	return LogLine{Line: l}
 }
 
 // The states a read can be in. They exist because `docker compose logs` answers exit 0 with zero
@@ -474,10 +493,11 @@ func ReadLogs(c sshx.Runner, s Stack, svcs []string, tail int) (LogsResult, erro
 // line would put the ambiguity straight back. A read with no lines is left LogsUnknown, because
 // the output on its own cannot say why there were none: that is withContainers' job.
 func describeLogs(out string) LogsResult {
-	r := LogsResult{Output: out, State: LogsRead}
+	r := LogsResult{Output: out, State: LogsRead, Entries: []LogLine{}}
 	for _, line := range strings.Split(out, "\n") {
 		if strings.TrimSpace(line) != "" {
 			r.Lines++
+			r.Entries = append(r.Entries, splitLogLine(strings.TrimRight(line, "\r")))
 		}
 	}
 	if r.Lines == 0 {
