@@ -154,6 +154,7 @@ func TestValidateRefusesStrategiesThatCannotRunSafely(t *testing.T) {
 		"remote bad envfile":  {Kind: KindPostgresRemote, Host: "h", Database: "d", EnvFile: "../x"},
 		"remote bad var":      {Kind: KindPostgresRemote, Host: "h", Database: "d", EnvFile: ".env", PasswordVar: "A B"},
 		"remote relative pf":  {Kind: KindPostgresRemote, Host: "h", Database: "d", PassFile: "pgpass"},
+		"remote colon pf":     {Kind: KindPostgresRemote, Host: "h", Database: "d", PassFile: "/etc/pg:rw/pgpass"},
 		"command no restore":  {Kind: KindCommand, Dump: "x"},
 		"files relative":      {Kind: KindFiles, Paths: []string{"uploads"}},
 		"files dotdot":        {Kind: KindFiles, Paths: []string{"/srv/../etc"}},

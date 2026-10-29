@@ -1103,9 +1103,10 @@ backup.json` (`--clear` removes it). Unknown keys and unknown kinds are refused 
   Cloud SQL. `host`, `database`, `port` (5432), `user` (postgres), `image` (`postgres:17`, pin it to
   the server's major version). `pg_dump` runs in a throwaway client container on the VM. The password
   comes from the stack's env file on the VM (`envFile`, relative to the project dir, `passwordVar`
-  names the key, default `PGPASSWORD`) or from a libpq password file on the VM (`passFile`, absolute).
+  names the key, default `PGPASSWORD`) or from a libpq password file on the VM (`passFile`, absolute, no `:`).
   It is handed to the container with `--env-file` or a read-only mount, never on a command line. The
-  env file must be plain `KEY=value` lines; add `PGSSLMODE=require` there if the provider needs it.
+  env file must be plain `KEY=value` lines and the password value must not be quoted (docker keeps
+  the quotes as part of the value); add `PGSSLMODE=require` there if the provider needs it.
   Restore uses `pg_restore --clean --if-exists --no-owner`.
 - `command`: `dump` writes the backup to stdout, `restore` reads it from stdin. Run through
   `sudo -n` as a whole line when the stack has `--sudo`, like release hooks.

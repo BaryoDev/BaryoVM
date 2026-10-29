@@ -169,6 +169,9 @@ func (s Strategy) Validate() error {
 			if err := validAbs("passFile", s.PassFile); err != nil {
 				return bad("%v", err)
 			}
+			if strings.Contains(s.PassFile, ":") {
+				return bad("passFile %q must not contain ':' (it is joined into a docker -v mount)", s.PassFile)
+			}
 		}
 	case KindCommand:
 		if strings.TrimSpace(s.Dump) == "" || strings.TrimSpace(s.Restore) == "" {
