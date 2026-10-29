@@ -386,6 +386,28 @@ func TestRollbackTargetImageIsKept(t *testing.T) {
 	}
 }
 
+// A tagged image past the newest KeepImages is still kept when a stack would roll back to it.
+func TestRollbackTargetBeyondKeepImagesIsKept(t *testing.T) {
+	o := opts()
+	o.RollbackIDs = map[string]string{"sha256:ccc000ccc0001234": "app"}
+	f := Facts{HasDocker: true, Images: []Image{
+		{ID: "aaa000aaa000", Repo: "app", Tag: "v4", Created: now.Add(-1 * time.Hour)},
+		{ID: "bbb000bbb000", Repo: "app", Tag: "v3", Created: now.Add(-2 * time.Hour)},
+		{ID: "ccc000ccc000", Repo: "app", Tag: "v2", Created: now.Add(-3 * time.Hour)},
+		{ID: "ddd000ddd000", Repo: "app", Tag: "v1", Created: now.Add(-4 * time.Hour)},
+	}}
+	p := BuildPlan(f, o)
+	if has(p, "docker-image", "app:v2") {
+		t.Fatalf("rollback target planned for removal: %+v", p.Items)
+	}
+	if !has(p, "docker-image", "app:v1") {
+		t.Fatalf("an old image that is not a target should still be planned: %+v", p.Items)
+	}
+	if !strings.Contains(strings.Join(p.Notes, "\n"), "rollback target") {
+		t.Fatalf("plan should say why the image was kept: %+v", p.Notes)
+	}
+}
+
 func TestContainerReasonListsItsAnonymousVolumes(t *testing.T) {
 	anon := strings.Repeat("cd", 32)
 	f := Facts{HasDocker: true, Containers: []Container{
