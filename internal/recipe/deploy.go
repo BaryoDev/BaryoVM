@@ -122,6 +122,8 @@ type DeployInput struct {
 	// File is the compose file name written in Dir. Empty means DefaultComposeFile.
 	File string
 	Sudo bool
+	// Runtime is the stack's container runtime: docker (also when empty) or podman.
+	Runtime string
 	// Env holds the resolved input values, written to Dir/.env.
 	Env map[string]string
 	// Clock times the per-service health wait. A zero Clock uses the real one.
@@ -190,7 +192,7 @@ func (in DeployInput) DropCmd() string {
 }
 
 func (in DeployInput) stack(file string) compose.Stack {
-	return compose.Stack{Dir: in.Dir, File: file, Sudo: in.Sudo}
+	return compose.Stack{Dir: in.Dir, File: file, Sudo: in.Sudo, Runtime: in.Runtime}
 }
 
 // HealthCmd probes a service's health URL from the VM, where a loopback URL means the right host.
@@ -221,11 +223,26 @@ func Deploy(c sshx.Runner, in DeployInput) (*DeployResult, error) {
 	if _, err := run(in.PrepareCmd()); err != nil {
 		return res, fmt.Errorf("prepare %s: %w", in.Dir, err)
 	}
+	var ir envfile.Runner
 	if len(in.Env) > 0 {
-		ir, ok := c.(envfile.Runner)
-		if !ok {
+		var ok bool
+		if ir, ok = c.(envfile.Runner); !ok {
 			return res, errors.New("this connection cannot send input to the VM, so the recipe inputs cannot be written")
 		}
+	}
+
+	names := r.ServiceNames()
+	newFile := in.file() + ".new"
+	if _, err := run(in.WriteFileCmd(newFile, yaml)); err != nil {
+		return res, fmt.Errorf("write the compose file: %w", err)
+	}
+	if _, err := compose.Pull(c, in.stack(newFile), names); err != nil {
+		_, _ = run(in.DropNewCmd())
+		return res, fmt.Errorf("pull images (nothing was changed): %w", err)
+	}
+
+	// The inputs are written only after the pull succeeded, so a registry failure leaves .env alone.
+	if len(in.Env) > 0 {
 		keys := make([]string, 0, len(in.Env))
 		for k := range in.Env {
 			keys = append(keys, k)
@@ -239,16 +256,6 @@ func Deploy(c sshx.Runner, in DeployInput) (*DeployResult, error) {
 				return res, fmt.Errorf("write input %s: %w", k, err)
 			}
 		}
-	}
-
-	names := r.ServiceNames()
-	newFile := in.file() + ".new"
-	if _, err := run(in.WriteFileCmd(newFile, yaml)); err != nil {
-		return res, fmt.Errorf("write the compose file: %w", err)
-	}
-	if _, err := compose.Pull(c, in.stack(newFile), names); err != nil {
-		_, _ = run(in.DropNewCmd())
-		return res, fmt.Errorf("pull images (nothing was changed): %w", err)
 	}
 
 	snap, err := run(in.SnapshotCmd())

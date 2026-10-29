@@ -112,3 +112,11 @@ func quote(s string) string {
 	r := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n")
 	return "\"" + r.Replace(s) + "\""
 }
+
+func TestAnInputDefaultWithALineBreakIsRefusedAtLoad(t *testing.T) {
+	body := `{"schema":1,"name":"x","services":[{"name":"a","image":"a:1"}],"inputs":[{"name":"SITE","default":"a\nb"}]}`
+	_, err := Parse([]byte(body), "r.json")
+	if err == nil || !strings.Contains(err.Error(), "SITE") {
+		t.Fatalf("want a refusal naming the input, got %v", err)
+	}
+}

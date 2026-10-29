@@ -12,7 +12,9 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/recipe"
+	"github.com/BaryoDev/BaryoVM/internal/releasestate"
 	"github.com/BaryoDev/BaryoVM/internal/secretref"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 )
@@ -60,11 +62,30 @@ func parseInputBindings(in []string) (map[string]string, error) {
 	return out, nil
 }
 
+type recipeData struct {
+	*recipe.DeployResult
+	ManagedSnapshot string         `json:"managedSnapshot,omitempty"`
+	Cloud           []managed.Call `json:"cloud,omitempty"`
+}
+
 // releaseRecipe deploys a stack from its recipe. It is the recipe path of `stack release`: the
 // services come from the recipe, not from a manifest, and a stack without a recipe never gets here.
 func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Result) error {
-	fail := func(e error, data any) error {
-		*out = ui.Result{OK: false, Action: "stack release", Error: e.Error(), Data: data}
+	// cloudCalls are the AWS or Azure CLI calls of the pre-release snapshot, kept for the envelope.
+	var cloudCalls []managed.Call
+	var snapshotID string
+	// recipeData is the envelope data: the deploy result with the snapshot record beside it.
+	data := func(res *recipe.DeployResult) any {
+		if res == nil && len(cloudCalls) == 0 {
+			return nil
+		}
+		if res == nil {
+			res = &recipe.DeployResult{}
+		}
+		return recipeData{DeployResult: res, ManagedSnapshot: snapshotID, Cloud: cloudCalls}
+	}
+	fail := func(e error, res *recipe.DeployResult) error {
+		*out = ui.Result{OK: false, Action: "stack release", Error: e.Error(), Data: data(res)}
 		return e
 	}
 	switch {
@@ -104,6 +125,28 @@ func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Re
 	}
 	defer c.Close()
 
+	// The start lock is held for the whole deploy, the same lock the manifest release takes, so two
+	// releases of one stack cannot write the same .new and .prev files. There is no step record: a
+	// recipe deploy rolls itself back, and there is nothing to resume.
+	loc := releasestate.For(st.Dir, st.Name, st.Sudo)
+	if err := releasestate.Acquire(c, loc); err != nil {
+		return fail(err, nil)
+	}
+	defer func() { _ = releasestate.Unlock(c, loc) }()
+
+	// A managed database beside the VM is snapshotted first, before the VM backup and before
+	// anything changes, as the manifest path does. --no-backup skips it with the rest.
+	if !o.NoBackup && st.Managed != nil {
+		spec := *st.Managed
+		if err := ui.Step("snapshot managed database "+spec.Database, func() error {
+			id, calls, e := managedSnapshot(spec)
+			snapshotID, cloudCalls = id, calls
+			return e
+		}); err != nil {
+			return fail(err, nil)
+		}
+	}
+
 	// Before anything changes on the host, as the manifest path does: a backup taken after the new
 	// services start already contains their migrations.
 	if !o.NoBackup && hasBackupStrategies(st) {
@@ -122,14 +165,14 @@ func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Re
 	err = ui.Step("deploy recipe "+r.Name, func() error {
 		var e error
 		res, e = recipe.Deploy(c, recipe.DeployInput{
-			Recipe: r, Dir: st.Dir, Sudo: st.Sudo, Env: env, Clock: releaseClock,
+			Recipe: r, Dir: st.Dir, Sudo: st.Sudo, Runtime: st.Runtime, Env: env, Clock: releaseClock,
 		})
 		return e
 	})
 	if err != nil {
 		return fail(err, res)
 	}
-	*out = ui.Result{OK: true, Action: "stack release", Message: st.Name + " released from recipe " + r.Name, Data: res}
+	*out = ui.Result{OK: true, Action: "stack release", Message: st.Name + " released from recipe " + r.Name, Data: data(res)}
 	ui.Successf("%s: release done", st.Name)
 	return nil
 }

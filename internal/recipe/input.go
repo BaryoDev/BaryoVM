@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/BaryoDev/BaryoVM/internal/envfile"
 )
 
 // Input is something a recipe needs before it can be deployed, declared by name and never by value.
@@ -82,6 +84,11 @@ func validateInputs(ins []Input, path string) error {
 				"recipe %s: input %q is secret and has a default.\n"+
 					"A default secret is a shared secret, and a recipe is published. Declare it with\n"+
 					"no default and let the project supply a reference.", path, in.Name)
+		}
+		// A default is written into .env like any bound value, so a line break in it is refused now,
+		// before a connection is opened, not after the host has been touched.
+		if err := envfile.ValidValue(in.Default); err != nil {
+			return fmt.Errorf("recipe %s: input %q has a default that cannot be written: %w", path, in.Name, err)
 		}
 	}
 	return nil

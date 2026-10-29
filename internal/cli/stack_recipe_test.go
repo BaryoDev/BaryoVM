@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
@@ -27,6 +28,8 @@ type recipeHost struct {
 	prevSvc string
 	// failOnce fails the first command containing the key, then lets it through.
 	failOnce map[string]string
+	// busy answers the start-lock command as held by another release.
+	busy bool
 }
 
 func (h *recipeHost) Close() error { return nil }
@@ -40,6 +43,11 @@ func (h *recipeHost) Run(cmd string) (string, error) {
 		}
 	}
 	switch {
+	case strings.Contains(cmd, "echo locked"):
+		if h.busy {
+			return "busy\n", nil
+		}
+		return "locked\n", nil
 	case strings.Contains(cmd, "ps -a --format"):
 		return "pg\n", nil
 	case strings.Contains(cmd, "echo had"):
@@ -113,6 +121,26 @@ func releaseRecipeCmd(t *testing.T, repo string, extra ...string) (string, error
 	args := append([]string{"app", "--recipe", repo, "--input", "DB_PASSWORD=env:APP_DB_PASSWORD"}, extra...)
 	stdout, _, err := runCmdE(t, newStackReleaseCmd(), nil, true, args...)
 	return stdout, err
+}
+
+// releaseRecipeBare releases with no --input, for recipes that declare none.
+func releaseRecipeBare(t *testing.T, repo string, extra ...string) (string, error) {
+	t.Helper()
+	args := append([]string{"app", "--recipe", repo}, extra...)
+	stdout, _, err := runCmdE(t, newStackReleaseCmd(), nil, true, args...)
+	return stdout, err
+}
+
+func editStack(t *testing.T, fn func(*fleet.Stack)) {
+	t.Helper()
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn(store.FindStack("app"))
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRecipeReleaseDeploysTwoServicesInOrder(t *testing.T) {
@@ -267,9 +295,9 @@ func TestRecipeReleaseRefusesHostileValues(t *testing.T) {
 			host := &recipeHost{}
 			body := `{"schema":1,"name":"app","services":[` + strings.Replace(tmpl, "%s", bad, 1) + `]}`
 			repo := recipeFixture(t, body, host)
-			_, err := releaseRecipeCmd(t, repo, "--input", "X=1")
-			if err == nil {
-				t.Fatalf("%s %q was accepted", field, bad)
+			_, err := releaseRecipeBare(t, repo)
+			if err == nil || strings.Contains(err.Error(), "does not declare") {
+				t.Fatalf("%s %q was accepted or stopped before validation: %v", field, bad, err)
 			}
 			if len(host.seen) != 0 {
 				t.Fatalf("%s %q reached the VM: %v", field, bad, host.seen)
@@ -280,12 +308,12 @@ func TestRecipeReleaseRefusesHostileValues(t *testing.T) {
 		host := &recipeHost{}
 		body := `{"schema":1,"name":"app","files":[{"from":"` + bad + `","to":"/srv/x"}]}`
 		repo := recipeFixture(t, body, host)
-		if _, err := releaseRecipeCmd(t, repo); err == nil || len(host.seen) != 0 {
+		if _, err := releaseRecipeBare(t, repo); err == nil || len(host.seen) != 0 {
 			t.Fatalf("files from %q: err %v, ran %v", bad, err, host.seen)
 		}
 		body = `{"schema":1,"name":"app","files":[{"from":"dist/","to":"/srv/` + bad + `"}]}`
 		repo = recipeFixture(t, body, host)
-		if _, err := releaseRecipeCmd(t, repo); err == nil || len(host.seen) != 0 {
+		if _, err := releaseRecipeBare(t, repo); err == nil || len(host.seen) != 0 {
 			t.Fatalf("files to %q: err %v, ran %v", bad, err, host.seen)
 		}
 	}
@@ -397,5 +425,128 @@ func TestRecipeReleaseNoBackupSkipsIt(t *testing.T) {
 	}
 	if host.index("up -d --no-deps 'web'", 0) < 0 {
 		t.Fatal("the release did not run")
+	}
+}
+
+func TestRecipeReleaseTakesTheManagedSnapshotFirst(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	editStack(t, func(st *fleet.Stack) {
+		st.Managed = &managed.Spec{Provider: managed.AWS, Profile: "p", Region: "us-east-1", Database: "shop-db"}
+	})
+	f := &fakeCloud{}
+	withFakeCloud(t, f)
+
+	stdout, err := releaseRecipeCmd(t, repo)
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if len(f.seen) != 3 || !strings.Contains(f.seen[2], "wait db-snapshot-available") {
+		t.Fatalf("cloud calls: %v", f.seen)
+	}
+	var env struct {
+		Data struct {
+			Snapshot string         `json:"managedSnapshot"`
+			Cloud    []managed.Call `json:"cloud"`
+			Services []string       `json:"services"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Data.Snapshot != "baryovm-20261030-010203" || len(env.Data.Cloud) != 3 || len(env.Data.Services) != 2 {
+		t.Errorf("envelope data: %+v", env.Data)
+	}
+}
+
+func TestRecipeReleaseStopsOnAFailedSnapshotAndSendsNothing(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	editStack(t, func(st *fleet.Stack) {
+		st.Managed = &managed.Spec{Provider: managed.AWS, Profile: "p", Region: "us-east-1", Database: "shop-db"}
+	})
+	withFakeCloud(t, &fakeCloud{fail: map[string]int{"wait db-snapshot-available": 255}})
+
+	stdout, err := releaseRecipeCmd(t, repo)
+	if err == nil {
+		t.Fatal("a snapshot that did not finish must block the release")
+	}
+	for _, c := range host.seen {
+		if strings.Contains(c, "compose") || strings.Contains(c, "mkdir -p '/opt/app'") {
+			t.Fatalf("nothing may be sent to the VM after a failed snapshot: %s", c)
+		}
+	}
+	e := parseFail(t, stdout)
+	if cloud, _ := e.Data["cloud"].([]any); len(cloud) != 3 {
+		t.Errorf("failure envelope should carry the cloud calls: %v", e.Data)
+	}
+}
+
+func TestRecipeReleaseNoBackupSkipsTheManagedSnapshot(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	editStack(t, func(st *fleet.Stack) {
+		st.Managed = &managed.Spec{Provider: managed.AWS, Profile: "p", Region: "us-east-1", Database: "shop-db"}
+	})
+	f := &fakeCloud{}
+	withFakeCloud(t, f)
+	if _, err := releaseRecipeCmd(t, repo, "--no-backup"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.seen) != 0 {
+		t.Fatalf("--no-backup must skip the snapshot: %v", f.seen)
+	}
+}
+
+func TestRecipeReleaseUsesThePodmanRuntime(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	editStack(t, func(st *fleet.Stack) { st.Runtime = "podman" })
+	if _, err := releaseRecipeCmd(t, repo); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range host.seen {
+		if strings.Contains(c, "docker compose") || strings.Contains(c, "docker ") {
+			t.Fatalf("a podman stack ran docker: %s", c)
+		}
+	}
+	if host.index("podman compose", 0) < 0 {
+		t.Fatalf("no podman compose call:\n%s", strings.Join(host.seen, "\n"))
+	}
+}
+
+func TestRecipeReleaseRefusesWhileTheHostLockIsHeld(t *testing.T) {
+	host := &recipeHost{busy: true}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	_, err := releaseRecipeCmd(t, repo)
+	if err == nil || !strings.Contains(err.Error(), "lock") {
+		t.Fatalf("want a lock refusal, got %v", err)
+	}
+	if host.index("compose", 0) >= 0 || host.index("mkdir -p '/opt/app'", 0) >= 0 {
+		t.Fatalf("nothing may run while the lock is held:\n%s", strings.Join(host.seen, "\n"))
+	}
+}
+
+func TestRecipeReleaseDropsTheLockWhenDone(t *testing.T) {
+	host := &recipeHost{}
+	repo := recipeFixture(t, twoServiceRecipe, host)
+	if _, err := releaseRecipeCmd(t, repo); err != nil {
+		t.Fatal(err)
+	}
+	if host.index("rmdir", 0) < 0 {
+		t.Fatal("the lock was not released")
+	}
+}
+
+func TestRecipeReleaseRefusesAReleaseFileAndARecipeTogether(t *testing.T) {
+	host := &recipeHost{}
+	recipeFixture(t, twoServiceRecipe, host)
+	editStack(t, func(st *fleet.Stack) { st.ReleaseFile = "/x/release.json"; st.RecipeFile = "/x/baryovm.recipe.json" })
+	_, _, err := runCmdE(t, newStackReleaseCmd(), nil, true, "app")
+	if err == nil || !strings.Contains(err.Error(), "both a release file and a recipe") {
+		t.Fatalf("want the both-files refusal, got %v", err)
+	}
+	if len(host.seen) != 0 {
+		t.Fatalf("nothing may run: %v", host.seen)
 	}
 }

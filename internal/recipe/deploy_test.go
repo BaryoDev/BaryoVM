@@ -5,6 +5,7 @@
 package recipe
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,5 +63,52 @@ func TestComposeYAMLQuotesValuesAndNeedsAnImage(t *testing.T) {
 	r.Services[0].Image, r.Services[0].Build = "", "."
 	if _, err := r.ComposeYAML(); err == nil {
 		t.Fatal("a build service is not deployable yet and must say so")
+	}
+}
+
+// stubRunner records commands and stdin and fails the one containing failOn.
+type stubRunner struct {
+	seen   []string
+	stdin  []string
+	failOn string
+}
+
+func (s *stubRunner) Run(cmd string) (string, error) {
+	s.seen = append(s.seen, cmd)
+	if s.failOn != "" && strings.Contains(cmd, s.failOn) {
+		return "", errors.New("registry unreachable")
+	}
+	return "none\n", nil
+}
+
+func (s *stubRunner) RunInput(cmd, stdin string) (string, error) {
+	s.seen = append(s.seen, cmd)
+	s.stdin = append(s.stdin, stdin)
+	return "", nil
+}
+
+func TestAFailedPullWritesNoEnvValue(t *testing.T) {
+	r := &Recipe{Schema: 1, Name: "x", Services: []Service{{Name: "a", Image: "img:1"}},
+		Inputs: []Input{{Name: "SITE", Default: "http://x"}}}
+	c := &stubRunner{failOn: " pull "}
+	_, err := Deploy(c, DeployInput{Recipe: r, Dir: "/opt/x", Env: map[string]string{"SITE": "http://x"}})
+	if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("want the pull refusal, got %v", err)
+	}
+	if len(c.stdin) != 0 {
+		t.Fatalf("a failed pull must not write .env: %q", c.stdin)
+	}
+}
+
+func TestPodmanRuntimeReachesTheComposeCalls(t *testing.T) {
+	r := &Recipe{Schema: 1, Name: "x", Services: []Service{{Name: "a", Image: "img:1"}}}
+	c := &stubRunner{}
+	if _, err := Deploy(c, DeployInput{Recipe: r, Dir: "/opt/x", Runtime: "podman"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range c.seen {
+		if strings.Contains(cmd, "docker compose") {
+			t.Fatalf("docker used on a podman stack: %s", cmd)
+		}
 	}
 }
