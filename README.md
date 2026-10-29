@@ -17,7 +17,7 @@ UI, MCP server, or agent can drive the exact same surface.
 
 > **Status: early-stage.** The SSH · compose · **release** · **backup/restore**
 > paths are tested and used daily. VM *provisioning* (AWS Lightsail) is billable
-> and ships behind `--dry-run`, so treat it as experimental. Not affiliated with any
+> and prints a plan only until you pass `--yes`, so treat it as experimental. Not affiliated with any
 > cloud provider.
 
 ## How it works
@@ -149,7 +149,7 @@ baryovm stack restore app --yes
 | **Backups** | **`stack backup`** · `stack backups` · **`stack restore --yes`** |
 | **Single container** | `deploy` |
 | **Security** | **`scan`** (OWASP ZAP baseline, passive) |
-| **Provision** (experimental, billable) | `vm provision` · `up` (behind `--dry-run`) |
+| **Provision** (experimental, billable) | `vm provision` · `up` (plan only without `--yes`) |
 | **Local** | `doctor [--fix]` · `version` |
 
 Generated command flags and examples: **[command reference](docs/commands/baryovm.md)**.

@@ -85,7 +85,8 @@ func recordedAction(path string) bool {
 		return false
 	}
 	first, _, _ := strings.Cut(path, " ")
-	return first != "completion" && !strings.HasPrefix(first, "__")
+	// git, gh and guard wrap local tools, not fleet changes; their args are free text.
+	return first != "completion" && first != "git" && first != "gh" && first != "guard" && !strings.HasPrefix(first, "__")
 }
 
 // activityError is a fixed string chosen here, never the error's own text. Error text carries the

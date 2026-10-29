@@ -24,7 +24,8 @@ owner-only (0600) and references SSH key paths, not key contents.
 ## What is built but untested
 
 - Provisioning a new Lightsail VM (`vm provision`, `up`). It is billable, so it
-  ships behind `--dry-run` until you actually need a new box. OCI is stubbed.
+  prints a plan and creates nothing until you pass `--yes`. It is tested with fakes only,
+  never against a real account. OCI is stubbed.
 
 ## Fleet: VMs
 
@@ -252,6 +253,50 @@ That second one comes from sshd rather than from guesswork. sshd writes "invalid
 only when the account does not exist, so an attempt without that token names a real
 account, and the report marks it. Expect `root` to appear on any public host, since it
 is on every scanner's list; your own login name appearing is the interesting case.
+
+## Checking a VM's health
+
+`vm health` asks a machine the questions an owner should ask monthly. It is read only: it changes
+nothing on the host.
+
+```sh
+baryovm vm health oracle
+baryovm vm health --all -o json
+```
+
+Each line is a check with a verdict of `ok`, `warn`, `fail`, `unknown` or `skip`:
+
+| Check | Looks at | Verdict |
+| --- | --- | --- |
+| `disk-root` | `df` on `/` | warn at 80% used, fail at 90% |
+| `disk-docker` | `df` on the docker root, plus image and volume sizes from `docker system df` | same thresholds |
+| `updates` | pending updates, security and other (`dnf check-update` and `--security`, or `apt list --upgradable`) | any security update fails, more than 25 others warn |
+| `reboot` | `needs-restarting -r`, or `/var/run/reboot-required`; uptime in the detail | a required reboot warns |
+| `containers` | restarting, dead, unhealthy, or exited with a non-zero code or under `restart: always`; running ones that restarted more than 5 times warn | any problem fails |
+| `unattended-updates` | `APT::Periodic::Unattended-Upgrade`, or a dnf-automatic timer that applies updates | off warns |
+
+The limits are flags, shown here with their defaults:
+
+```sh
+baryovm vm health oracle --disk-warn 80 --disk-fail 90 --max-updates 25 --max-restarts 5
+```
+
+`--disk-warn` and `--disk-fail` are percent used, both 1 to 100, with warn below fail.
+`--max-updates` is how many non-security updates may be pending, and `--max-restarts` is how many
+restarts a running container may have; more than that warns. `--max-updates 0` warns on any
+pending update. A negative count is refused. A bad value is refused before any connection is opened.
+The limits used are echoed in `thresholds` in the JSON report.
+
+It needs `sudo -n` for docker and the package manager. A check it cannot answer (no docker, no
+sudo, no supported package manager) is `unknown` or `skip` with the reason, and the rest still run.
+`apt list` reads the host's cached index, which this command does not refresh. The command exits
+non-zero when any check is a `fail`. With `--all`, an unreachable VM is a failed report and the
+run goes on to the next one; a Windows VM is skipped.
+
+In `-o json`, a single VM puts one report in `data` (`vm`, `verdict`, `packageManager`, `checks`),
+and `--all` puts a list of reports there. Each check has `name`, `verdict`, `detail`, optional
+`items` (the containers at fault) and `metrics` (numbers such as `usedPercent`, `security`,
+`other`, `uptimeDays`).
 
 ## Patching and pruning a VM
 
@@ -766,6 +811,7 @@ baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune
 baryovm stack backups baryoclub     # list backups, newest first
 baryovm stack restore baryoclub --yes                    # newest (REPLACES data)
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
+baryovm stack restore baryoclub --drill                  # prove the newest dump restores
 ```
 
 If the project's `.env` is root-owned, the right posture for a file holding the database password,
@@ -789,6 +835,15 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
 which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
 restore runs.
+
+`stack restore <name> --drill` proves a backup restores. It starts a throwaway postgres container on
+the VM (same image as the stack's database container, no network, no mounts), `pg_restore`s the
+newest dump (or `--file`) into it with `--no-owner --no-privileges`, checks that the restore had no
+errors and that the table count is above zero, then removes the container. The container is removed
+on failure too (an EXIT trap on the VM, and a second removal from the client). The live database and
+its container are only read for their image name, so `--drill` needs no `--yes` and rejects one. It
+emits a result on both paths; in `-o json` success `data` holds `file`, `tables`, `container`,
+`removed` and `liveTouched` (always false). `--drill --dry-run` prints the script without connecting.
 
 Example: recreating the barakoCMS API and the barakoBrew console together is one command:
 
@@ -858,11 +913,15 @@ connection. Env values are masked as `***` in that output.
 ## Provision + deploy in one (untested, billable)
 
 ```sh
-# Preview only, no AWS calls:
-baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519 --dry-run
+# Plan only (the default): shows what would be created and the cost, creates nothing:
+baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519
 
-# The one button: provision (if new) -> install Docker -> deploy
-baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 \
+# Really create it (billable):
+baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519 --yes
+
+# The one button: provision (if new) -> install Docker -> deploy. Without --yes
+# it prints the plan and stops.
+baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 --yes \
   --image nginx:alpine --container site -p 80:80
 
 # On an already-registered VM, up just bootstraps + deploys:
@@ -870,8 +929,17 @@ baryovm up oracle --image app:latest --container app -p 80:8080
 
 # Limit who can reach the ports (Lightsail firewall):
 baryovm vm provision web1 --key ~/.ssh/id_ed25519 \
-  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare
+  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare \
+  --host example.org --yes
 ```
+
+`--yes` is required to create anything. If `--http-from` or `--https-from` limits
+a web port, `--yes` also needs the hostname check to pass: name every hostname the
+VM will serve with `--host` (repeatable). Each must resolve, and only to addresses
+inside the allowed ranges, because a name that reaches the VM directly would be cut
+off by the firewall. A limit with no `--host`, an unresolvable name or a direct
+address refuses the create and names the host. With both web ports open to everyone
+the check is not needed. `--dry-run` is still accepted and wins over `--yes`.
 
 `--ssh-from`, `--http-from` and `--https-from` take CIDRs (comma separated or
 repeated). A port with no flag stays open to `0.0.0.0/0`, as before. `cloudflare`
@@ -880,6 +948,68 @@ cloudflare.com/ips-v4 and ips-v6 when the command runs. If the fetch fails or
 returns an empty list, the command stops before creating anything, and it never
 falls back to an empty or open list. The dry run prints how many ranges each
 port gets. The same flags work on `up`.
+
+## Guarding commits, pushes and PR text
+
+`baryovm git` and `baryovm gh` run the real tool after checking for keys. Agents
+and scripts use these instead of the raw commands.
+
+```sh
+baryovm git commit -m "add login"      # scans the staged diff, and the message
+baryovm git commit -am "fix"           # also scans the working diff
+baryovm git push -u origin main        # checks the host, scans unpushed commits
+baryovm gh pr create --title t --body-file body.md
+baryovm gh release create v1 --notes-file notes.md
+baryovm guard install-hooks            # pre-commit and pre-push hooks, same checks
+```
+
+Checked:
+
+- `git commit`: the staged diff, the working diff with `-a` or paths, the
+  message from `-m`, and the message file from `-F` or `--file`.
+- `git push`: the host of every push URL of the remote, then every commit not on
+  the remote. A delete (`--delete`, `-d`, `:branch`) skips the commit scan but
+  still gets the host check.
+- `gh pr`, `gh issue` and `gh release`, for `create`, `edit`, `comment` and
+  `review` where gh has them: `--title`, `--body`, `-b`, `--body-file`, `-F`,
+  `--notes`, `-n` and `--notes-file`. A repo flag such as `-R o/r` before the
+  verb is fine.
+
+Option parsing follows the tools: git long options may be abbreviated (an
+ambiguous abbreviation is refused), grouped short flags are read letter by
+letter, a gh flag group with a letter the subcommand does not have is refused,
+and a relative `-F` path is refused when any git global flag other than `-C` is
+given, or `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` or any `GIT_CONFIG*`
+variable is set, since each can move where git reads the file from; pass an
+absolute path. For `gh pr`, `gh issue` and `gh release` the only flags allowed before the
+command are `-R <repo>`, `--repo <repo>` and `--repo=<repo>`.
+
+Every other git and gh command passes straight through with the tool's own
+output and exit code. Flags after `git` or `gh` belong to that tool, so these
+two take none of their own; set `BARYOVM_OUTPUT=json` for a JSON refusal.
+
+The scanner looks for Google `AIza` keys, GitHub tokens, AWS access keys, Slack
+tokens, Stripe live keys, npm tokens, Anthropic (`sk-ant-`) and OpenAI (`sk-`,
+`sk-proj-`) keys, PGP private key blocks and other private key blocks. A refusal
+exits 1, names `file:line (rule)`, never prints the value, and does not run git
+or gh. Put `allow-secret` in a comment on a line to exempt a test fixture. A body
+or message from stdin (`-F -`) is refused because it cannot be checked; write it
+to a file. `git push` scans only commits not already on the remote.
+
+To limit where a repository may push, list the allowed hosts. With none set,
+every host is allowed. A push to any other host is refused before git contacts
+it. If the setting cannot be read (a broken git config, as opposed to unset),
+the command is refused rather than allowed.
+
+```sh
+git config --add baryovm.allowedHosts github.com
+export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
+```
+
+`guard install-hooks` writes `pre-commit`, `commit-msg` and `pre-push` hooks into the current
+repository so commits made without the wrapper are checked too. It leaves a hook
+that is not BaryoVM's alone unless you pass `--force`, which keeps it as
+`<name>.baryovm-old`. The hooks fail when `baryovm` is not on PATH.
 
 ## Prerequisites
 
