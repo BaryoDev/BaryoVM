@@ -24,7 +24,8 @@ owner-only (0600) and references SSH key paths, not key contents.
 ## What is built but untested
 
 - Provisioning a new Lightsail VM (`vm provision`, `up`). It is billable, so it
-  ships behind `--dry-run` until you actually need a new box. OCI is stubbed.
+  prints a plan and creates nothing until you pass `--yes`. It is tested with fakes only,
+  never against a real account. OCI is stubbed.
 
 ## Fleet: VMs
 
@@ -858,11 +859,15 @@ connection. Env values are masked as `***` in that output.
 ## Provision + deploy in one (untested, billable)
 
 ```sh
-# Preview only, no AWS calls:
-baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519 --dry-run
+# Plan only (the default): shows what would be created and the cost, creates nothing:
+baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519
 
-# The one button: provision (if new) -> install Docker -> deploy
-baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 \
+# Really create it (billable):
+baryovm vm provision web1 --provider lightsail --key ~/.ssh/id_ed25519 --yes
+
+# The one button: provision (if new) -> install Docker -> deploy. Without --yes
+# it prints the plan and stops.
+baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 --yes \
   --image nginx:alpine --container site -p 80:80
 
 # On an already-registered VM, up just bootstraps + deploys:
@@ -870,8 +875,17 @@ baryovm up oracle --image app:latest --container app -p 80:8080
 
 # Limit who can reach the ports (Lightsail firewall):
 baryovm vm provision web1 --key ~/.ssh/id_ed25519 \
-  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare
+  --ssh-from 203.0.113.7/32 --http-from cloudflare --https-from cloudflare \
+  --host example.org --yes
 ```
+
+`--yes` is required to create anything. If `--http-from` or `--https-from` limits
+a web port, `--yes` also needs the hostname check to pass: name every hostname the
+VM will serve with `--host` (repeatable). Each must resolve, and only to addresses
+inside the allowed ranges, because a name that reaches the VM directly would be cut
+off by the firewall. A limit with no `--host`, an unresolvable name or a direct
+address refuses the create and names the host. With both web ports open to everyone
+the check is not needed. `--dry-run` is still accepted and wins over `--yes`.
 
 `--ssh-from`, `--http-from` and `--https-from` take CIDRs (comma separated or
 repeated). A port with no flag stays open to `0.0.0.0/0`, as before. `cloudflare`

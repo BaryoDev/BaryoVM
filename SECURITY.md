@@ -70,6 +70,6 @@ disclosure.
 
 ## Scope / status
 
-BaryoVM is early-stage. VM provisioning (Lightsail) is billable and ships behind
-`--dry-run`; treat it as experimental. The SSH/compose/backup/release paths are
+BaryoVM is early-stage. VM provisioning (Lightsail) is billable and prints a plan
+only until `--yes` is passed; treat it as experimental. The SSH/compose/backup/release paths are
 the tested, day-to-day surface.

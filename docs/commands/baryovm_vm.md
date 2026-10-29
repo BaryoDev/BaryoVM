@@ -30,7 +30,7 @@ baryovm vm [flags]
 * [baryovm vm list](baryovm_vm_list.md)	 - List registered VMs
 * [baryovm vm patch](baryovm_vm_patch.md)	 - Update OS packages on a VM and check the stack came back
 * [baryovm vm ping](baryovm_vm_ping.md)	 - SSH in and report host + Docker status
-* [baryovm vm provision](baryovm_vm_provision.md)	 - Provision a new cloud VM and register it in the fleet
+* [baryovm vm provision](baryovm_vm_provision.md)	 - Provision a new cloud VM and register it in the fleet (plan only without --yes)
 * [baryovm vm prune](baryovm_vm_prune.md)	 - Free disk space on a VM, planning first
 * [baryovm vm remove](baryovm_vm_remove.md)	 - Remove a VM from the fleet (does not destroy the machine)
 * [baryovm vm runner](baryovm_vm_runner.md)	 - Install a GitHub Actions self-hosted runner on a VM

@@ -168,8 +168,9 @@ Do not weaken these without a very good reason:
   deliberate command rather than a flag on `stack add`.
 - An unchanged stack is never recreated, so a nightly job is not a nightly
   restart.
-- Billable provisioning (`vm provision`, `up`) is expected to be exercised with
-  `--dry-run`.
+- Billable provisioning (`vm provision`, `up`) prints a plan and creates nothing
+  without `--yes`. A real create also needs the `--host` check to pass when
+  80 or 443 is limited.
 - The compose dir (with its `.env`) is never in a release manifest's `sync`
   list, so `--delete` cannot wipe secrets.
 
