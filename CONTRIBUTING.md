@@ -3,6 +3,9 @@
 BaryoVM builds shell commands and runs them on machines you own, over SSH. A mistake here does
 not fail a unit test, it runs on a live host. That shapes everything below.
 
+BaryoVM is MPL-2.0. Opening a pull request means you agree to the [contributor terms](CLA.md):
+your contribution ships under MPL-2.0, you keep your copyright, and there is nothing to sign.
+
 ## Build and test
 
 ```sh
