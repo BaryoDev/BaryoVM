@@ -95,3 +95,23 @@ func TestLoadRefusesBadReferenceAndKeepsLiteralArgs(t *testing.T) {
 		t.Error("an arg name that is not a variable name must be refused at load")
 	}
 }
+
+// A name lands unquoted in the export line the VM evaluates, and a value with a line break slips
+// past Redact, so both are refused before anything is sent.
+func TestBuildInputRefusesUnsafeNamesAndLineBreaks(t *testing.T) {
+	for name, b := range map[string]Build{
+		"name with a command": {Image: "app:1", Args: map[string]string{"X=1;id;Y": "v"}},
+		"name with a space":   {Image: "app:1", Args: map[string]string{"A B": "v"}},
+		"arg with a newline":  {Image: "app:1", Args: map[string]string{"TOK": "env:NPM"}},
+		"secret with a CR":    {Image: "app:1", Secrets: map[string]string{"npmrc": "env:CR"}},
+	} {
+		in, err := BuildInput(b, envRes(map[string]string{"NPM": "line1\nline2", "CR": "a\rb"}))
+		if err == nil {
+			t.Errorf("%s: want a refusal, got stdin %q", name, in)
+			continue
+		}
+		if strings.Contains(err.Error(), "line1") || strings.Contains(err.Error(), "a\rb") {
+			t.Errorf("%s: the error carries the value: %v", name, err)
+		}
+	}
+}

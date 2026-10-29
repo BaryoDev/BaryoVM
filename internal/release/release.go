@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -318,6 +319,10 @@ func (b Build) HasInput() bool { return len(b.Args) > 0 || len(b.Secrets) > 0 }
 func BuildInput(b Build, res secretref.Resolver) (string, error) {
 	var sb strings.Builder
 	for _, k := range sortedKeys(b.Args) {
+		// The name lands unquoted in an export line the VM evaluates, so it must be a plain name.
+		if !argName.MatchString(k) {
+			return "", fmt.Errorf("build %s: arg name %q is not a shell variable name (letters, digits and _)", b.Image, k)
+		}
 		v := b.Args[k]
 		if secretref.IsRef(v) {
 			r, err := res.Resolve(v)
@@ -326,6 +331,9 @@ func BuildInput(b Build, res secretref.Resolver) (string, error) {
 			}
 			v = r
 		}
+		if strings.ContainsAny(v, "\r\n") {
+			return "", fmt.Errorf("build %s: arg %s has a line break, which cannot be redacted from remote output", b.Image, k)
+		}
 		sb.WriteString("export " + k + "=" + sshx.Quote(v) + "\n")
 	}
 	for i, id := range sortedKeys(b.Secrets) {
@@ -333,10 +341,15 @@ func BuildInput(b Build, res secretref.Resolver) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("build %s: secret %s: %w", b.Image, id, err)
 		}
+		if strings.ContainsAny(v, "\r\n") {
+			return "", fmt.Errorf("build %s: secret %s has a line break, which cannot be redacted from remote output", b.Image, id)
+		}
 		sb.WriteString("export " + secretVar(i) + "=" + sshx.Quote(v) + "\n")
 	}
 	return sb.String(), nil
 }
+
+var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Redact removes every value held in a BuildInput from msg. Remote output (docker's stderr) is the
 // one place a value could come back, so it passes through here before it becomes an error.
