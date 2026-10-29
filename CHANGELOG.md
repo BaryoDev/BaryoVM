@@ -10,6 +10,60 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Added
 
+- **`--dry-run` on `stack release`, `stack deploy`, `stack backup`, `stack restore`, `vm bootstrap`
+  and `deploy`.** Each prints the commands it would run and opens no connection. `stack release
+  --dry-run` shows the rsync invocations (with `--delete` and the trailing slash), builds, hooks,
+  backup and compose up, and never runs a hook, takes the release lock or writes a record. `stack
+  restore --dry-run` needs no `--yes` and names the backup it would use. In `-o json` the plan is in
+  `data`. ([#34])
+- **`stack release` records its progress and can resume.** A JSON file on the host, written under
+  the host lock before the first step that changes anything, holds the commit, the backup taken, the
+  steps done and the failed step with its error. A finished release removes it and records the
+  deployed commit. A release that finds one refuses and says what the earlier run did and did not
+  touch. `--resume` continues from the first step not done with the same backup, and `--clear`
+  removes the record. A half-applied deploy is not resumable and points at `stack restore`. ([#136])
+- **`stack rollback` goes back to the previous images.** `stack release` and `stack update` save the
+  running images in `images-before.json` next to the backups before the first start. `stack rollback
+  <name>` retags them and brings the stack up, and `--list` shows what is recorded. It never touches
+  the database: it prints the matching backups and leaves `stack restore --yes` as the explicit
+  step. ([#37])
+- **Adopt a hand-run container.** `stack release --adopt` and `stack deploy --adopt` remove a
+  hand-run container that holds a `container_name` the compose file wants, after printing its name,
+  image and created time. If it uses a named volume the compose file does not declare `external:
+  true`, the adoption is refused, nothing is removed, and the volume name and the YAML to add are
+  printed. There is no bypass flag. ([#7])
+- **`verifyVisual` in the release manifest.** Opens the page in a headless browser on the VM at each
+  listed width, saves a screenshot per release and width, and fails the release naming any width
+  where the page scrolls sideways. ([#70])
+- **`requireLocal` in the release manifest.** Lists paths under `localRoot` that must exist. A
+  missing one refuses the release before the backup, the sync and `postDeploy`, and names the path.
+  ([#68])
+- **Source ranges for the SSH and web ports.** `vm harden --ssh-from <cidr,...>` limits port 22 in
+  firewalld or ufw and refuses a list that excludes the address you are connecting from. `vm
+  provision` takes per-port source ranges for the Lightsail firewall, including a `cloudflare`
+  preset fetched at run time; a failed fetch aborts instead of opening the port. Unset ports stay
+  open to `0.0.0.0/0` as before. ([#106])
+- **Passive edge checks in `scan`, and `--resolver`.** After the ZAP baseline, `scan` checks CAA,
+  SPF, DMARC, whether the bare IP serves a site over HTTPS (no SNI) or HTTP, `security.txt` per RFC
+  9116, and reports the HSTS header as a value. Findings join the ZAP findings in one list with the
+  same severities, `--fail-on` and `-o json` envelope; edge findings add `check` and `detail`. It
+  sends five DNS lookups and three HTTP requests, each with a timeout inside a 30 second cap.
+  `--resolver <ip[:port]>` pins the DNS server. The bare IP probe skips non-global addresses and the
+  HTTP dialer refuses them, and text from the network is stripped of control characters and capped
+  at 300 characters. `--url` now refuses a bare IP, a non-punycode name and a URL with credentials.
+  ([#107])
+- **`vm prune <name>`.** Plans disk cleanup by default (item, size, reason) and deletes nothing
+  until `--apply`, which prints the space freed and `df` before and after. Never touches named
+  volumes, images any container uses, `bin/` without a project file, or dirty worktrees. `--floor
+  <GB>` does nothing while enough space is free, and apply takes a `flock` on the VM. ([#138])
+- **`vm patch <name>`.** Updates OS packages on a VM as a detached systemd unit, decides the reboot
+  from the host (`needs-restarting -r` or `/var/run/reboot-required`), reboots only with `--reboot`
+  or a prompt, then checks every container, nginx and `nginx -t` against a snapshot taken first. A
+  container that was already unhealthy is not a failure; one that does not return makes the command
+  exit non-zero and names it. `--dry-run` lists pending updates. ([#146])
+- **CI security checks.** The CI workflow now runs `govulncheck`, `gosec` and `golangci-lint` in a
+  separate `security` job, each pinned to a version. A small `.golangci.yml` keeps the default
+  linters; findings on the tree are fixed or suppressed one line at a time with a reason. ([#45])
 - **`tls` block in the release manifest, and `stack tls <name>`.** Writes the site's nginx vhost
   (static root or a proxy to a local port) and gets the certificate with certbot, then runs
   `nginx -t` and reloads. Safe to rerun. A vhost not written by BaryoVM is refused unless `--adopt`,
@@ -19,6 +73,40 @@ previously accepted is called out here rather than left to be discovered.
   from a no-echo prompt or piped stdin and travels on the ssh session's stdin, never on a command
   line. The file is created if missing and kept at mode 600. `--recreate` runs
   `compose up -d --force-recreate` after a write. `-o json` carries keys, never values. ([#147])
+
+### Changed
+
+- **`vm harden` audits more, and separates what it fixes from what it only reports.** It now fixes
+  `~/.ssh` permissions, moves `authorized_keys.*` backups aside, puts the post-quantum key exchange
+  first when OpenSSH has one (including the Oracle Linux crypto policy path), and sets nginx
+  `server_tokens off`. It reports without changing stale keys, pending updates, unattended upgrades,
+  a missing `default_server` on 443, a kernel waiting for a reboot, and port 22 open to everyone.
+  Reported items show as warnings with `"action": "report"`, are counted in `reported`, and the run
+  ends with a changed versus reported summary. ([#67])
+- **`stack release` says which verify plan ran.** The success line names the manifest `verify` list
+  or the stack `healthUrl` and the attempt it passed on. In JSON it is `data.verify` with `source`,
+  `checks` and `attempts`. A release with nothing to verify keeps its warning. ([#122])
+- **`stack release` checks container names after the sync.** The check read the compose file from
+  the VM before the sync, so a first release could not run it. It now runs after the sync and before
+  any image build or `compose up`, and a colliding `container_name` is refused. `stack deploy` and
+  `stack update` are unchanged. ([#150])
+- An unknown subcommand of a command group (`vm nosuch`, `stack nosuch`) now fails with `unknown
+  command "nosuch" for "baryovm vm"` and a non-zero exit, with the JSON error envelope under `-o
+  json`, instead of printing help and exiting 0. ([#120])
+- `vm bootstrap` now runs its Docker install with `sudo -n`, so a host that wants a sudo password
+  fails fast instead of hanging on a prompt.
+
+### Fixed
+
+- **A first `stack release` with a database configured no longer fails on the backup.** When the
+  database container does not exist yet, the pre-release backup is skipped with one line. A
+  container that exists and fails to dump still stops the release, and the error names the cause
+  ("no container named X") instead of the script. A stack directory that is not there yet no longer
+  draws a container-name warning. ([#121])
+- **Harden fixes.** `vm harden --ssh-from` now removes a bare `ufw allow <port>` and the open ssh
+  service or port in every active firewalld zone, and reports instead of "applied" when an open rule
+  remains. Lightsail refuses a limited port that names only IPv4 or only IPv6 ranges, since the API
+  docs do not say an empty family is closed. ([#106])
 
 ## [0.5.0] - 2026-10-20
 
@@ -339,3 +427,19 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#126]: https://github.com/BaryoDev/BaryoVM/issues/126
 [#127]: https://github.com/BaryoDev/BaryoVM/issues/127
 [#49]: https://github.com/BaryoDev/BaryoVM/issues/49
+[#7]: https://github.com/BaryoDev/BaryoVM/issues/7
+[#34]: https://github.com/BaryoDev/BaryoVM/issues/34
+[#37]: https://github.com/BaryoDev/BaryoVM/issues/37
+[#45]: https://github.com/BaryoDev/BaryoVM/issues/45
+[#67]: https://github.com/BaryoDev/BaryoVM/issues/67
+[#68]: https://github.com/BaryoDev/BaryoVM/issues/68
+[#70]: https://github.com/BaryoDev/BaryoVM/issues/70
+[#106]: https://github.com/BaryoDev/BaryoVM/issues/106
+[#107]: https://github.com/BaryoDev/BaryoVM/issues/107
+[#120]: https://github.com/BaryoDev/BaryoVM/issues/120
+[#121]: https://github.com/BaryoDev/BaryoVM/issues/121
+[#122]: https://github.com/BaryoDev/BaryoVM/issues/122
+[#136]: https://github.com/BaryoDev/BaryoVM/issues/136
+[#138]: https://github.com/BaryoDev/BaryoVM/issues/138
+[#146]: https://github.com/BaryoDev/BaryoVM/issues/146
+[#150]: https://github.com/BaryoDev/BaryoVM/issues/150

@@ -1,1 +1,0 @@
-- **Harden fixes.** `vm harden --ssh-from` now removes a bare `ufw allow <port>` and the open ssh service or port in every active firewalld zone, and reports instead of "applied" when an open rule remains. Lightsail refuses a limited port that names only IPv4 or only IPv6 ranges, since the API docs do not say an empty family is closed. ([#106])

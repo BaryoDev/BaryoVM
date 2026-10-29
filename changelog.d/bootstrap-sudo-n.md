@@ -1,1 +1,0 @@
-- `vm bootstrap` now runs its Docker install with `sudo -n`, so a host that wants a sudo password fails fast instead of hanging on a prompt.
