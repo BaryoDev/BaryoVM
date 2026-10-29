@@ -295,3 +295,54 @@ func TestGuardCheckPrePushReadsStdin(t *testing.T) {
 		t.Fatal("hook let a key through")
 	}
 }
+
+func TestGuardCheckPreCommitInScratchRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	wd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	oldR := guardRunner
+	guardRunner = osRunner{}
+	t.Cleanup(func() { guardRunner = oldR; ui.SetJSON(false) })
+
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("fine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "ok.txt")
+	if err := runGroup(t, "guard", "check", "pre-commit"); err != nil {
+		t.Fatalf("clean stage refused: %v", err)
+	}
+
+	body := "a\nb\nconst k = \"" + cliFakeKey + "\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "cfg.js"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "cfg.js")
+	err := runGroup(t, "guard", "check", "pre-commit")
+	if code, _ := exitCodeOf(err); err == nil || code == 0 {
+		t.Fatalf("staged key allowed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cfg.js:3") || strings.Contains(err.Error(), cliFakeKey) {
+		t.Fatalf("error: %s", err.Error())
+	}
+}
+
+func TestGitAndGuardCommandsLeaveNoActivityLine(t *testing.T) {
+	home := activityHome(t)
+	withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runLogged(t, "git", "status"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLogged(t, "guard", "check", "pre-commit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := logLines(t, home); len(got) != 0 {
+		t.Fatalf("want no activity lines, got %v", got)
+	}
+}
