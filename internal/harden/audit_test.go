@@ -30,6 +30,15 @@ func TestSSHFilesBranches(t *testing.T) {
 	}
 	// stale keys are report only
 	mustContain(t, s, "say authorized-keys "+StateReport, "No key was removed")
+	// the drop-in step records what it did, and the kex step reads it
+	mustContain(t, s, "SSHD_STATE=same", "SSHD_STATE=would-write", "SSHD_STATE=written")
+}
+
+func TestApplyRejectsABadSSHFromBeforeRunningAnything(t *testing.T) {
+	// a nil client would panic if Apply got as far as running the script
+	if _, err := Apply(nil, Options{SSHFrom: []string{"not-a-cidr"}}); err == nil {
+		t.Fatal("a bad --ssh-from was accepted")
+	}
 }
 
 func TestUpdatesAndRebootAreReportOnly(t *testing.T) {

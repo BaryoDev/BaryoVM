@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -90,6 +91,33 @@ func TestUnknownSubcommandGivesTheJSONEnvelope(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("not JSON: %q: %v", body, err)
+	}
+	if env.OK || env.Error != `unknown command "nosuch" for "baryovm vm"` {
+		t.Errorf("envelope = %+v", env)
+	}
+}
+
+// Execute ends in os.Exit, so it runs in a child copy of the test binary.
+func TestExecuteExitsNonZeroWithTheJSONEnvelope(t *testing.T) {
+	if os.Getenv("BARYOVM_TEST_EXECUTE") == "1" {
+		os.Args = []string{"baryovm", "-o", "json", "vm", "nosuch"}
+		Execute()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExecuteExitsNonZeroWithTheJSONEnvelope$")
+	cmd.Env = append(os.Environ(), "BARYOVM_TEST_EXECUTE=1", "HOME="+t.TempDir())
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() == 0 {
+		t.Fatalf("want a non-zero exit, got %v", err)
+	}
+	var env struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("not JSON: %q: %v", stdout.String(), err)
 	}
 	if env.OK || env.Error != `unknown command "nosuch" for "baryovm vm"` {
 		t.Errorf("envelope = %+v", env)
