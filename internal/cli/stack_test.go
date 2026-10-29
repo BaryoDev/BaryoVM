@@ -29,6 +29,17 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Run(cmd string) (string, error) {
+	// The release record and the rollback record are bookkeeping around a command, not part of the
+	// sequence these tests assert on. Tests of the records use stateHost, which keeps them.
+	if strings.Contains(cmd, ".baryovm-release-") {
+		if strings.Contains(cmd, "echo locked") {
+			return "locked\n", nil
+		}
+		return "", nil
+	}
+	if strings.Contains(cmd, "images-before.json") && !strings.Contains(cmd, "db-") {
+		return "", nil
+	}
 	f.seen = append(f.seen, cmd)
 	for match, out := range f.answers {
 		if strings.Contains(cmd, match) {
