@@ -1,0 +1,11 @@
+set -e
+umask 077
+BK='/srv/bk'
+mkdir -p "$BK" && chmod 700 "$BK"
+ts=$(date +%Y%m%d-%H%M%S)
+sudo -n docker exec 'app-postgres-1' pg_dump -U 'app' -Fc 'appdb' > "$BK/db-$ts.dump"
+if [ -f '/opt/app/.env' ]; then sudo -n cp '/opt/app/.env' "$BK/env-$ts" && sudo -n chown "$(id -u):$(id -g)" "$BK/env-$ts" && chmod 600 "$BK/env-$ts"; fi
+ls -1t "$BK"/db-*.dump 2>/dev/null | tail -n +4 | xargs -r rm -f
+ls -1t "$BK"/env-* 2>/dev/null | tail -n +4 | xargs -r rm -f
+sz=$(du -h "$BK/db-$ts.dump" | cut -f1)
+echo "backup ok: db-$ts.dump ($sz) in $BK"

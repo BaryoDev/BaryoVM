@@ -1,0 +1,2 @@
+docker ps -a --format '{{.Names}}'
+sudo -n docker ps -a --format '{{.Names}}'

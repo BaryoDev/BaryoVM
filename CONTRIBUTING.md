@@ -50,6 +50,13 @@ which is worse than no test at all.
 
 Say so in the pull request: what you reverted, and what the failure said.
 
+## Golden files
+
+The backup, deploy, bootstrap, provider, toolchain and ui packages pin their commands and JSON
+in `testdata/*.golden`. When a change to a command is intended, regenerate with
+`go test ./internal/<pkg> -update`, then read the diff before you commit it. The diff is the
+review: a golden file that changed without you meaning to is the bug.
+
 ## Branches and commits
 
 Branch: `fix/short-description`, `feature/short-description`, `chore/short-description`.

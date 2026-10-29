@@ -33,9 +33,6 @@ type Report struct {
 
 // Run pulls (optionally), removes any same-named container, and starts the new one.
 func Run(c *sshx.Client, spec Spec) (Report, error) {
-	if spec.Restart == "" {
-		spec.Restart = "unless-stopped"
-	}
 	if spec.Pull {
 		if _, err := c.Run("docker pull " + sshx.Quote(spec.Image)); err != nil {
 			return Report{}, err
@@ -44,6 +41,18 @@ func Run(c *sshx.Client, spec Spec) (Report, error) {
 	// Replace any existing container with the same name (ignore "no such container").
 	_, _ = c.Run("docker rm -f " + sshx.Quote(spec.Name))
 
+	out, err := c.Run(runCmd(spec))
+	if err != nil {
+		return Report{}, err
+	}
+	return Report{Container: spec.Name, Image: spec.Image, ID: strings.TrimSpace(out)}, nil
+}
+
+// runCmd builds the `docker run` line for a spec, so the command can be pinned without a host.
+func runCmd(spec Spec) string {
+	if spec.Restart == "" {
+		spec.Restart = "unless-stopped"
+	}
 	var b strings.Builder
 	b.WriteString("docker run -d --name " + sshx.Quote(spec.Name) + " --restart " + spec.Restart)
 	for _, p := range spec.Ports {
@@ -53,12 +62,7 @@ func Run(c *sshx.Client, spec Spec) (Report, error) {
 		b.WriteString(" -e " + sshx.Quote(k+"="+spec.Env[k]))
 	}
 	b.WriteString(" " + sshx.Quote(spec.Image))
-
-	out, err := c.Run(b.String())
-	if err != nil {
-		return Report{}, err
-	}
-	return Report{Container: spec.Name, Image: spec.Image, ID: strings.TrimSpace(out)}, nil
+	return b.String()
 }
 
 func sortedKeys(m map[string]string) []string {

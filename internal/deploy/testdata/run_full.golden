@@ -1,0 +1,1 @@
+docker run -d --name 'web' --restart always -p '8080:80' -p '127.0.0.1:9000:9000' -e 'A=it'\''s' -e 'B=2' 'example/app:1.2'
