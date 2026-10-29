@@ -881,6 +881,48 @@ returns an empty list, the command stops before creating anything, and it never
 falls back to an empty or open list. The dry run prints how many ranges each
 port gets. The same flags work on `up`.
 
+## Guarding commits, pushes and PR text
+
+`baryovm git` and `baryovm gh` run the real tool after checking for keys. Agents
+and scripts use these instead of the raw commands.
+
+```sh
+baryovm git commit -m "add login"      # scans the staged diff, and the message
+baryovm git commit -am "fix"           # also scans the working diff
+baryovm git push -u origin main        # checks the host, scans unpushed commits
+baryovm gh pr create --title t --body-file body.md
+baryovm gh release create v1 --notes-file notes.md
+baryovm guard install-hooks            # pre-commit and pre-push hooks, same checks
+```
+
+Checked: `git commit`, `git push`, `gh pr create`, `gh release create` and
+`gh issue create` (`--title`, `--body`, `--body-file`, `--notes`,
+`--notes-file`). Every other git and gh command passes straight through with the
+tool's own output and exit code. Flags after `git` or `gh` belong to that tool,
+so these two take none of their own; set `BARYOVM_OUTPUT=json` for a JSON
+refusal.
+
+The scanner looks for Google `AIza` keys, GitHub tokens, AWS access keys, Slack
+tokens, Stripe live keys, npm tokens and private key blocks. A refusal exits 1,
+names `file:line (rule)`, never prints the value, and does not run git or gh.
+Put `allow-secret` in a comment on a line to exempt a test fixture. A body from
+stdin (`-F -`) is refused because it cannot be checked; write it to a file.
+`git push` scans only commits not already on the remote.
+
+To limit where a repository may push, list the allowed hosts. With none set,
+every host is allowed. A push to any other host is refused before git contacts
+it.
+
+```sh
+git config --add baryovm.allowedHosts github.com
+export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
+```
+
+`guard install-hooks` writes `pre-commit` and `pre-push` hooks into the current
+repository so commits made without the wrapper are checked too. It leaves a hook
+that is not BaryoVM's alone unless you pass `--force`, which keeps it as
+`<name>.baryovm-old`. The hooks fail when `baryovm` is not on PATH.
+
 ## Prerequisites
 
 ```sh
