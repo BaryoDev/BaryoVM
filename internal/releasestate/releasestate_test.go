@@ -6,6 +6,9 @@ package releasestate
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +211,23 @@ func TestStepErrorsAndDescribeCarryNoSecrets(t *testing.T) {
 	}
 	if got := Redact("plain failure"); got != "plain failure" {
 		t.Errorf("changed: %s", got)
+	}
+}
+
+func TestWriteCmdLeavesNoTempFileWhenTheDecodeFails(t *testing.T) {
+	dir := t.TempDir()
+	bin := t.TempDir()
+	if err := os.WriteFile(bin+"/base64", []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := dir + "/.baryovm-release-demo.json"
+	cmd := exec.Command("sh", "-c", WriteCmd(For(dir+"/src", "demo", false), file, []byte("{}")))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("a failed decode should fail the write")
+	}
+	left, _ := filepath.Glob(dir + "/.baryovm-release.*")
+	if len(left) > 0 {
+		t.Errorf("stray temp files: %v", left)
 	}
 }

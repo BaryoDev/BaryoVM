@@ -28,7 +28,7 @@ const (
 
 var (
 	b64Re    = regexp.MustCompile(`printf %s '([^']*)' \| base64 -d`)
-	mvRe     = regexp.MustCompile(`&& mv \S+ (\S+)`)
+	mvRe     = regexp.MustCompile(`&& mv \S+ (\S+) ;`)
 	quotedRe = regexp.MustCompile(`'([^']+)'`)
 )
 
@@ -80,6 +80,11 @@ func (h *stateHost) store(name, cmd string) {
 
 func (h *stateHost) release(cmd string) string {
 	switch {
+	case strings.Contains(cmd, "base64 -d"):
+		if m := mvRe.FindStringSubmatch(cmd); m != nil {
+			h.store(strings.Trim(m[1], "'"), cmd)
+		}
+		return ""
 	case strings.Contains(cmd, "rm -f"):
 		delete(h.files, stateFilePath)
 		h.locked = false
@@ -90,11 +95,6 @@ func (h *stateHost) release(cmd string) string {
 		}
 		h.locked = true
 		return "locked\n"
-	case strings.Contains(cmd, "base64 -d"):
-		if m := mvRe.FindStringSubmatch(cmd); m != nil {
-			h.store(strings.Trim(m[1], "'"), cmd)
-		}
-		return ""
 	case strings.Contains(cmd, "if [ -f"):
 		if m := quotedRe.FindStringSubmatch(cmd); m != nil {
 			return h.files[m[1]]

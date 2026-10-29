@@ -210,10 +210,12 @@ func WriteCmd(l Loc, file string, data []byte) string {
 	f := sshx.Quote(file)
 	tmp := sshx.Quote(path.Join(path.Dir(file), ".baryovm-release.XXXXXX"))
 	b64 := base64.StdEncoding.EncodeToString(data)
-	return l.sh("t=$(mktemp " + tmp + ") && printf %s " + sshx.Quote(b64) + " | base64 -d > \"$t\" && mv \"$t\" " + f)
+	// The trap removes the temp file when the decode or the rename fails; after a good mv it is gone
+	// already and rm -f finds nothing.
+	return l.sh("t=$(mktemp " + tmp + ") && { trap 'rm -f \"$t\"' EXIT; printf %s " + sshx.Quote(b64) + " | base64 -d > \"$t\" && mv \"$t\" " + f + " ; }")
 }
 
-// RemoveCmd deletes the state file, a stray temp file and the lock.
+// RemoveCmd deletes the state file and the lock. A failed write cleans up its own temp file.
 func (l Loc) RemoveCmd() string {
 	return l.sh("rm -f " + sshx.Quote(l.File) + "; rmdir " + sshx.Quote(l.Lock()) + " 2>/dev/null; true")
 }
