@@ -131,6 +131,29 @@ func TestSSHFromWritesFirewallRules(t *testing.T) {
 	}
 }
 
+func TestUfwApplyDeletesBroadRuleAndRechecks(t *testing.T) {
+	s := script(Options{SSHFrom: []string{"203.0.113.0/24"}})
+	del := strings.Index(s, `sudo ufw delete allow "$P22" `)
+	recheck := strings.Index(s, "ALLOW +Anywhere\"; then\n        say ssh-firewall")
+	applied := strings.Index(s, `say ssh-firewall applied "ufw allows`)
+	if del < 0 || recheck < 0 || applied < 0 {
+		t.Fatalf("missing piece: delete=%d recheck=%d applied=%d", del, recheck, applied)
+	}
+	if !(del < recheck && recheck < applied) {
+		t.Errorf("order wrong: delete=%d recheck=%d applied=%d", del, recheck, applied)
+	}
+	mustContain(t, s, "say ssh-firewall "+StateReport+` "ufw still has an allow rule`)
+}
+
+func TestFirewalldApplyWalksActiveZones(t *testing.T) {
+	s := script(Options{SSHFrom: []string{"203.0.113.0/24"}})
+	mustContain(t, s, "--get-active-zones", `--zone="$z" --remove-service=ssh`, `--zone="$z" --remove-port="$P22/tcp"`,
+		`--zone="$z" --query-service=ssh`, `--zone="$z" --query-port="$P22/tcp"`, "still accept port")
+	if strings.LastIndex(s, "--get-active-zones") > strings.Index(s, `say ssh-firewall applied "firewalld accepts`) {
+		t.Error("zones are checked after the applied line")
+	}
+}
+
 func TestSSHExposureIsReportedNotChanged(t *testing.T) {
 	s := script(Options{})
 	mustContain(t, s, "say ssh-exposure "+StateReport, "Limit it with --ssh-from")

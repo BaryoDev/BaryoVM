@@ -66,6 +66,11 @@ func (p *Provider) Provision(ctx context.Context, spec provider.Spec) (provider.
 	keyName := spec.Name + "-baryovm"
 	sipName := spec.Name + "-ip"
 
+	infos, err := portInfos(spec)
+	if err != nil {
+		return provider.Instance{}, err
+	}
+
 	// 1. Authorize the SSH key (ignore "already exists").
 	if _, err := p.client.ImportKeyPair(ctx, &lightsail.ImportKeyPairInput{
 		KeyPairName:     aws.String(keyName),
@@ -93,7 +98,7 @@ func (p *Provider) Provision(ctx context.Context, spec provider.Spec) (provider.
 	// 4. Open the web + SSH ports.
 	if _, err := p.client.PutInstancePublicPorts(ctx, &lightsail.PutInstancePublicPortsInput{
 		InstanceName: aws.String(spec.Name),
-		PortInfos:    portInfos(spec),
+		PortInfos:    infos,
 	}); err != nil {
 		return provider.Instance{}, fmt.Errorf("open ports: %w", err)
 	}

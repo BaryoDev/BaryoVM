@@ -7,7 +7,11 @@
 // core stays free of heavy cloud SDKs.
 package provider
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"net"
+)
 
 // Instance is a provisioned VM as BaryoVM sees it.
 type Instance struct {
@@ -56,6 +60,40 @@ func (s Spec) CidrsFor(port int) []string {
 // Limited reports whether any range was set for the port.
 func (s Spec) Limited(port int) bool {
 	return len(s.CidrsFor(port)) != 1 || s.CidrsFor(port)[0] != AnyIPv4
+}
+
+// SplitFamilies separates ranges into IPv4 and IPv6, the way Lightsail takes them.
+func SplitFamilies(cidrs []string) (v4, v6 []string) {
+	for _, c := range cidrs {
+		ip, _, err := net.ParseCIDR(c)
+		if err == nil && ip.To4() == nil {
+			v6 = append(v6, c)
+		} else {
+			v4 = append(v4, c)
+		}
+	}
+	return v4, v6
+}
+
+// CheckFamilies refuses a limited port that names only one IP family. The
+// Lightsail PortInfo docs do not say that an empty cidrs or ipv6Cidrs list
+// means closed, so the other family could stay open to everyone. To close a
+// family on purpose, name a range in it that reaches nothing (::1/128 or
+// 127.0.0.1/32).
+func (s Spec) CheckFamilies() error {
+	for _, port := range []int{22, 80, 443} {
+		if !s.Limited(port) {
+			continue
+		}
+		v4, v6 := SplitFamilies(s.CidrsFor(port))
+		switch {
+		case len(v6) == 0:
+			return fmt.Errorf("port %d has IPv4 ranges but no IPv6 range, and Lightsail does not document an empty IPv6 list as closed: add an IPv6 range, or ::1/128 to close IPv6", port)
+		case len(v4) == 0:
+			return fmt.Errorf("port %d has IPv6 ranges but no IPv4 range, and Lightsail does not document an empty IPv4 list as closed: add an IPv4 range, or 127.0.0.1/32 to close IPv4", port)
+		}
+	}
+	return nil
 }
 
 // Provider provisions and tears down VMs on one cloud.
