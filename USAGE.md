@@ -1057,6 +1057,7 @@ baryovm stack add baryoclub --vm oracle --path /home/deploy/baryoclub-src/BaryoC
   --backup-dir /home/deploy/baryoclub-backups --keep 14
 
 baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune to --keep
+baryovm stack backup baryoclub --pull   # also copy this run's files to ~/.baryovm/backups/baryoclub/
 baryovm stack backups baryoclub     # list backups, newest first
 baryovm stack restore baryoclub --yes                    # newest (REPLACES data)
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
@@ -1079,6 +1080,15 @@ baryovm stack add baryodev --vm oracle --path /opt/baryo-cms --sudo \
 Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
+
+`stack backup --pull` takes the backup, then copies the files that run made (the dumps and the config
+copy, never a `.partial`) over the same SSH connection to `~/.baryovm/backups/<stack>/` (under
+`BARYOVM_HOME` if set). That gives you a second copy that does not die with the VM. The directory is
+created `0700` and the files are written `0600`; an existing directory that is writable by group or
+others is refused. The pulled set includes the stack's config copy (`.env`), so treat the directory
+like `fleet.json`. `-o json` lists the pulled paths and sizes under `data.pulled`. It is refused on a
+forced-command VM (its key cannot read files) and cannot be combined with `--dry-run`. Old pulled
+files are not pruned.
 
 ### Backup strategies
 

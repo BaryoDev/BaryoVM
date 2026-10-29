@@ -927,12 +927,18 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 }
 
 func newStackBackupCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, pull bool
 	cmd := &cobra.Command{
 		Use:   "backup <name>",
 		Short: "Back up the stack's database + config (pg_dump + .env)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if pull && dryRun {
+				return fmt.Errorf("--pull and --dry-run cannot be combined: --dry-run connects to nothing, so there is nothing to pull")
+			}
+			if pull {
+				return runStackBackupPull(args[0])
+			}
 			if dryRun {
 				return dryStackBackup(args[0])
 			}
@@ -943,6 +949,7 @@ func newStackBackupCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the backup script without connecting")
+	cmd.Flags().BoolVar(&pull, "pull", false, "after the backup, copy this run's files to ~/.baryovm/backups/<stack>/ on this machine (owner-only). Not available on a forced-command VM")
 	return cmd
 }
 

@@ -75,6 +75,10 @@ down.
 - `vm exec` runs arbitrary remote commands as the SSH user for that VM. That is
   the same authority as opening an interactive SSH session with the registered
   key; the CLI only shortens the path.
+- `stack backup --pull` copies a backup set to `~/.baryovm/backups/<stack>/` on your machine. The set
+  includes the stack's config copy (`.env`, which holds secrets), so the directory is created `0700`,
+  files are written `0600` like `fleet.json`, and an existing directory writable by group or others is
+  refused. Nothing prunes pulled files.
 - Restore is destructive (`stack restore` replaces a database) and requires
   `--yes`.
 

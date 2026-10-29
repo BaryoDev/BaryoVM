@@ -174,6 +174,9 @@ func dir() string {
 	return filepath.Join(home, ".baryovm")
 }
 
+// Dir is the directory fleet.json and pulled backups live in (BARYOVM_HOME or ~/.baryovm).
+func Dir() string { return dir() }
+
 func path() string { return filepath.Join(dir(), "fleet.json") }
 
 // Load reads the fleet, returning an empty store if none exists yet.
