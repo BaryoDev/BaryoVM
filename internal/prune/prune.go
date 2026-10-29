@@ -146,12 +146,16 @@ type Container struct {
 	Finished time.Time
 	ImageID  string
 	ImageRef string
+	// Volumes are the names of the volumes mounted in the container.
+	Volumes []string
 }
 
 // Volume is a docker volume.
 type Volume struct {
 	Name  string
 	Bytes int64
+	// Created is zero when the host did not report it.
+	Created time.Time
 }
 
 // Dir is a directory and its size.
@@ -236,9 +240,20 @@ func dockerItems(f Facts, o Options) ([]Item, []string) {
 			continue
 		}
 		name := strings.TrimPrefix(c.Name, "/")
-		items = append(items, Item{Kind: "docker-container", Target: name,
-			Reason: fmt.Sprintf("stopped since %s (older than %d days)", c.Finished.Format("2006-01-02"), o.StoppedAgeDays),
-			Cmd:    "sudo -n docker rm " + sshx.Quote(name)})
+		reason := fmt.Sprintf("stopped since %s (older than %d days)", c.Finished.Format("2006-01-02"), o.StoppedAgeDays)
+		// Removing the container leaves its anonymous volumes behind as unused, so say what data
+		// goes with it. The volume itself is only planned later, once it is old enough.
+		var anon []string
+		for _, v := range c.Volumes {
+			if anonVolume.MatchString(v) {
+				anon = append(anon, v)
+			}
+		}
+		if len(anon) > 0 {
+			reason += "; holds anonymous volume(s) " + strings.Join(anon, ", ")
+		}
+		items = append(items, Item{Kind: "docker-container", Target: name, Reason: reason,
+			Cmd: "sudo -n docker rm " + sshx.Quote(name)})
 	}
 
 	keep := map[string]string{}
@@ -293,6 +308,12 @@ func dockerItems(f Facts, o Options) ([]Item, []string) {
 		// Only an anonymous volume (a 64-hex name) is ever planned. A named volume is data
 		// somebody chose to keep, even when nothing uses it right now.
 		if !anonVolume.MatchString(v.Name) {
+			continue
+		}
+		// Docker reports when a volume was created, not when it was orphaned, so a young volume is
+		// the closest cheap signal for data of a container removed a moment ago. It waits out the
+		// same threshold as stopped containers. Unknown age is planned as before.
+		if !v.Created.IsZero() && v.Created.After(cutoff) {
 			continue
 		}
 		items = append(items, Item{Kind: "docker-volume", Target: v.Name, Bytes: v.Bytes,
@@ -479,12 +500,13 @@ if command -v docker >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; the
   sudo -n docker image ls --format 'IMG|{{.ID}}|{{.CreatedAt}}|{{.Size}}|{{.Repository}}:{{.Tag}}'
   ids=$(sudo -n docker ps -aq)
   if [ -n "$ids" ]; then
-    sudo -n docker inspect --format 'CTR|{{.Name}}|{{.State.Status}}|{{.State.FinishedAt}}|{{.Image}}|{{.Config.Image}}' $ids
+    sudo -n docker inspect --format 'CTR|{{.Name}}|{{.State.Status}}|{{.State.FinishedAt}}|{{.Image}}|{{.Config.Image}}|{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}},{{end}}{{end}}' $ids
   fi
   sudo -n docker volume ls -qf dangling=true | while read -r v; do
     mp=$(sudo -n docker volume inspect --format '{{.Mountpoint}}' "$v")
     kb=$(sudo -n du -sk "$mp" 2>/dev/null | cut -f1)
-    echo "VOL|${kb:-0}|$v"
+    cr=$(sudo -n docker volume inspect --format '{{.CreatedAt}}' "$v" 2>/dev/null)
+    echo "VOL|${kb:-0}|$v|$cr"
   done
 else
   echo "DOCKER|0"
@@ -579,18 +601,31 @@ func ParseFacts(out string) Facts {
 			}
 			f.Images = append(f.Images, Image{ID: p[0], Created: parseImageTime(p[1]), Bytes: ParseSize(p[2]), Repo: p[3][:i], Tag: p[3][i+1:]})
 		case "CTR":
-			p := strings.SplitN(rest, "|", 5)
-			if len(p) != 5 {
+			p := strings.SplitN(rest, "|", 6)
+			if len(p) < 5 {
 				continue
+			}
+			var vols []string
+			if len(p) == 6 {
+				for _, v := range strings.Split(p[5], ",") {
+					if v != "" {
+						vols = append(vols, v)
+					}
+				}
 			}
 			fin, _ := time.Parse(time.RFC3339Nano, p[2])
 			if fin.Year() < 2000 {
 				fin = time.Time{}
 			}
-			f.Containers = append(f.Containers, Container{Name: p[0], State: p[1], Finished: fin, ImageID: p[3], ImageRef: p[4]})
+			f.Containers = append(f.Containers, Container{Name: p[0], State: p[1], Finished: fin, ImageID: p[3], ImageRef: p[4], Volumes: vols})
 		case "VOL":
-			if kb, name, ok := strings.Cut(rest, "|"); ok {
-				f.Volumes = append(f.Volumes, Volume{Name: name, Bytes: kbToBytes(kb)})
+			if kb, tail, ok := strings.Cut(rest, "|"); ok {
+				name, created, _ := strings.Cut(tail, "|")
+				v := Volume{Name: name, Bytes: kbToBytes(kb)}
+				if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(created)); err == nil {
+					v.Created = t
+				}
+				f.Volumes = append(f.Volumes, v)
 			}
 		case "PROJ":
 			f.Projects = append(f.Projects, rest)

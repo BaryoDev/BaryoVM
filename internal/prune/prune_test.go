@@ -385,3 +385,51 @@ func TestRollbackTargetImageIsKept(t *testing.T) {
 		t.Fatalf("plan should say why the image was kept: %+v", p.Notes)
 	}
 }
+
+func TestContainerReasonListsItsAnonymousVolumes(t *testing.T) {
+	anon := strings.Repeat("cd", 32)
+	f := Facts{HasDocker: true, Containers: []Container{
+		{Name: "/old", State: "exited", Finished: now.Add(-15 * 24 * time.Hour), Volumes: []string{anon, "pgdata"}},
+	}}
+	p := BuildPlan(f, opts())
+	var reason string
+	for _, it := range p.Items {
+		if it.Kind == "docker-container" {
+			reason = it.Reason
+		}
+	}
+	if !strings.Contains(reason, anon) {
+		t.Fatalf("reason should name the anonymous volume the container holds: %q", reason)
+	}
+	if strings.Contains(reason, "pgdata") {
+		t.Fatalf("named volumes are not listed: %q", reason)
+	}
+}
+
+func TestYoungAnonymousVolumeIsKept(t *testing.T) {
+	young, old := strings.Repeat("ab", 32), strings.Repeat("ef", 32)
+	f := Facts{HasDocker: true, Volumes: []Volume{
+		{Name: young, Created: now.Add(-2 * 24 * time.Hour)},
+		{Name: old, Created: now.Add(-20 * 24 * time.Hour)},
+	}}
+	p := BuildPlan(f, opts())
+	if has(p, "docker-volume", young) {
+		t.Fatalf("a volume younger than the stopped-days threshold may belong to a container just removed: %+v", p.Items)
+	}
+	if !has(p, "docker-volume", old) {
+		t.Fatalf("an old anonymous volume should be planned: %+v", p.Items)
+	}
+}
+
+func TestParseFactsReadsVolumeAgeAndContainerMounts(t *testing.T) {
+	anon := strings.Repeat("ab", 32)
+	out := "CTR|/c|exited|2026-10-01T00:00:00Z|sha256:aaa|img|" + anon + ",pgdata\n" +
+		"VOL|4|" + anon + "|2026-10-20T00:00:00Z\n"
+	f := ParseFacts(out)
+	if len(f.Containers) != 1 || len(f.Containers[0].Volumes) != 2 {
+		t.Fatalf("mounts not parsed: %+v", f.Containers)
+	}
+	if len(f.Volumes) != 1 || f.Volumes[0].Created.IsZero() {
+		t.Fatalf("volume age not parsed: %+v", f.Volumes)
+	}
+}
