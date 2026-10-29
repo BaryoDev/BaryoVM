@@ -196,7 +196,7 @@ func newProjectExportCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&out, "out", fleet.DefaultProjectFile, "file to write")
 	cmd.Flags().StringVar(&name, "name", "", "project name (default: the output directory's name)")
-	cmd.Flags().StringVar(&keyEnv, "key-env", "", "environment variable that holds the key path in CI (default DEPLOY_KEY_PATH)")
+	cmd.Flags().StringVar(&keyEnv, "key-env", "", "environment variable that holds the key path in CI (default BARYOVM_DEPLOY_KEY_PATH)")
 	cmd.Flags().StringSliceVar(&stacks, "stack", nil, "stack to include, in release order (repeatable; default: all)")
 	cmd.Flags().BoolVar(&force, "force", false, "replace the output file if it exists")
 	return cmd
@@ -256,9 +256,9 @@ func exportProject(store *fleet.Store, outDir, name, keyEnv string, only []strin
 			case keyEnv != "":
 				v.KeyPath = "env:" + keyEnv
 			case len(needed) == 1:
-				v.KeyPath = "env:DEPLOY_KEY_PATH"
+				v.KeyPath = "env:BARYOVM_DEPLOY_KEY_PATH"
 			default:
-				v.KeyPath = "env:DEPLOY_KEY_PATH_" + strings.ToUpper(envNameRe.ReplaceAllString(v.Name, "_"))
+				v.KeyPath = "env:BARYOVM_DEPLOY_KEY_PATH_" + strings.ToUpper(envNameRe.ReplaceAllString(v.Name, "_"))
 			}
 		}
 		if v.HostKey == "" && known != nil {

@@ -484,7 +484,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	// committed file, so cmd: is not accepted here.
 	var buildInputs []string
 	if !noBuild {
-		buildInputs, err = m.BuildInputs(fileResolver())
+		buildInputs, err = m.BuildInputs(fileResolver(m.Dir))
 		if err != nil {
 			return fail(err)
 		}

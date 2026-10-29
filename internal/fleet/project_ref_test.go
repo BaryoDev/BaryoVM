@@ -11,7 +11,7 @@ import (
 
 // #93: the project file uses the shared reference type (internal/secretref).
 func TestProjectKeyPathAcceptsEnvAndFileButNeverCmd(t *testing.T) {
-	for _, ok := range []string{`"env:K"`, `"file:/run/secrets/key-path"`} {
+	for _, ok := range []string{`"env:BARYOVM_K"`, `"file:secrets/key-path"`} {
 		if _, err := ParseProject([]byte(projectWith(ok))); err != nil {
 			t.Errorf("%s should be accepted: %v", ok, err)
 		}
@@ -31,5 +31,14 @@ func TestProjectSecretFieldMayHoldAFileReferenceButNotCmd(t *testing.T) {
 		t.Error("cmd: in a secret-named field must be refused")
 	} else if strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("the error repeated the value: %v", err)
+	}
+}
+
+func TestProjectKeyPathRefusesReferencesOutsideTheRule(t *testing.T) {
+	for _, bad := range []string{`"env:K"`, `"env:HOME"`, `"file:/etc/passwd"`, `"file:~/.ssh/id"`, `"file:../k"`} {
+		_, err := ParseProject([]byte(projectWith(bad)))
+		if err == nil || !strings.Contains(err.Error(), "vms[0].keyPath") || !strings.Contains(err.Error(), "committed file") {
+			t.Errorf("%s should be refused naming the field and the rule: %v", bad, err)
+		}
 	}
 }

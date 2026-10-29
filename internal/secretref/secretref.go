@@ -147,7 +147,17 @@ type Resolver struct {
 	// must not be able to run a program on the machine that reads it, so those callers leave this
 	// false and only the command line, which the operator typed, sets it.
 	AllowCmd bool
+	// Confined limits what a reference may reach, for references read from a committed file: an
+	// env: name must start with EnvPrefix, and a file: path must be relative and stay inside Root
+	// after symlinks are resolved. Set it with Confine. The command line is not confined.
+	Confined bool
+	// Root is the directory a confined file: reference must stay inside.
+	Root string
 }
+
+// EnvPrefix is the start every env: name must have when the reference comes from a committed file.
+// In CI, map the secret to a name with this prefix.
+const EnvPrefix = "BARYOVM_"
 
 // Default is a Resolver over the real environment, file system and exec. AllowCmd is off.
 func Default() Resolver {
@@ -157,10 +167,39 @@ func Default() Resolver {
 // WithCmd returns r with cmd: references allowed.
 func (r Resolver) WithCmd() Resolver { r.AllowCmd = true; return r }
 
+// Confine returns r limited for a committed file whose directory is root (see Confined).
+func (r Resolver) Confine(root string) Resolver { r.Confined, r.Root = true, root; return r }
+
 func runExec(ctx context.Context, argv []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- the operator's own reference, run without a shell
 	// Output leaves cmd.Stderr nil, so stderr goes to the null device and cannot reach an error.
 	return cmd.Output()
+}
+
+// Check reports whether ref is well formed and, on a confined resolver, allowed. It reads nothing,
+// so it can run at load and validate time. It cannot see symlinks: Resolve checks those.
+func (r Resolver) Check(ref string) error {
+	p, err := Parse(ref)
+	if err != nil {
+		return err
+	}
+	if !r.Confined {
+		return nil
+	}
+	switch p.Kind {
+	case Env:
+		if !strings.HasPrefix(p.Locator, EnvPrefix) {
+			return fmt.Errorf("secret reference %q is refused in a committed file: an env: name must start with %s (map the secret to such a name in CI)", ref, EnvPrefix)
+		}
+	case File:
+		loc := p.Locator
+		clean := filepath.Clean(filepath.FromSlash(loc))
+		if strings.HasPrefix(loc, "~") || strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, `\`) || filepath.IsAbs(loc) ||
+			clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("secret reference %q is refused in a committed file: a file: path must be relative to that file's directory, with no ~, no leading / and no ..", ref)
+		}
+	}
+	return nil
 }
 
 // Resolve returns the value ref points at. The error names the reference and the reason, never a
@@ -168,6 +207,9 @@ func runExec(ctx context.Context, argv []string) ([]byte, error) {
 func (r Resolver) Resolve(ref string) (string, error) {
 	p, err := Parse(ref)
 	if err != nil {
+		return "", err
+	}
+	if err := r.Check(ref); err != nil {
 		return "", err
 	}
 	var v string
@@ -178,7 +220,13 @@ func (r Resolver) Resolve(ref string) (string, error) {
 			return "", fmt.Errorf("secret reference %q did not resolve: %s is not set or is empty", ref, p.Locator)
 		}
 	case File:
-		b, err := r.ReadFile(expand(p.Locator))
+		path := expand(p.Locator)
+		if r.Confined {
+			if path, err = r.confinedPath(ref, p.Locator); err != nil {
+				return "", err
+			}
+		}
+		b, err := r.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("secret reference %q did not resolve: cannot read the file (%s)", ref, reason(err))
 		}
@@ -206,6 +254,27 @@ func (r Resolver) Resolve(ref string) (string, error) {
 		return "", fmt.Errorf("secret reference %q did not resolve: the value is empty", ref)
 	}
 	return v, nil
+}
+
+// confinedPath resolves loc under Root and refuses a result that symlinks have moved outside it.
+func (r Resolver) confinedPath(ref, loc string) (string, error) {
+	rule := fmt.Errorf("secret reference %q is refused in a committed file: the path must stay inside that file's directory, symlinks included", ref)
+	if r.Root == "" {
+		return "", rule
+	}
+	root, err := filepath.EvalSymlinks(r.Root)
+	if err != nil {
+		return "", fmt.Errorf("secret reference %q did not resolve: cannot read the file's directory (%s)", ref, reason(err))
+	}
+	target, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(loc)))
+	if err != nil {
+		return "", fmt.Errorf("secret reference %q did not resolve: cannot read the file (%s)", ref, reason(err))
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", rule
+	}
+	return target, nil
 }
 
 // reason is the cause of err without any text that could hold a value: a path error keeps its

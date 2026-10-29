@@ -571,9 +571,17 @@ A build `args` value is a literal or a reference (`env:NAME`, `file:PATH`; `cmd:
 manifest, since a committed file must not run a program). Either way the value is sent on stdin and
 exported in the build's own shell, and the command carries only `--build-arg NAME`, so it is not in
 `ps` on the VM. A build arg is still baked into image history if the Dockerfile uses it in a `RUN`.
-For a value that must stay out of the image, add `"secrets": { "npmrc": "env:NPM_TOKEN" }` to the
+For a value that must stay out of the image, add `"secrets": { "npmrc": "env:BARYOVM_NPM_TOKEN" }` to the
 build and read it with `RUN --mount=type=secret,id=npmrc` (BuildKit). Existing manifests keep working.
 A literal value that starts with `env:`, `file:` or `cmd:` is read as a reference, not as text.
+
+A reference in a manifest is confined, because the manifest is committed and may come from someone
+else's branch. An `env:` name must start with `BARYOVM_`; in CI map the secret to such a name, for
+example `BARYOVM_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}`. A `file:` path must be relative to the
+manifest's own directory: no `~`, no leading `/`, no `..`, and after symlinks are resolved it must
+still be inside that directory. Anything else is refused when the manifest loads (so `--dry-run`
+reports it), naming the reference and the rule. References you type on the command line (`--env-ref`
+and similar) are not confined.
 
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
@@ -947,7 +955,7 @@ It uses the same field names as `fleet.json` (`vms`, `keyPath`, `stacks`, `vm`, 
   "project": "rckoronadal",
   "vms": [
     { "name": "client-vm", "host": "203.0.113.10", "user": "deploy",
-      "keyPath": "env:DEPLOY_KEY_PATH", "hostKey": "ssh-ed25519 AAAA..." }
+      "keyPath": "env:BARYOVM_DEPLOY_KEY_PATH", "hostKey": "ssh-ed25519 AAAA..." }
   ],
   "stacks": [
     { "name": "api",     "vm": "client-vm", "dir": "/opt/barako/api",     "releaseFile": "api.release.json" },
@@ -967,8 +975,10 @@ What the file may and may not hold:
 - `releaseFile` is relative to the directory holding the project file, so the file means the same on
   every checkout. An absolute path or `~` is refused. (`envFile` is unchanged: it is the file on the
   VM, relative to `dir`.)
-- `keyPath` is a reference: `env:NAME` (the variable holds the path to the key, which is how a CI
-  runner passes a key it wrote from a secret) or a path. A relative path is read from the project
+- `keyPath` is a reference: `env:BARYOVM_NAME` (the variable holds the path to the key, which is how
+  a CI runner passes a key it wrote from a secret) or a path. A reference in a project file is
+  confined like one in a release manifest: the `env:` name must start with `BARYOVM_`, and a `file:`
+  path must be relative and stay inside the project file's directory, symlinks included. A relative path is read from the project
   file's directory. A literal private key, token or password in any field, including fields this
   version does not know, is refused with the field named, before anything connects. The error never
   repeats the value.
@@ -1001,8 +1011,8 @@ baryovm project export --out deploy/baryovm.project.json --name rckoronadal \
 ```
 
 `--stack` picks the stacks and sets their order (default: all of them). Export turns manifest paths
-under the output directory into relative ones, replaces the key path with `env:DEPLOY_KEY_PATH`
-(`--key-env` names another variable; with several VMs each gets `DEPLOY_KEY_PATH_<NAME>`), and pins a
+under the output directory into relative ones, replaces the key path with `env:BARYOVM_DEPLOY_KEY_PATH`
+(`--key-env` names another variable; with several VMs each gets `BARYOVM_DEPLOY_KEY_PATH_<NAME>`), and pins a
 host key found in known_hosts. It reads the result back through the same parser `project release`
 uses, so a file it writes is a file release accepts. It refuses, naming the field, a manifest outside
 the output directory (move it, or write the file higher up) and a stack with no manifest. A VM with
@@ -1015,7 +1025,7 @@ In CI, with only the project file, the key as a secret and the binary:
 - run: echo "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key" && chmod 600 "$RUNNER_TEMP/deploy_key"
   env: { DEPLOY_KEY: "${{ secrets.DEPLOY_KEY }}" }
 - run: baryovm project release
-  env: { DEPLOY_KEY_PATH: "${{ runner.temp }}/deploy_key" }
+  env: { BARYOVM_DEPLOY_KEY_PATH: "${{ runner.temp }}/deploy_key" }
 ```
 
 This is how two people share a fleet: commit the project file, and each person (or runner) supplies
