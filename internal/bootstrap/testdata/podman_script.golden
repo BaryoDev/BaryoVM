@@ -24,12 +24,16 @@ else
       sudo -n apk add --no-cache podman
       ;;
     pacman)
-      sudo -n pacman -S --noconfirm --needed podman
+      sudo -n pacman -Sy --noconfirm --needed podman
       ;;
   esac
 fi
 if [ -d /run/systemd/system ]; then
-  sudo -n systemctl enable --now podman.socket
+  if systemctl cat podman.socket >/dev/null 2>&1; then
+    sudo -n systemctl enable --now podman.socket
+  else
+    echo "NO_SOCKET: this host has no podman.socket unit, skipped enabling it; a compose provider needs the socket started by hand"
+  fi
 else
   echo "NO_SYSTEMD: skipped systemctl, podman needs no daemon but a compose provider needs its socket started by the host's own init"
 fi

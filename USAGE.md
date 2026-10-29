@@ -478,8 +478,8 @@ baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy
 ### Podman instead of Docker
 
 A stack runs on docker unless told otherwise. `stack add --runtime podman` stores `podman` on the
-stack, and every command for that stack (deploy, update, release builds, ps, logs, backup, restore,
-the restore drill) then runs `podman` and `podman compose` instead of `docker` and `docker compose`.
+stack, and every command for that stack (deploy, update, release builds, recipe releases, ps, logs,
+backup, restore, the restore drill) then runs `podman` and `podman compose` instead of `docker` and `docker compose`.
 The value is a fixed set: `docker` or `podman`, anything else is refused by the command and by
 `remote.json`. `deploy`, `up`, `stack discover` and `vm bootstrap` take the same `--runtime` flag.
 `stack add` without the flag keeps the stored value.
@@ -489,7 +489,9 @@ found; any other host is refused with that list. Docker comes from get.docker.co
 and yum, and from the distro package on apk and pacman. Podman always comes from the distro package.
 Enabling the service uses systemctl. On a host with no systemd (an Alpine container host, for
 example) that step is skipped and the output says `NO_SYSTEMD`, so start the service with the
-host's own init. systemctl errors are not swallowed.
+host's own init. systemctl errors are not swallowed. For podman, `podman.socket` is enabled only
+when the host has that unit; without it the output carries a `NO_SOCKET` note and the script goes
+on. pacman installs run `pacman -Sy --noconfirm --needed`.
 
 What is covered: the commands BaryoVM builds itself (`podman run`, `rm`, `pull`, `exec`, `inspect`,
 `tag`, `build`, `ps`) and the compose commands it passes (`up -d --force-recreate --no-deps`,
@@ -921,7 +923,7 @@ baryovm stack release app --recipe ~/repos/app --input DB_PASSWORD=file:secrets/
 
 `stack add --recipe` checks the file and sets the stack's compose file to
 `docker-compose.recipe.yml`. A release writes that file in the stack directory, pulls every image
-first (a registry failure changes nothing), then runs `compose up -d --no-deps` for each service in
+first (a registry failure changes nothing, `.env` included: inputs are written after the pull), then runs `compose up -d --no-deps` for each service in
 order, waiting on its `healthUrl` from the VM. Inputs go to the stack's `.env` on stdin at mode 600.
 A secret input takes `env:NAME` or `file:PATH` only: no default, no literal, no `cmd:`. Optional
 inputs take a literal or their default.
@@ -935,7 +937,15 @@ If a service fails (up or health), the release rolls back. What rolls back: the 
 touched, which are started again from the old file. A service the previous recipe did not have is
 removed (`compose rm -sf`). On a first deploy the touched services are removed and the compose file
 dropped. What does not roll back: `.env` values, volumes and data, and anything a service did to its
-own data on start. A recipe release does not take a backup yet.
+own data on start.
+
+Before anything changes, a recipe release takes the same safety steps as a manifest release: the managed
+database snapshot when the stack names one (`data.managedSnapshot` and `data.cloud` in `-o json`),
+then the VM backup when the stack declares a database, and `--no-backup` skips both. A failed
+snapshot or backup stops the release with nothing sent to compose. It takes the same host lock as a
+manifest release for its whole run, and refuses while another release holds it. It keeps no step
+record, because a failed deploy rolls itself back and there is nothing to resume. A default that
+holds a line break is refused when the recipe is loaded.
 
 Not supported in a recipe release yet: `files`, `routes`, `backup` and service `build` (a service
 needs an `image`), `--dry-run`, `--resume`, `--clear`, `--adopt`, `--no-build`, and `--config`.
@@ -1176,8 +1186,9 @@ copy, never a `.partial`) over the same SSH connection to `~/.baryovm/backups/<s
 created `0700` and the files are written `0600`; an existing directory that is writable by group or
 others is refused. The pulled set includes the stack's config copy (`.env`), so treat the directory
 like `fleet.json`. `-o json` lists the pulled paths and sizes under `data.pulled`. It is refused on a
-forced-command VM (its key cannot read files) and cannot be combined with `--dry-run`. Old pulled
-files are not pruned.
+forced-command VM (its key cannot read files) and cannot be combined with `--dry-run`. Each file is read whole
+into memory before it is written, so a very large dump needs that much free memory on this machine.
+Old pulled files are not pruned.
 
 ### Managed database snapshot (AWS and Azure CLI)
 

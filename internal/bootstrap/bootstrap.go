@@ -46,7 +46,7 @@ const dockerInstall = `case "$PM" in
     sudo -n apk add --no-cache docker
     ;;
   pacman)
-    sudo -n pacman -S --noconfirm --needed docker
+    sudo -n pacman -Sy --noconfirm --needed docker
     ;;
 esac
 sudo -n usermod -aG docker "$(whoami)" || true
@@ -65,7 +65,7 @@ const podmanInstall = `case "$PM" in
     sudo -n apk add --no-cache podman
     ;;
   pacman)
-    sudo -n pacman -S --noconfirm --needed podman
+    sudo -n pacman -Sy --noconfirm --needed podman
     ;;
 esac
 `
@@ -83,8 +83,16 @@ fi
 
 // Podman has no daemon, so there is nothing to start for it. The socket is what a compose provider
 // talks to, so it is enabled where systemd exists.
+//
+// A systemd host whose podman package ships no podman.socket unit gets a note and carries on: the
+// unit check is the only thing guarded, so a real failure to enable an existing unit still stops
+// the script.
 const podmanSystemd = `if [ -d /run/systemd/system ]; then
-  sudo -n systemctl enable --now podman.socket
+  if systemctl cat podman.socket >/dev/null 2>&1; then
+    sudo -n systemctl enable --now podman.socket
+  else
+    echo "NO_SOCKET: this host has no podman.socket unit, skipped enabling it; a compose provider needs the socket started by hand"
+  fi
 else
   echo "NO_SYSTEMD: skipped systemctl, podman needs no daemon but a compose provider needs its socket started by the host's own init"
 fi
@@ -157,6 +165,8 @@ func parse(runtime, out string) Report {
 		switch {
 		case strings.HasPrefix(l, "PACKAGE_MANAGER="):
 			r.PackageManager = strings.TrimPrefix(l, "PACKAGE_MANAGER=")
+		case strings.HasPrefix(l, "NO_SOCKET:"):
+			r.Notes = append(r.Notes, l)
 		case strings.HasPrefix(l, "NO_SYSTEMD:"):
 			r.NoSystemd = true
 			r.Notes = append(r.Notes, l)

@@ -20,7 +20,7 @@ else
       sudo -n apk add --no-cache docker
       ;;
     pacman)
-      sudo -n pacman -S --noconfirm --needed docker
+      sudo -n pacman -Sy --noconfirm --needed docker
       ;;
   esac
   sudo -n usermod -aG docker "$(whoami)" || true

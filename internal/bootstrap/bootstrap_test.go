@@ -80,7 +80,7 @@ func TestScriptSkipsSystemctlWithoutSystemdAndSaysSo(t *testing.T) {
 			t.Errorf("%s: systemctl must sit inside the systemd check, with a NO_SYSTEMD message on the other branch:\n%s", rt, s)
 		}
 		for _, l := range strings.Split(s, "\n") {
-			if strings.Contains(l, "systemctl") && (strings.Contains(l, "|| true") || strings.Contains(l, "/dev/null")) {
+			if strings.Contains(l, "systemctl enable") && (strings.Contains(l, "|| true") || strings.Contains(l, "/dev/null")) {
 				t.Errorf("%s: systemctl failure is swallowed: %s", rt, l)
 			}
 		}
@@ -92,14 +92,14 @@ func TestDockerKeepsGetDockerOnlyWhereItWorks(t *testing.T) {
 	if !strings.Contains(s, "apt-get|dnf|yum)\n      curl -fsSL https://get.docker.com") {
 		t.Errorf("get.docker.com must serve apt-get, dnf and yum:\n%s", s)
 	}
-	if !strings.Contains(s, "apk add --no-cache docker") || !strings.Contains(s, "pacman -S --noconfirm --needed docker") {
+	if !strings.Contains(s, "apk add --no-cache docker") || !strings.Contains(s, "pacman -Sy --noconfirm --needed docker") {
 		t.Errorf("apk and pacman must install the distro docker package:\n%s", s)
 	}
 }
 
 func TestPodmanInstallsTheDistroPackageAndNotDocker(t *testing.T) {
 	s := mustScript(t, "podman")
-	for _, want := range []string{"apt-get install -y podman", `"$PM" install -y podman`, "apk add --no-cache podman", "pacman -S --noconfirm --needed podman", "podman --version"} {
+	for _, want := range []string{"apt-get install -y podman", `"$PM" install -y podman`, "apk add --no-cache podman", "pacman -Sy --noconfirm --needed podman", "podman --version"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("podman script lacks %q", want)
 		}
@@ -125,5 +125,31 @@ func TestParseReadsPackageManagerAndMissingSystemd(t *testing.T) {
 	r = parse("docker", "ALREADY_INSTALLED\nDocker version 27\n")
 	if !r.AlreadyReady || r.NoSystemd || r.DockerVersion != "Docker version 27" {
 		t.Errorf("%+v", r)
+	}
+}
+
+// A systemd host whose podman package ships no podman.socket unit must not stop the script under
+// set -e. The enable is guarded by a unit check and a missing unit prints a note.
+func TestPodmanSocketEnableIsGuardedByAUnitCheck(t *testing.T) {
+	s := mustScript(t, "podman")
+	if !strings.Contains(s, "systemctl cat podman.socket") || !strings.Contains(s, "NO_SOCKET:") {
+		t.Errorf("the socket enable is not guarded:\n%s", s)
+	}
+	if strings.Contains(mustScript(t, "docker"), "podman.socket") {
+		t.Error("the docker script must not mention the podman socket")
+	}
+	r := parse("podman", "NO_SOCKET: podman.socket is not installed\npodman version 4.9\n")
+	if len(r.Notes) != 1 || r.NoSystemd || r.DockerVersion != "podman version 4.9" {
+		t.Errorf("report: %+v", r)
+	}
+}
+
+// pacman needs a database sync before a package install, and no prompt.
+func TestPacmanInstallSyncsAndDoesNotPrompt(t *testing.T) {
+	for _, rt := range []string{"docker", "podman"} {
+		s := mustScript(t, rt)
+		if !strings.Contains(s, "pacman -Sy --noconfirm --needed "+rt) {
+			t.Errorf("%s: pacman install lacks -Sy --noconfirm:\n%s", rt, s)
+		}
 	}
 }
