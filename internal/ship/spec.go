@@ -135,6 +135,10 @@ func validVersion(v string) error {
 	return nil
 }
 
+// ValidVersion is validVersion for callers outside the package, such as `baryovm prove`, which
+// checks a version the same way ship does before it builds a record path.
+func ValidVersion(v string) error { return validVersion(v) }
+
 // inside refuses an empty path, an absolute one and one that climbs out of the repository: a
 // committed spec must not make the gate read an arbitrary file.
 func inside(field, p string) error {

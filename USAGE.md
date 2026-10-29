@@ -1734,6 +1734,25 @@ second tag. Without a terminal, or under `-o json`, a real run needs `--yes`. Ev
 timeout; `--timeout` bounds the run watch. What was checked and the values seen are saved to
 `$BARYOVM_HOME/ship/<name>/<version>.json`, and `-o json` returns the same record.
 
+### Proving a release
+
+```sh
+baryovm prove shop                 # the highest recorded version, by semver order
+baryovm prove shop --version 1.2.4
+baryovm prove shop -o json
+```
+
+`prove` prints the record `ship` saved as one page: project, version, commit and date, then SHIPPED
+(the source diff since the previous tag), PUBLISHED (the packages that resolved and each artifact
+assertion with the value observed) and DEPLOYED. It reads only the local record. It never calls GitHub,
+a registry or a VM, so a fact the record does not hold is printed as `not checked`. A project whose
+publish spec has no `requireDeployed` gets "deployment not verified" in the DEPLOYED section, never an
+empty gap. The text and `-o json` are rendered from the same structure.
+
+A failed assertion, a failed step or an unfinished release shows as failed and the command exits
+non-zero. A missing record is refused with the path that was looked for. A dry run is refused: it
+released nothing. The name and `--version` are checked the way `ship` checks them.
+
 ### Deploying to the cloud
 
 `baryovm cloud wrangler`, `baryovm cloud firebase` and `baryovm cloud gcloud` check a deploy before the
