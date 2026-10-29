@@ -153,6 +153,16 @@ type Manifest struct {
 // releaseRoot is the stack's `--release-root`, if it has one. Without it localRoot and every sync
 // entry must stay inside the manifest's own directory (#158).
 func Load(path string, stackSudo bool, releaseRoot ...string) (*Manifest, error) {
+	return load(path, stackSudo, true, releaseRoot)
+}
+
+// LoadRemoteOnly is Load for a command that reads nothing from the local source tree, such as
+// `stack tls`: it syncs nothing, so localRoot and the sync entries are not checked.
+func LoadRemoteOnly(path string, stackSudo bool) (*Manifest, error) {
+	return load(path, stackSudo, false, nil)
+}
+
+func load(path string, stackSudo, checkLocal bool, releaseRoot []string) (*Manifest, error) {
 	path = expand(path)
 	b, err := os.ReadFile(path) // #nosec G304 -- the manifest path the operator passed or registered
 	if err != nil {
@@ -177,8 +187,10 @@ func Load(path string, stackSudo bool, releaseRoot ...string) (*Manifest, error)
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
 	}
-	if err := m.checkPathsLexical(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if checkLocal {
+		if err := m.checkPathsLexical(); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	for _, rel := range m.RequireLocal {
 		if strings.TrimSpace(rel) == "" {
@@ -449,6 +461,23 @@ func (m *Manifest) allowedRoots() []string {
 	return roots
 }
 
+// evalPartial resolves symlinks in the longest existing prefix of p and keeps the rest as written,
+// so a path that does not exist yet still gets a real-path form.
+func evalPartial(p string) string {
+	rest := ""
+	for cur := p; ; {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
 func insideAny(roots []string, p string) bool {
 	for _, r := range roots {
 		if secretref.Inside(r, p) {
@@ -458,13 +487,43 @@ func insideAny(roots []string, p string) bool {
 	return false
 }
 
-// escapeHint is the way out, in the words the operator needs.
-const escapeHint = "keep the manifest in the source tree, or register the stack with `baryovm stack add --release-root <dir>` to let its manifests reach inside <dir>"
+// insideAnyForm is insideAny that also accepts the real-path form: a manifest reached through a
+// symlinked directory (/tmp on macOS) with a real-path localRoot is not an escape. Each side is
+// compared with the same form of the other, never mixed.
+func insideAnyForm(roots []string, p string) bool {
+	if insideAny(roots, p) {
+		return true
+	}
+	real := make([]string, len(roots))
+	for i, r := range roots {
+		real[i] = evalPartial(r)
+	}
+	return insideAny(real, evalPartial(p))
+}
 
-// checkPathsLexical refuses a localRoot or sync entry that, as written, lies outside the allowed
-// roots. It touches nothing, so it runs at Load and a --dry-run refuses too. A manifest is a
-// committed file: without this, one from another branch could name `~` and `.ssh` and have the
-// release copy a private key to the VM (#158). Symlinks are CheckConfined's job.
+// Hints for the way out. The command that loads the manifest says which fits.
+const (
+	HintStack   = "register the stack with `baryovm stack add --release-root <dir>`"
+	HintProject = "pass `--release-root <dir>` to `project release`"
+)
+
+// escapeHint is the way out, in the words the operator needs.
+const escapeHint = "keep the manifest in the source tree, or " + HintStack + " to let its manifests reach inside <dir>"
+
+// relativeNote explains a refused relative localRoot: it is read from the current directory.
+func relativeNote(localRoot string) string {
+	p := expand(localRoot)
+	if filepath.IsAbs(p) {
+		return ""
+	}
+	return ". A relative localRoot resolves against the current directory, not the manifest's: write an absolute path or run from the manifest's directory"
+}
+
+// checkPathsLexical refuses a localRoot, sync entry or requireLocal entry that, as written, lies
+// outside the allowed roots. It touches nothing but the file system's symlink answers, so it runs
+// at Load and a --dry-run refuses too. A manifest is a committed file: without this, one from
+// another branch could name `~` and `.ssh` and have the release copy a private key to the VM
+// (#158). Symlinks created later are CheckConfined's job.
 func (m *Manifest) checkPathsLexical() error {
 	if m.Dir == "" {
 		return nil // a manifest built in code, not read from a file
@@ -474,12 +533,20 @@ func (m *Manifest) checkPathsLexical() error {
 	if err != nil {
 		return fmt.Errorf("localRoot %q: %w", m.LocalRoot, err)
 	}
-	if !insideAny(roots, local) {
-		return fmt.Errorf("localRoot %q is outside the manifest's directory %s: %s", m.LocalRoot, m.Dir, escapeHint)
+	if !insideAnyForm(roots, local) {
+		return fmt.Errorf("localRoot %q is outside the manifest's directory %s: %s%s", m.LocalRoot, m.Dir, escapeHint, relativeNote(m.LocalRoot))
 	}
 	for _, sub := range m.Sync {
-		if !insideAny(roots, filepath.Join(local, filepath.FromSlash(sub))) {
+		if !insideAnyForm(roots, filepath.Join(local, filepath.FromSlash(sub))) {
 			return fmt.Errorf("sync entry %q reaches outside the manifest's directory %s: %s", sub, m.Dir, escapeHint)
+		}
+	}
+	for _, rel := range m.RequireLocal {
+		if strings.TrimSpace(rel) == "" {
+			continue // Load refuses an empty entry with its own message
+		}
+		if !insideAnyForm(roots, filepath.Join(local, filepath.FromSlash(rel))) {
+			return fmt.Errorf("requireLocal entry %q reaches outside the manifest's directory %s: %s", rel, m.Dir, escapeHint)
 		}
 	}
 	return nil

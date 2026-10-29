@@ -28,6 +28,7 @@ baryovm project release [flags]
   -h, --help                          help for release
       --no-backup                     skip the automatic pre-release DB backup
       --no-build                      skip building images (just sync + compose up)
+      --release-root string           let every manifest reach inside <dir> as well as its own directory (absolute; from the command line only, never the file). See USAGE.md
 ```
 
 ### Options inherited from parent commands

@@ -606,6 +606,12 @@ needs no flag, and a manifest or project file cannot set it: a project file that
 is refused, and `project export` leaves it out. Re-adding the stack without the flag keeps it;
 `--release-root ""` clears it. The rsync trailing-slash rule and the compose dir rule are unchanged.
 
+`project release` reads no fleet.json, so it has its own operator flag: `baryovm project release
+--release-root ~/repos`. It applies to every stack in the run and, like the stack setting, comes from
+the command line and never from the file. `requireLocal` entries follow the same rule as `sync`, and
+`stack tls` syncs nothing, so it does not check the local paths. A relative `localRoot` is read from
+the current directory, not the manifest's, and the refusal says so.
+
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
   --release-file ~/repos/BaryoClub/baryovm.release.json \

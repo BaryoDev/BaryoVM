@@ -47,6 +47,7 @@ func addrOf(vm *fleet.VM) string {
 func newProjectReleaseCmd() *cobra.Command {
 	var file string
 	var noBuild, noBackup, adopt bool
+	var releaseRoot string
 	cmd := &cobra.Command{
 		Use:   "release",
 		Short: "Release every stack of a project file, in order, with no vm add or stack add",
@@ -113,7 +114,17 @@ func newProjectReleaseCmd() *cobra.Command {
 				}
 			}
 
-			opts := stackReleaseOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt}
+			// The widening is the operator's flag, never the file's: a project file cannot set it.
+			if releaseRoot != "" {
+				root, err := absReleaseRoot(releaseRoot)
+				if err != nil {
+					return fail(err)
+				}
+				for i := range store.Stacks {
+					store.Stacks[i].ReleaseRoot = root
+				}
+			}
+			opts := stackReleaseOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt, ViaProject: true}
 			for i, n := range order {
 				ui.Notef("%s: releasing (%d of %d)", n, i+1, len(order))
 				var res ui.Result
@@ -131,6 +142,7 @@ func newProjectReleaseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", fleet.DefaultProjectFile, "project file to release from")
+	cmd.Flags().StringVar(&releaseRoot, "release-root", "", "let every manifest reach inside <dir> as well as its own directory (absolute; from the command line only, never the file). See USAGE.md")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: see `stack release --adopt`")

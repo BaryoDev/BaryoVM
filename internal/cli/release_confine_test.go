@@ -7,11 +7,13 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/release"
 )
 
 // writeReleaseManifest replaces the fixture's release.json.
@@ -157,5 +159,111 @@ func TestProjectExportDropsReleaseRoot(t *testing.T) {
 	}
 	if strings.Contains(string(b), "releaseRoot") || strings.Contains(string(b), "/Users/me/repos") {
 		t.Errorf("the export carries the operator's release root:\n%s", b)
+	}
+}
+
+// Only the check at load can stop this one: the outside localRoot does not exist, so the symlink
+// check has nothing to resolve and passes.
+func TestReleaseRefusesAMissingLocalRootOutsideTheDirectory(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		releaseFixture(t)
+		withLookPath(t, hasRsync)
+		refuseDial(t)
+		writeReleaseManifest(t, filepath.Join(t.TempDir(), "not-there"), "web")
+		f := &fakeRunner{}
+		args := []string{"demo"}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		_, _, err := runCmdE(t, newStackReleaseCmd(), f, true, args...)
+		if err == nil || !strings.Contains(err.Error(), "localRoot") {
+			t.Errorf("dry run %v: want a refusal naming localRoot, got %v", dry, err)
+		}
+		if len(f.seen) != 0 {
+			t.Errorf("dry run %v: no command may run: %v", dry, f.seen)
+		}
+	}
+}
+
+// project release has no stack add to send the operator to: its way out is its own flag, and the
+// file cannot supply it.
+func TestProjectReleaseRootIsAnOperatorFlag(t *testing.T) {
+	dir, _ := projectDir(t, nil)
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := json.Marshal(map[string]any{"localRoot": other, "remoteRoot": "/srv/api", "sync": []string{"web"},
+		"noCompose": true, "verify": []string{"verify-api"}, "verifyAttempts": 1})
+	if err := os.WriteFile(filepath.Join(dir, "api.release.json"), m, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, fleet.DefaultProjectFile)
+
+	f := &fakeRunner{answers: verifyAnswers("api", "console", "site")}
+	_, _, err := projectRun(t, f, "--file", file)
+	if err == nil || !strings.Contains(err.Error(), "localRoot") {
+		t.Fatalf("want a refusal naming localRoot, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "`--release-root <dir>` to `project release`") || strings.Contains(err.Error(), "stack add") {
+		t.Errorf("the hint must name the flag that fits this command: %v", err)
+	}
+
+	f = &fakeRunner{answers: verifyAnswers("api", "console", "site")}
+	if _, _, err := projectRun(t, f, "--file", file, "--release-root", filepath.Dir(other)); err != nil {
+		t.Fatalf("with --release-root the same project must release: %v", err)
+	}
+	f = &fakeRunner{answers: verifyAnswers("api", "console", "site")}
+	if _, _, err := projectRun(t, f, "--file", file, "--release-root", "relative/dir"); err == nil {
+		t.Error("a relative --release-root must be refused")
+	}
+}
+
+// stack tls reads the manifest for its tls block and syncs nothing.
+func TestStackTLSIsNotRefusedOnLocalRoot(t *testing.T) {
+	stackFixture(t)
+	p := filepath.Join(t.TempDir(), "m.json")
+	body := `{"localRoot":"/etc","remoteRoot":"/var/www/app","sync":["out/"],"noCompose":true,"tls":{"hosts":["app.example.com"],"email":"ops@example.com"}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCmdE(t, newStackTLSCmd(), nil, true, "app", "--config", p, "--dry-run"); err != nil {
+		t.Fatalf("stack tls must not be refused on localRoot: %v", err)
+	}
+}
+
+// A link made after the first check, while a long build ran, is refused at the sync.
+func TestSyncStepChecksAgainBeforeCopying(t *testing.T) {
+	for _, transport := range []release.Transport{release.TransportRsync, release.TransportTar} {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src")
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(map[string]any{"localRoot": src, "remoteRoot": "/srv/x", "sync": []string{"out/"}})
+		mp := filepath.Join(dir, "release.json")
+		if err := os.WriteFile(mp, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		m, err := release.Load(mp, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.CheckConfined(); err != nil {
+			t.Fatalf("first check: %v", err)
+		}
+		if err := os.Symlink(t.TempDir(), filepath.Join(src, "out")); err != nil {
+			t.Fatal(err)
+		}
+		prev := runLocal
+		runLocal = func(*exec.Cmd) (string, error) {
+			t.Error("rsync must not run")
+			return "", nil
+		}
+		err = syncSub(m, &fleet.VM{Name: "v", Host: "h", User: "u"}, "out/", transport)
+		runLocal = prev
+		if err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Errorf("%s: want a symlink refusal, got %v", transport, err)
+		}
 	}
 }
