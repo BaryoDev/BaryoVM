@@ -234,8 +234,9 @@ reported item has `"action": "report"`.
 `--ssh-from <cidr,...>` limits port 22 in firewalld (rich rules, the open `ssh` service
 removed) or ufw (`allow from`, the open rule deleted). It refuses to run when none of the
 ranges contains the address in `$SSH_CLIENT`, so it cannot lock out the session you are
-using, and it refuses when that address is unknown. An IPv6 client is accepted only with
-`::/0`. Without `--ssh-from`, a 22 open to everyone is only reported.
+using, and it refuses when that address is unknown. IPv6 ranges are refused up front
+(only `::/0` is accepted), because the lockout check cannot match an IPv6 client against a
+prefix. An IPv6 client is accepted only with `::/0`. Without `--ssh-from`, a 22 open to everyone is only reported.
 
 What it deliberately does not do: change the SSH port, disable public key
 authentication, or remove an `authorized_keys` entry. It validates the sshd configuration

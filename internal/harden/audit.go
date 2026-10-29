@@ -39,6 +39,23 @@ func NormalizeCIDRs(in []string) ([]string, error) {
 	return out, nil
 }
 
+// NormalizeSSHFrom is NormalizeCIDRs for --ssh-from. The lockout guard below matches an IPv4
+// client against a range with real prefix maths but cannot do that for IPv6, so an IPv6 range
+// other than ::/0 would only be refused on the host, after the connection and the audit. Refusing
+// it here names the problem before anything runs.
+func NormalizeSSHFrom(in []string) ([]string, error) {
+	out, err := NormalizeCIDRs(in)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range out {
+		if strings.Contains(c, ":") && c != "::/0" {
+			return nil, fmt.Errorf("--ssh-from: %q is an IPv6 range, which is not supported yet: use IPv4 ranges, or ::/0 to allow any IPv6 address", c)
+		}
+	}
+	return out, nil
+}
+
 // sshFromGuard refuses, before anything is changed, a port 22 limit that would cut
 // off the address this session comes from. The session in flight survives a
 // firewall change, so the damage would only show on the next login.

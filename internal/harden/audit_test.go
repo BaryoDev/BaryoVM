@@ -197,3 +197,15 @@ func TestSSHFromRefusesARuleThatExcludesTheClient(t *testing.T) {
 		t.Errorf("an unknown client was allowed: %q", out)
 	}
 }
+
+// The lockout guard cannot match an IPv6 client against a prefix, so it would refuse every IPv6
+// range but ::/0 on the host after the fact. Say so up front instead.
+func TestNormalizeSSHFromRejectsIPv6PrefixesButKeepsAnyV6(t *testing.T) {
+	if _, err := NormalizeSSHFrom([]string{"203.0.113.7/32", "2001:db8::/32"}); err == nil || !strings.Contains(err.Error(), "IPv6") {
+		t.Errorf("an IPv6 prefix should be refused with a reason, got %v", err)
+	}
+	got, err := NormalizeSSHFrom([]string{"10.0.0.0/8", "::/0"})
+	if err != nil || len(got) != 2 {
+		t.Errorf("IPv4 ranges and ::/0 stay valid: %v %v", got, err)
+	}
+}

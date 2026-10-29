@@ -260,7 +260,7 @@ if systemctl is-active --quiet fail2ban 2>/dev/null; then echo "FACT|fail2ban|ac
 // Apply runs the policy. It is safe to run repeatedly: every step reports
 // already-correct when the machine is already in the desired state.
 func Apply(c *sshx.Client, o Options) (Report, error) {
-	ssh, err := NormalizeCIDRs(o.SSHFrom)
+	ssh, err := NormalizeSSHFrom(o.SSHFrom)
 	if err != nil {
 		return Report{}, err
 	}
