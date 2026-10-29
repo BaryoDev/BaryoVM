@@ -7,6 +7,7 @@ package guard
 import (
 	"fmt"
 	"net/url"
+	"runtime"
 	"strings"
 )
 
@@ -77,10 +78,14 @@ func ParseRemoteHost(raw string) (string, error) {
 		}
 		return h, nil
 	}
-	// scp-style: a colon before any slash, and more than a drive letter before it.
+	// scp-style: a colon before any slash. On Windows a single letter before the colon is a drive
+	// (C:\repos\r), not a host; elsewhere "x:path" is host x.
 	colon := strings.Index(raw, ":")
 	slash := strings.Index(raw, "/")
-	if colon > 1 && (slash < 0 || colon < slash) {
+	if colon == 1 && runtime.GOOS == "windows" {
+		return "", nil
+	}
+	if colon > 0 && (slash < 0 || colon < slash) {
 		host := raw[:colon]
 		if at := strings.LastIndex(host, "@"); at >= 0 {
 			host = host[at+1:]

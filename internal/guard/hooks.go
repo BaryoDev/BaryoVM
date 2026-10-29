@@ -11,7 +11,7 @@ import "strings"
 const HookMarker = "# baryovm-guard"
 
 // HookNames are the git hooks install-hooks writes.
-var HookNames = []string{"pre-commit", "pre-push"}
+var HookNames = []string{"pre-commit", "commit-msg", "pre-push"}
 
 // HookScript returns the script for a hook. It runs the same checks as the wrappers, and fails
 // closed when baryovm is not on PATH, because a hook that silently passes defeats the point.

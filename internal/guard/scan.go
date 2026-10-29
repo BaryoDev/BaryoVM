@@ -46,6 +46,11 @@ var rules = []rule{
 	{"stripe-live-key", regexp.MustCompile(`[sr]k_live_[0-9A-Za-z]{20,}`)},
 	{"npm-token", regexp.MustCompile(`npm_[A-Za-z0-9]{36}`)},
 	{"private-key", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+	{"pgp-private-key", regexp.MustCompile(`-----BEGIN PGP PRIVATE KEY BLOCK-----`)},
+	{"anthropic-key", regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
+	// OpenAI: project keys (sk-proj-...) and the older sk-<alphanumerics>. Twenty or more key
+	// characters keeps short words that start with sk- from matching.
+	{"openai-key", regexp.MustCompile(`\bsk-(?:proj-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,})`)},
 }
 
 // ScanLine returns the rules a single line breaks, in rule order. A line carrying the allow marker
