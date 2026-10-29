@@ -1,0 +1,17 @@
+{
+  "description": "An npm package published to npmjs.com through trusted publishing",
+  "registry": "npmjs.com",
+  "registryUrl": "https://www.npmjs.com/",
+  "workflow": "publish.yml",
+  "environment": "",
+  "oidcSteps": [
+    "Check the npm trusted publisher (OIDC exchange)"
+  ],
+  "requiredChecks": ["Build and test"],
+  "dispatchInputs": {"dry_run": "true"},
+  "notes": [
+    "On npmjs.com, open each package, then Settings, then Trusted Publisher, choose GitHub Actions and enter the values above. Every publishable package needs its own record.",
+    "A package must already exist on npm before it can have a trusted publisher: publish a first version by hand if it is new.",
+    "Pushing a v* tag is the publish right: protect v* tags with a repository ruleset, or limit who can push tags."
+  ]
+}

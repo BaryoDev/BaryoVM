@@ -1518,6 +1518,45 @@ The old repository is never deleted or archived. After the checks pass the comma
 
 Not covered: importing issues into Azure Boards, and rewriting CI workflow files.
 
+## Scaffolding release CI and checking trusted publishing
+
+```sh
+baryovm repo init acme/widgets --template dotnet-nuget --path ~/src/widgets          # plan only
+baryovm repo init acme/widgets --template dotnet-nuget --path ~/src/widgets --yes    # do it
+baryovm repo verify acme/widgets --template dotnet-nuget
+```
+
+`repo init <owner/repo> --template <name>` writes the release workflows and the repository furniture (CODEOWNERS, issue templates, CONTRIBUTING) into a local checkout (`--path`, default `.`), applies branch protection through the GitHub API, and prints the four values to enter for trusted publishing: owner, repository, workflow file, environment. Without `--yes`, or with `--dry-run`, it prints that plan and writes nothing, makes no GitHub call and reads no token. `-o json` gives the plan or the result as data.
+
+| Flag | Default | |
+|---|---|---|
+| `--template` | required | `dotnet-nuget` (nuget.org) or `node-npm` (npmjs.com), or one from `--templates-dir` |
+| `--templates-dir` | none | a directory of your own templates; one named like a built-in replaces it |
+| `--path` | `.` | the local checkout to write into |
+| `--codeowner` | `@<owner>` | the CODEOWNERS handle, `@user` or `@org/team` |
+| `--branch` | the default branch | the branch to protect |
+| `--checks` | the template's | required status checks, repeatable; replaces the template's |
+| `--approvals` | `0` | approving reviews required, besides the code owner review |
+| `--token-ref` | none | GitHub token reference (`env:NAME`, `file:PATH`, `cmd:<command>`); without it `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token` |
+| `--replace-protection` | off | replace branch protection that already exists |
+| `--force` | off | overwrite files that already exist |
+| `--yes` | off | write the files and call GitHub |
+
+A file that already exists is never overwritten without `--force`. It is listed as `exists` and left alone, so a rerun is safe, and a symlink is never written through. Branch protection requires the template's checks and an up to date branch, requires a code owner review, and leaves admins able to push. A branch that already has protection is left alone and reported as `protection exists, not changed`, because the API call replaces the whole rule and would reset hand-set options (admin enforcement, push restrictions, signatures, linear history); `--replace-protection` replaces it. A template path that leaves the checkout (a symlinked folder, for example) is shown as `refused` in the plan, and nothing is written. A custom template may not write under `.git`, and `--codeowner` takes one handle with no spaces or line breaks. The files are written first: if the GitHub call fails they stay, and a rerun skips them and retries the call. Every GitHub call has a 30 second timeout.
+
+BaryoVM does not create the trusted publishing policy and never claims to. nuget.org and npm create it through their web pages and have no API for it, so you do it once, by hand. The order that works, which `repo init` prints:
+
+1. `repo init --yes` writes the workflow and protects the branch.
+2. Commit and push the files, so the workflow exists on the default branch.
+3. Create the policy on nuget.org or npmjs.com with the values `repo init` printed.
+4. `repo verify` says whether it took.
+
+Creating the policy before step 2 names a workflow file that is not there yet, and nothing complains until the first publish.
+
+`repo verify <owner/repo>` starts the publish workflow's dry run (`workflow_dispatch` with `dry_run` on), waits for the run, and reads whether the OIDC exchange step succeeded. The exchange runs on dry runs too and publishes nothing. `--template` gives the workflow file and step names; `--workflow` and `--step` (repeatable) override them. `--ref` picks the branch, `--timeout` (default 15 minutes) how long to wait. The verdict is `took` when every OIDC step succeeded, `did-not-take` when one failed (the values to check are printed again), and `inconclusive` when the run stopped before the step or did not finish in time. It reads only a run that is a `workflow_dispatch` on the ref, created at or after the dispatch (10 seconds of clock skew allowed). It is `inconclusive` when more than one run matches (it will not guess) or when no OIDC step is named. Only `took` exits zero. It needs a token with the actions write permission.
+
+A template is a directory with a `template.json` (registry, workflow file name, environment, the OIDC step names, required checks, notes) and a `files/` tree. Text in the files may use `@@OWNER@@`, `@@REPO@@`, `@@FULL_NAME@@` and `@@CODEOWNER@@`. The built-in templates pin every action to a full commit sha and keep `id-token: write`. Whoever can push a `v*` tag can publish, so both templates and the output say to protect `v*` tags with a repository ruleset or limit who can push tags.
+
 ## Guarding commits, pushes and PR text
 
 `baryovm git` and `baryovm gh` run the real tool after checking for keys. Agents

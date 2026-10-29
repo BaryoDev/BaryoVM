@@ -89,9 +89,9 @@ var repoDial = func(vm *fleet.VM) (repomove.Remote, func(), error) {
 func newRepoCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repo",
-		Short: "Move a stack's source repository to another Git host",
+		Short: "Move a repository, scaffold its release CI, and verify trusted publishing",
 	}
-	cmd.AddCommand(newRepoMoveCmd())
+	cmd.AddCommand(newRepoMoveCmd(), newRepoInitCmd(), newRepoVerifyCmd())
 	return cmd
 }
 
