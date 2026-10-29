@@ -231,7 +231,20 @@ baryovm stack deploy barako --pull                        # pull images, then re
 baryovm stack pull barako
 baryovm stack logs barako --service api --tail 100
 baryovm stack remove barako                               # forget the registration
+
+# the stack's env file, without ssh
+baryovm stack env set barako MAIL_API_KEY                 # no-echo prompt, or: printf %s "$V" | baryovm stack env set ...
+baryovm stack env set barako MAIL_API_KEY --recreate      # then compose up -d --force-recreate
+baryovm stack env list barako                             # keys only, values masked
+baryovm stack env unset barako MAIL_API_KEY
 ```
+
+`stack env` edits the stack's `--env-file` (default `.env`) under its directory. The value is never an
+argument: it comes from a no-echo prompt or one line of piped stdin, travels on the ssh session's stdin
+and is written by a small remote script, so it is on no command line and in no output. The file is
+created with its directory if missing and kept at mode 600, through sudo when the stack was added with
+`--sudo`. KEY must match `^[A-Za-z_][A-Za-z0-9_]*$`. The value is stored as typed on one line, so it
+cannot hold a line break. `list` cuts the keys on the VM, so values never cross the connection.
 
 Running `stack add` again for a stack that already exists updates it in place. `--vm` and `--path`
 are still required, and any other flag you pass replaces its value, but settings you do not name

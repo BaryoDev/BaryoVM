@@ -30,7 +30,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(), newStackEnvCmd(),
 	)
 	return cmd
 }

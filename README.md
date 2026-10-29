@@ -144,7 +144,7 @@ baryovm stack restore app --yes
 | Area | Commands |
 |------|----------|
 | **VMs** | `vm add · list · ping · bootstrap · remove` · `vm runner [remove]` (GitHub Actions runner, opt-in agent) |
-| **Stacks** | `stack add · list · remove · ps · logs · pull` |
+| **Stacks** | `stack add · list · remove · ps · logs · pull` · `stack env set · list · unset` |
 | **Deploy** | `stack deploy` (compose up) · **`stack release`** (sync → build → deploy) |
 | **Backups** | **`stack backup`** · `stack backups` · **`stack restore --yes`** |
 | **Single container** | `deploy` |
