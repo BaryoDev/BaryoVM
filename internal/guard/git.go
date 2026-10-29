@@ -169,7 +169,7 @@ func ConfigEnvSet(environ []string) string {
 
 // IsConfigEnv reports whether an environment variable name injects git config.
 func IsConfigEnv(name string) bool {
-	return name == "GIT_CONFIG_PARAMETERS" || name == "GIT_CONFIG_COUNT" ||
+	return name == "GIT_CONFIG" || name == "GIT_CONFIG_PARAMETERS" || name == "GIT_CONFIG_COUNT" ||
 		strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_")
 }
 

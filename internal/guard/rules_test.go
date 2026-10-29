@@ -239,7 +239,7 @@ func TestStripConfigGlobalsAndConfigEnv(t *testing.T) {
 	if strings.Join(got, " ") != "-C /repo --no-pager" {
 		t.Fatalf("got %q", got)
 	}
-	for _, e := range []string{"GIT_CONFIG_PARAMETERS='a'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=alias.x", "GIT_CONFIG_VALUE_0=y"} {
+	for _, e := range []string{"GIT_CONFIG_PARAMETERS='a'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=alias.x", "GIT_CONFIG_VALUE_0=y", "GIT_CONFIG=/tmp/x.cfg"} {
 		if ConfigEnvSet([]string{"PATH=/bin", e}) == "" {
 			t.Errorf("%s not reported", e)
 		}

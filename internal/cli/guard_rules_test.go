@@ -718,14 +718,14 @@ func TestRulesAndPolicyAreReadWithoutDashC(t *testing.T) {
 }
 
 func TestCleanGitEnvDropsInjectedConfig(t *testing.T) {
-	got := cleanGitEnv([]string{"PATH=/bin", "GIT_CONFIG_PARAMETERS='x'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=a", "GIT_CONFIG_VALUE_0=b", "GIT_CONFIG_GLOBAL=/dev/null"})
+	got := cleanGitEnv([]string{"PATH=/bin", "GIT_CONFIG_PARAMETERS='x'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=a", "GIT_CONFIG_VALUE_0=b", "GIT_CONFIG=/tmp/x.cfg", "GIT_CONFIG_GLOBAL=/dev/null"})
 	if strings.Join(got, " ") != "PATH=/bin GIT_CONFIG_GLOBAL=/dev/null" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestInjectedConfigEnvIsRefused(t *testing.T) {
-	for _, env := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"} {
+	for _, env := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG"} {
 		t.Setenv(env, "x")
 		ran, err := runRule(t, rulesRunner("", nil), "git", "push", "origin", "feature")
 		ruleRefused(t, ran, err, env)

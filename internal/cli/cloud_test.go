@@ -402,6 +402,8 @@ func TestCloudWranglerConfigSpellings(t *testing.T) {
 		"dotted assets key":   "assets.directory = \"./pub\"\n",
 		"inline assets table": "assets = { directory = \"./pub\" }\n",
 		"json site":           "{\"site\": {\"bucket\": \"./pub\"}}\n",
+		"spaced assets table": "[ assets ]\ndirectory = \"./pub\"\n",
+		"quoted assets table": "[\"assets\"]\ndirectory = \"./pub\"\n",
 	}
 	for name, cfg := range scanned {
 		t.Run(name, func(t *testing.T) {

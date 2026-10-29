@@ -292,7 +292,7 @@ func wranglerAssetDirs(args []string, cfg wranglerCfg) ([]string, string) {
 	base := filepath.Dir(cfg.path)
 	// Every directory or bucket key must resolve to a quoted string. One that does not (a variable,
 	// a number, a spelling the pattern misses) is a refusal, not a skip.
-	if assetsMention.MatchString(cfg.text) {
+	if assetsMention.MatchString(cfg.text) || assetsDirectoryKey.MatchString(cfg.text) {
 		m := assetsDirectory.FindAllStringSubmatch(cfg.text, -1)
 		if len(m) == 0 || len(m) != len(assetsDirectoryKey.FindAllString(cfg.text, -1)) {
 			return nil, "the config sets assets but a directory cannot be read, so the assets cannot be scanned"
