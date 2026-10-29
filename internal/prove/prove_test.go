@@ -232,3 +232,43 @@ func TestRecordForAnotherNameOrVersionIsRefused(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestRecordStringsAreCleanedInTextJSONAndErrors(t *testing.T) {
+	bad := "\x1b]0;x\x07" + "\x1b[31m" + "‮"
+	r := goodRecord()
+	r.Diff.Commits = []string{"fix " + bad + "subject"}
+	r.Assertions = []ship.Assertion{{Package: "Acme.Lib", Assert: "version", OK: false, Observed: "8.0" + bad}}
+	r.Steps = []ship.StepResult{{Name: "step" + bad, Status: "failed", Detail: "boom" + bad}}
+	r.OK, r.Error = false, "stopped"+bad
+	p, err := Build(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(p)
+	hasBad := func(s string) bool {
+		return strings.ContainsAny(s, "\x1b\x07‮") || strings.Contains(s, "\\u001b") || strings.Contains(s, "\\u202e") || strings.Contains(s, "\\u0007")
+	}
+	if hasBad(p.Text()) || hasBad(string(b)) {
+		t.Errorf("control text survived:\n%q\n%s", p.Text(), b)
+	}
+	if !strings.Contains(p.Text(), "fix") || !strings.Contains(p.Text(), "boom") {
+		t.Errorf("the readable text was lost:\n%s", p.Text())
+	}
+
+	// Errors: a dry run and a hand-edited record that names another release.
+	r2 := goodRecord()
+	r2.Name, r2.DryRun = "lib"+bad, true
+	if _, err := Build(r2); err == nil || hasBad(err.Error()) {
+		t.Errorf("dry-run error: %q", err)
+	}
+	home := t.TempDir()
+	path, _ := ship.RecordPath(home, "lib", "1.2.4")
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	r3 := goodRecord()
+	r3.Name = "other" + bad
+	raw, _ := json.Marshal(r3)
+	_ = os.WriteFile(path, raw, 0o600)
+	if _, err := Load(home, "lib", "1.2.4"); err == nil || hasBad(err.Error()) {
+		t.Errorf("mismatch error: %q", err)
+	}
+}

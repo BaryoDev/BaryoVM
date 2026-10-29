@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaryoDev/BaryoVM/internal/scan"
 	"github.com/BaryoDev/BaryoVM/internal/ship"
 )
 
@@ -80,6 +81,7 @@ func Build(rec *ship.Record) (*Proof, error) {
 	if rec == nil {
 		return nil, errors.New("no record")
 	}
+	rec = cleanRecord(rec)
 	if rec.DryRun {
 		return nil, fmt.Errorf("the record for %s %s is from a dry run: nothing was released, so there is nothing to prove", rec.Name, rec.Version)
 	}
@@ -325,13 +327,13 @@ func Load(home, name, version string) (*ship.Record, error) {
 	}
 	var rec ship.Record
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, fmt.Errorf("the record %s is not readable: %w", path, err)
+		return nil, fmt.Errorf("the record %s is not readable: %s", path, scan.CleanText(err.Error()))
 	}
 	if rec.Schema != 1 {
 		return nil, fmt.Errorf("the record %s has schema %d, this build reads schema 1", path, rec.Schema)
 	}
 	if rec.Name != name || rec.Version != version {
-		return nil, fmt.Errorf("the record %s says %s %s, not %s %s: refusing to present it", path, rec.Name, rec.Version, name, version)
+		return nil, fmt.Errorf("the record %s says %s %s, not %s %s: refusing to present it", path, scan.CleanText(rec.Name), scan.CleanText(rec.Version), name, version)
 	}
 	return &rec, nil
 }
@@ -448,4 +450,63 @@ func cmpInt(a, b int) int {
 		return 1
 	}
 	return 0
+}
+
+// cleanRecord returns a copy of rec with every string passed through scan.CleanText. The strings
+// come from outside BaryoVM (git subjects, registry metadata, the GitHub API, a hand-edited file)
+// and must not carry terminal control sequences or bidi overrides to a screen or into JSON.
+func cleanRecord(rec *ship.Record) *ship.Record {
+	c := scan.CleanText
+	out := *rec
+	out.Name, out.Stage, out.Version, out.Tag = c(rec.Name), c(rec.Stage), c(rec.Version), c(rec.Tag)
+	out.Commit, out.Repo, out.Registry = c(rec.Commit), c(rec.Repo), c(rec.Registry)
+	out.StartedAt, out.FinishedAt, out.Release, out.Error = c(rec.StartedAt), c(rec.FinishedAt), c(rec.Release), c(rec.Error)
+	out.Checks = nil
+	for _, k := range rec.Checks {
+		out.Checks = append(out.Checks, ship.Check{Name: c(k.Name), OK: k.OK, Observed: c(k.Observed), Reason: c(k.Reason)})
+	}
+	out.Plan = nil
+	for _, s := range rec.Plan {
+		out.Plan = append(out.Plan, c(s))
+	}
+	if rec.Diff != nil {
+		d := *rec.Diff
+		d.From, d.To, d.ShortStat = c(d.From), c(d.To), c(d.ShortStat)
+		d.Files, d.Commits = cleanAll(d.Files), cleanAll(d.Commits)
+		out.Diff = &d
+	}
+	out.Steps = nil
+	for _, s := range rec.Steps {
+		out.Steps = append(out.Steps, cleanStep(s))
+	}
+	if rec.Run != nil {
+		r := *rec.Run
+		r.Name, r.Path, r.URL, r.Status, r.Conclusion, r.HeadSHA = c(r.Name), c(r.Path), c(r.URL), c(r.Status), c(r.Conclusion), c(r.HeadSHA)
+		out.Run = &r
+	}
+	if rec.Publish != nil {
+		s := cleanStep(*rec.Publish)
+		out.Publish = &s
+	}
+	out.Published = nil
+	for _, p := range rec.Published {
+		out.Published = append(out.Published, ship.Published{Package: c(p.Package), Version: c(p.Version)})
+	}
+	out.Assertions = nil
+	for _, a := range rec.Assertions {
+		out.Assertions = append(out.Assertions, ship.Assertion{Package: c(a.Package), Assert: c(a.Assert), OK: a.OK, Observed: c(a.Observed)})
+	}
+	return &out
+}
+
+func cleanStep(s ship.StepResult) ship.StepResult {
+	return ship.StepResult{Name: scan.CleanText(s.Name), Status: scan.CleanText(s.Status), Detail: scan.CleanText(s.Detail)}
+}
+
+func cleanAll(in []string) []string {
+	var out []string
+	for _, s := range in {
+		out = append(out, scan.CleanText(s))
+	}
+	return out
 }
