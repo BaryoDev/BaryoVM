@@ -424,6 +424,31 @@ existing stack is:
 baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy-postgres-1 --db-name barako
 ```
 
+### Onboarding a VM that is already running things
+
+`stack discover` lists the compose projects running on a VM, so you do not start with raw ssh and
+`docker ps`:
+
+```sh
+baryovm stack discover oracle
+baryovm stack discover oracle --sudo                  # docker needs sudo -n for the SSH user
+baryovm stack discover oracle --adopt                 # register them, asking about each on a terminal
+baryovm stack discover oracle --adopt --yes -o json   # no prompts: required without a terminal
+```
+
+It runs `docker compose ls --format json`, then `docker compose config` for each project to count
+services and look for a database. For each project it prints the directory, the service count, the
+postgres container and the `stack add` command that would register it, every value quoted for a
+shell. Without `--adopt` it changes nothing, locally or on the VM.
+
+The postgres container is a guess: the first service whose image name contains `postgres`. It can be
+a replica or the wrong database, so check it before backups rely on it. A project that uses several
+compose files is listed but not adopted, since `stack add` takes one file. A project already
+registered (same VM and directory) is skipped and reported as `already-registered`, and so is one
+whose name another stack already uses. Under `-o json` the data is a list of projects with `name`,
+`dir`, `services`, `postgresGuess`, `addCommand`, `state` and `note`. `--adopt` needs `--yes` when
+there is no terminal or the output is JSON.
+
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
 `--force-recreate`, `--no-deps`, `--dry-run` (print the compose commands, no connection).
 
