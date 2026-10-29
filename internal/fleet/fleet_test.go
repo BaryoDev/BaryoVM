@@ -6,6 +6,8 @@ package fleet
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +140,26 @@ func TestSitesSurviveARoundTrip(t *testing.T) {
 	site := got.FindSite("example.com")
 	if site == nil || site.VM != "web2" || site.Root != "/var/www/x" || len(got.Sites) != 1 {
 		t.Errorf("site lost or duplicated: %+v", got.Sites)
+	}
+}
+
+func TestUnknownStoreAndSiteKeysSurviveASave(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BARYOVM_HOME", dir)
+	raw := `{"vms":[],"sites":[{"domain":"a.com","vm":"w","root":"/srv/a","tls":"new"}],"futureTop":{"x":1}}`
+	if err := os.WriteFile(filepath.Join(dir, "fleet.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.UpsertSite(Site{Domain: "b.com", VM: "w", Root: "/srv/b"})
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(filepath.Join(dir, "fleet.json"))
+	if !strings.Contains(string(out), `"futureTop"`) || !strings.Contains(string(out), `"tls"`) {
+		t.Errorf("an unknown key was dropped:\n%s", out)
 	}
 }

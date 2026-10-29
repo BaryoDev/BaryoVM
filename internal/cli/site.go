@@ -106,6 +106,12 @@ one file, so it does not need --yes. --dry-run prints the server blocks and the 
 			if err != nil {
 				return siteFail(action, rep, err)
 			}
+			// The remote steps are slow and fleet.json may have changed meanwhile (another
+			// baryovm command), so record against a fresh copy and not the one loaded at the start.
+			store, err = fleet.Load()
+			if err != nil {
+				return siteFail(action, rep, fmt.Errorf("the site is set up on %s but fleet.json could not be reloaded to record it: %w", vm.Name, err))
+			}
 			store.UpsertSite(fleet.Site{Domain: o.Domain, VM: vm.Name, Root: o.Root})
 			if err := store.Save(); err != nil {
 				return siteFail(action, rep, fmt.Errorf("the site is set up on %s but recording it locally failed, so `site deploy` will not find it: %w", vm.Name, err))

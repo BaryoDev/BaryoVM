@@ -25,15 +25,38 @@ func TestValidateDomain(t *testing.T) {
 }
 
 func TestValidateRoot(t *testing.T) {
-	for _, r := range []string{"/var/www/example.com", "/srv/sites/a_b-c", "/var/www/a/b"} {
+	for _, r := range []string{"/var/www/example.com", "/srv/sites/a_b-c", "/var/www/a/b", "/home/arnel/site", "/srv/sites/a"} {
 		if err := ValidateRoot(r); err != nil {
 			t.Errorf("%q refused: %v", r, err)
 		}
 	}
-	for _, r := range []string{"", "/", "//", "relative/path", "./x", "/var/www/../etc", "/var/www/x/..", "/etc", "/var/www", "/var/www/", ACMEDir, "/a b", "/a;b", "/a'b", "/a\nb", "/a$(id)", "~/x"} {
+	for _, r := range []string{"", "/", "//", "relative/path", "./x", "/var/www/../etc", "/var/www/x/..", "/etc", "/var/www", "/.", "/./", "/etc/.", "/var/www/.", "//etc", "/var/www//x", "/var/www/x/", "/var/lib", "/var/log", "/usr", "/usr/share", "/home", "/root", "/home/arnel", "/home/arnel/", "/etc/./", "/var/www/", ACMEDir, "/a b", "/a;b", "/a'b", "/a\nb", "/a$(id)", "~/x"} {
 		if err := ValidateRoot(r); err == nil {
 			t.Errorf("%q accepted", r)
 		}
+	}
+}
+
+func TestValidateEmailNeedsAlphanumericStart(t *testing.T) {
+	for _, e := range []string{".a@example.com", "-a@example.com", "+a@example.com", "_a@example.com"} {
+		if ValidateEmail(e) == nil {
+			t.Errorf("%q accepted", e)
+		}
+	}
+	if err := ValidateEmail("a.b-c@example.com"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestWriteCmdFailsWhenTheDecodeFails(t *testing.T) {
+	cmd := WriteCmd("example.com", "x")
+	for _, want := range []string{"set -e", "base64 -d > \"$t\"", "[ -s \"$t\" ]", "mv -f \"$t\" \"$1\"", "sudo -n sh -c"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("write command lacks %q: %s", want, cmd)
+		}
+	}
+	if strings.Contains(cmd, "| sudo") || strings.Contains(cmd, "tee") {
+		t.Errorf("write command still pipes into tee: %s", cmd)
 	}
 }
 
@@ -64,7 +87,9 @@ func TestCommandsExactStrings(t *testing.T) {
 			"sudo -n certbot certonly --webroot -w '/var/www/letsencrypt' --non-interactive --agree-tos -m 'ops@example.com' --keep-until-expiring --cert-name 'example.com' -d 'example.com'"},
 		{"certbot no email", CertbotCmd(dom, ""),
 			"sudo -n certbot certonly --webroot -w '/var/www/letsencrypt' --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring --cert-name 'example.com' -d 'example.com'"},
-		{"write", WriteCmd(dom, "hi"), "printf '%s' 'aGk=' | base64 -d | sudo -n tee " + conf + " > /dev/null"},
+		{"write", WriteCmd(dom, "hi"), `sudo -n sh -c 'set -e; t=$(mktemp "$1.XXXXXX"); trap '\''rm -f "$t"'\'' EXIT; printf '\''%s'\'' "$2" | base64 -d > "$t"; [ -s "$t" ]; chmod 644 "$t"; mv -f "$t" "$1"' sh '/etc/nginx/conf.d/example.com.conf' 'aGk='`},
+		{"prev probe", ProbePrevCmd(dom),
+			`sudo -n "${SHELL:-/bin/sh}" -c 'if [ -e '\''/etc/nginx/conf.d/example.com.conf.baryovm-prev'\'' ]; then echo present; else echo missing; fi'`},
 		{"selinux probe", ProbeSELinuxCmd(), "if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then echo selinux; else echo none; fi"},
 		{"conf probe", ProbeConfCmd(dom),
 			`sudo -n "${SHELL:-/bin/sh}" -c 'if [ -e '\''/etc/nginx/conf.d/example.com.conf'\'' ]; then if head -n 1 '\''/etc/nginx/conf.d/example.com.conf'\'' | grep -qF '\''Managed by BaryoVM'\''; then echo managed; else echo foreign; fi; else echo absent; fi'`},
@@ -183,8 +208,8 @@ func TestFullBlockOmitsMissingCertbotHelpers(t *testing.T) {
 func TestWriteCmdPayloadRoundTrips(t *testing.T) {
 	blk := FullBlock(Options{Domain: "example.com", Root: "/var/www/example.com"}, SSLFiles{})
 	cmd := WriteCmd("example.com", blk)
-	enc := cmd[strings.Index(cmd, "' '")+3:]
-	enc = enc[:strings.Index(enc, "'")]
+	enc := strings.TrimSuffix(cmd, "'")
+	enc = enc[strings.LastIndex(enc, "'")+1:]
 	dec, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil || string(dec) != blk {
 		t.Errorf("payload did not round trip: %v", err)
@@ -227,6 +252,10 @@ func kind(cmd string) string {
 	switch {
 	case strings.Contains(cmd, "head -n 1"):
 		return "probe conf"
+	case strings.Contains(cmd, "echo present") && strings.Contains(cmd, ".baryovm-prev"):
+		return "probe prev"
+	case strings.Contains(cmd, "echo present") && strings.Contains(cmd, "fullchain.pem"):
+		return "probe cert"
 	case strings.Contains(cmd, "options-ssl-nginx.conf") && strings.Contains(cmd, "echo options"):
 		return "probe ssl"
 	case strings.Contains(cmd, "selinuxenabled"):
@@ -236,8 +265,9 @@ func kind(cmd string) string {
 	case strings.Contains(cmd, "restorecon"):
 		return "restorecon"
 	case strings.Contains(cmd, "base64 -d"):
-		enc := cmd[strings.Index(cmd, "printf '%s' '")+13:]
-		dec, _ := base64.StdEncoding.DecodeString(enc[:strings.Index(enc, "'")])
+		enc := strings.TrimSuffix(cmd, "'")
+		enc = enc[strings.LastIndex(enc, "'")+1:]
+		dec, _ := base64.StdEncoding.DecodeString(enc)
 		if strings.Contains(string(dec), "443") {
 			return "write full"
 		}
@@ -282,7 +312,7 @@ func TestAddHappyPathOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, kinds(f), []string{
-		"probe conf", "probe ssl", "probe selinux", "mkdir", "restorecon",
+		"probe conf", "probe prev", "probe cert", "probe ssl", "probe selinux", "mkdir", "restorecon",
 		"write http", "nginx -t", "reload", "certbot", "write full", "nginx -t", "reload",
 	})
 	if !rep.SELinux || rep.RolledBack || rep.FailedStep != "" || len(rep.Steps) != 8 {
@@ -350,7 +380,7 @@ func TestAddNginxTestFailureRollsBackAndNamesTheStep(t *testing.T) {
 		t.Errorf("report = %+v", rep)
 	}
 	eq(t, kinds(f), []string{
-		"probe conf", "probe ssl", "probe selinux", "mkdir",
+		"probe conf", "probe prev", "probe cert", "probe ssl", "probe selinux", "mkdir",
 		"write http", "nginx -t", "reload", "certbot",
 		"write full", "nginx -t", "remove new", "nginx -t", "reload",
 	})
@@ -369,7 +399,7 @@ func TestAddNginxTestFailureOnFirstWriteNeverReloads(t *testing.T) {
 	}
 	// The previous file is put back; nginx was never reloaded, so nothing needs reloading.
 	eq(t, kinds(f), []string{
-		"probe conf", "probe ssl", "probe selinux", "mkdir",
+		"probe conf", "probe prev", "probe cert", "probe ssl", "probe selinux", "mkdir",
 		"backup", "write http", "nginx -t", "restore prev",
 	})
 }
@@ -386,7 +416,7 @@ func TestAddCertbotFailureRestoresTheLastGoodState(t *testing.T) {
 	// The HTTP block was live; the file is removed and nginx reloaded back to no site, so the
 	// host is not left redirecting a name to a certificate that does not exist.
 	eq(t, kinds(f), []string{
-		"probe conf", "probe ssl", "probe selinux", "mkdir",
+		"probe conf", "probe prev", "probe cert", "probe ssl", "probe selinux", "mkdir",
 		"write http", "nginx -t", "reload", "certbot",
 		"remove new", "nginx -t", "reload",
 	})
@@ -401,7 +431,7 @@ func TestAddForceWithExistingFileRestoresIt(t *testing.T) {
 	}
 	k := kinds(f)
 	eq(t, k[len(k)-3:], []string{"restore prev", "nginx -t", "reload"})
-	if k[4] != "backup" {
+	if k[6] != "backup" {
 		t.Errorf("the original was not copied aside before the first write: %v", k)
 	}
 }
@@ -497,4 +527,45 @@ func asStep(err error, target **StepError) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+func TestAddRefusesWhenAPrevCopyIsLeftOver(t *testing.T) {
+	f := &fakeRemote{out: map[string]string{"head -n 1": "managed\n", ".baryovm-prev": "present\n"}}
+	o := testOpts
+	o.Force = true
+	rep, err := Add(f, o, plainStep)
+	if err == nil || !strings.Contains(err.Error(), PrevPath("example.com")) || !strings.Contains(err.Error(), "inspect") {
+		t.Fatalf("err = %v", err)
+	}
+	if rep.FailedStep != StepInspect || rep.RolledBack {
+		t.Errorf("report = %+v", rep)
+	}
+	for _, k := range kinds(f) {
+		if k == "backup" || strings.HasPrefix(k, "write") {
+			t.Errorf("ran %s despite the leftover copy: %v", k, kinds(f))
+		}
+	}
+}
+
+func TestAddForceOnALiveHTTPSSiteSkipsTheHTTPOnlyStage(t *testing.T) {
+	f := &fakeRemote{out: map[string]string{"head -n 1": "managed\n", "fullchain.pem": "present\n", "selinuxenabled": "none\n"}}
+	o := testOpts
+	o.Force = true
+	if _, err := Add(f, o, plainStep); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, kinds(f), []string{
+		"probe conf", "probe prev", "probe cert", "probe ssl", "probe selinux", "mkdir",
+		"backup", "write full", "nginx -t", "reload", "drop backup",
+	})
+}
+
+func TestAddForceOnALiveSiteRestoresIfTheFullBlockIsRejected(t *testing.T) {
+	f := &fakeRemote{out: map[string]string{"head -n 1": "managed\n", "fullchain.pem": "present\n", "selinuxenabled": "none\n"}, fail: map[string]bool{"nginx -t": true}}
+	o := testOpts
+	o.Force = true
+	if _, err := Add(f, o, plainStep); err == nil {
+		t.Fatal("expected failure")
+	}
+	eq(t, kinds(f)[6:], []string{"backup", "write full", "nginx -t", "restore prev"})
 }

@@ -149,3 +149,51 @@ func (s Stack) MarshalJSON() ([]byte, error) {
 	}
 	return mergeUnknown(b, s.rest)
 }
+
+func (s *Site) UnmarshalJSON(b []byte) error {
+	type plain Site
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*s = Site(p)
+	rest, err := captureUnknown(b, knownKeys(reflect.TypeOf(plain{})))
+	if err != nil {
+		return err
+	}
+	s.rest = rest
+	return nil
+}
+
+func (s Site) MarshalJSON() ([]byte, error) {
+	type plain Site
+	b, err := json.Marshal(plain(s))
+	if err != nil {
+		return nil, err
+	}
+	return mergeUnknown(b, s.rest)
+}
+
+func (s *Store) UnmarshalJSON(b []byte) error {
+	type plain Store
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*s = Store(p)
+	rest, err := captureUnknown(b, knownKeys(reflect.TypeOf(plain{})))
+	if err != nil {
+		return err
+	}
+	s.rest = rest
+	return nil
+}
+
+func (s Store) MarshalJSON() ([]byte, error) {
+	type plain Store
+	b, err := json.Marshal(plain(s))
+	if err != nil {
+		return nil, err
+	}
+	return mergeUnknown(b, s.rest)
+}

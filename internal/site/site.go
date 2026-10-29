@@ -12,6 +12,7 @@ package site
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -33,7 +34,7 @@ const (
 
 var (
 	dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	emailRe  = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
+	emailRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
 	rootRe   = regexp.MustCompile(`^/[A-Za-z0-9._/-]*$`)
 )
 
@@ -57,20 +58,28 @@ func ValidateDomain(d string) error {
 }
 
 // ValidateRoot checks the webroot before it reaches a command. It must be absolute, made of plain
-// path characters, free of .. segments, and not a system directory: a webroot of / or /etc would
-// publish the host, and `site deploy` runs rsync --delete into it.
+// path characters, already in cleaned form (no ".", "..", "//" or trailing slash, so what is
+// checked is what the shell sees), and not a system directory or a user's home: a webroot of / or
+// /etc would publish the host, and `site deploy` runs rsync --delete into it.
 func ValidateRoot(r string) error {
 	if !rootRe.MatchString(r) {
 		return fmt.Errorf("--root %q must be an absolute path of letters, digits, dot, dash, underscore and slash only", r)
 	}
 	for _, seg := range strings.Split(r, "/") {
-		if seg == ".." {
-			return fmt.Errorf("--root %q must not contain a .. segment", r)
+		if seg == ".." || seg == "." {
+			return fmt.Errorf("--root %q must not contain a . or .. segment", r)
 		}
 	}
-	switch strings.TrimRight(r, "/") {
-	case "", "/etc", "/root", "/home", "/var", "/usr", "/opt", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/tmp", "/srv", "/var/www", ACMEDir:
+	if path.Clean(r) != r {
+		return fmt.Errorf("--root %q must be written in its plain form, %q (no doubled or trailing slash)", r, path.Clean(r))
+	}
+	switch r {
+	case "/", "/etc", "/root", "/home", "/var", "/usr", "/opt", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/tmp", "/srv",
+		"/var/www", "/var/lib", "/var/log", "/usr/share", ACMEDir:
 		return fmt.Errorf("--root %q would publish a system directory or the shared challenge directory: give the site its own directory, such as /var/www/example.com", r)
+	}
+	if path.Dir(r) == "/home" {
+		return fmt.Errorf("--root %q is a user's home directory: give the site a directory of its own below it", r)
 	}
 	return nil
 }

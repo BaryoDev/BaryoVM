@@ -104,6 +104,9 @@ type Site struct {
 	Domain string `json:"domain"`
 	VM     string `json:"vm"`   // references a VM by name
 	Root   string `json:"root"` // remote webroot the site serves
+
+	// rest holds fields a newer BaryoVM wrote that this one does not know: see unknown.go.
+	rest unknownFields
 }
 
 // Store is the whole fleet.
@@ -111,6 +114,9 @@ type Store struct {
 	VMs    []VM    `json:"vms"`
 	Stacks []Stack `json:"stacks,omitempty"`
 	Sites  []Site  `json:"sites,omitempty"`
+
+	// rest holds top-level keys a newer BaryoVM wrote that this one does not know.
+	rest unknownFields
 }
 
 func dir() string {
