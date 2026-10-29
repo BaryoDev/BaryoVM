@@ -161,6 +161,10 @@ func (r *Recipe) Validate(path string) error {
 		return fmt.Errorf("recipe %s has no name", path)
 	}
 
+	if err := r.validateSafe(path); err != nil {
+		return err
+	}
+
 	if len(r.Services) == 0 && len(r.Files) == 0 {
 		return fmt.Errorf("recipe %s declares neither services nor files, so there is nothing to deploy", path)
 	}

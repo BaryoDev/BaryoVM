@@ -84,6 +84,11 @@ type Stack struct {
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
+	// RecipeFile is a local recipe (a file, or a directory holding baryovm.recipe.json) that the
+	// app's repository owns. When set, `stack release` deploys the recipe's services. A stack
+	// without one releases exactly as before.
+	RecipeFile string `json:"recipeFile,omitempty"`
+
 	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
 	// .env is root-owned, which is the right posture for a file holding a database password.
 	// Without it every command fails with "permission denied" for the SSH user.

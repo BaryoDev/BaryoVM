@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Package compose drives `docker compose` on a VM over SSH, the day-to-day
-// path for real workloads (barakoCMS, BaryoClub) that run as compose stacks
+// path for real workloads (a CMS, a web app) that run as compose stacks
 // rather than single containers.
 package compose
 
@@ -20,7 +20,7 @@ import (
 
 // Stack points at a remote compose project.
 type Stack struct {
-	Dir  string // project directory, e.g. /opt/barakocms
+	Dir  string // project directory, e.g. /opt/app
 	File string // compose file name; empty uses compose's default
 	// Sudo runs compose through sudo.
 	//

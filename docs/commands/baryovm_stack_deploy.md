@@ -9,8 +9,8 @@ baryovm stack deploy <name> [flags]
 ### Examples
 
 ```
-  baryovm stack deploy barako --force-recreate --service api,console
-  baryovm stack deploy barako --pull
+  baryovm stack deploy app --force-recreate --service api,console
+  baryovm stack deploy app --pull
 ```
 
 ### Options

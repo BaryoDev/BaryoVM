@@ -854,6 +854,51 @@ What the check does not do:
   compose directory through a symlink is not caught.
 - It is the same with or without `--sudo`.
 
+### Recipes: a stack described by its own repository
+
+An app repository can publish a recipe, `baryovm.recipe.json`, so BaryoVM needs no knowledge of the
+app. Register it, or pass it at release time (a file, or a directory holding the file):
+
+```sh
+baryovm stack add app --vm oracle --path /opt/app --recipe ~/repos/app
+baryovm stack release app --input DB_PASSWORD=env:APP_DB_PASSWORD
+baryovm stack release app --recipe ~/repos/app --input DB_PASSWORD=file:secrets/db
+```
+
+```json
+{
+  "schema": 1,
+  "name": "app",
+  "services": [
+    { "name": "api", "image": "registry.example/app-api:1.2.0", "ports": ["8080:80"] },
+    { "name": "web", "image": "registry.example/app-web:1.2.0", "healthUrl": "http://127.0.0.1:3000/health" }
+  ],
+  "inputs": [ { "name": "DB_PASSWORD", "secret": true }, { "name": "SITE_URL", "default": "http://localhost" } ]
+}
+```
+
+`stack add --recipe` checks the file and sets the stack's compose file to
+`docker-compose.recipe.yml`. A release writes that file in the stack directory, pulls every image
+first (a registry failure changes nothing), then runs `compose up -d --no-deps` for each service in
+order, waiting on its `healthUrl` from the VM. Inputs go to the stack's `.env` on stdin at mode 600.
+A secret input takes `env:NAME` or `file:PATH` only: no default, no literal, no `cmd:`. Optional
+inputs take a literal or their default.
+
+An unknown `schema` is refused by both commands, and so is any unknown field. Service names,
+images, ports, health URLs and file paths are checked against a plain shape (no `;`, spaces,
+`$`, backticks or `..`) and every remote command quotes them anyway.
+
+If a service fails (up or health), the release rolls back. What rolls back: the compose file
+(restored from `docker-compose.recipe.yml.prev`) and the containers of every service the release had
+touched, which are started again from the old file. A service the previous recipe did not have is
+removed (`compose rm -sf`). On a first deploy the touched services are removed and the compose file
+dropped. What does not roll back: `.env` values, volumes and data, and anything a service did to its
+own data on start. A recipe release does not take a backup yet.
+
+Not supported in a recipe release yet: `files`, `routes`, `backup` and service `build` (a service
+needs an `image`), `--dry-run`, `--resume`, `--clear`, `--adopt`, `--no-build`, and `--config`.
+A stack with a recipe cannot also use a release file, and a stack without a recipe is unchanged.
+
 ### Project files: one fleet definition for a team and for CI
 
 `fleet.json` is one file on one machine. It holds an absolute key path and an absolute path to each
