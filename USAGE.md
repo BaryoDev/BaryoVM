@@ -350,6 +350,42 @@ and `--all` puts a list of reports there. Each check has `name`, `verdict`, `det
 `items` (the containers at fault) and `metrics` (numbers such as `usedPercent`, `security`,
 `other`, `uptimeDays`).
 
+## The whole fleet on one screen
+
+`status` asks every registered VM once, over one SSH connection each, and prints a row per stack.
+It is read only: nothing is written, restarted or pulled on any host.
+
+```sh
+baryovm status
+baryovm status --vm oracle
+baryovm status --stack shop --timeout 10s -o json
+```
+
+| Column | Where it comes from |
+| --- | --- |
+| `STATE`, `UP` | `compose ps --format json`: `up`, `degraded` (a container stopped or unhealthy), `down` |
+| `DEPLOYED` | the commit and time of the last finished release, from the record `stack release` leaves beside the release root |
+| `RELEASE` | `idle`, or the release record still on the VM: `running`, `interrupted`, `FAILED <step>` |
+| `VERIFY` | the stack's verify assertions (or its `healthUrl`), run once now, `n/n` or `FAIL` |
+| `BACKUP` | the backups in the stack's backup directory, as `count, date of the newest` |
+
+A dash means the column is not configured for that stack, which is not a failure. A question mark
+means it is configured and could not be read, with the reason under the table and in `notes`. The
+human table goes to stderr.
+
+VMs are asked concurrently, `--concurrency` at a time (default 4), each within `--timeout` (default
+30s). A VM that does not answer is shown as `unreachable` with the reason, and every other row still
+prints. The command exits zero whenever it produced a report; read `attention` in `-o json` for what
+needs a look. `--no-verify` skips the verify assertions.
+
+A VM behind a forced command (`vm remote set <vm> forced`) is sent the `status` request and nothing
+else, so it shows the container list and `limited` in the other columns.
+
+With `-o json`, `data` holds `vms`, `stacks` and `summary`. Each stack has `name`, `vm`, `state`,
+`running`, `total`, `runtime`, `deployed`, `release`, `verify`, `backups` (each null when not
+configured or not readable), `limited`, `attention` and `notes`. The table is drawn from the same
+report.
+
 ## Patching and pruning a VM
 
 `vm patch` updates the OS packages and proves the stack came back.
