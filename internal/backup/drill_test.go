@@ -132,3 +132,16 @@ func TestDrillNeverWritesToTheLiveContainer(t *testing.T) {
 		t.Error("the note must say plainly that no --yes is needed")
 	}
 }
+
+// The removal exits 0 but the container is still there: Removed must follow the inspect, not the
+// removal's exit status.
+func TestDrillRemovalThatExitedZeroButLeftTheContainerIsNotRemoved(t *testing.T) {
+	r := &seqRunner{outs: []string{"drill: tables=3\n", "", "present\n"}}
+	res, err := Drill(r, baseCfg(), "", "d1")
+	if res.Removed {
+		t.Fatalf("Removed followed the rm exit status: %+v", res)
+	}
+	if err == nil || !strings.Contains(err.Error(), "d1") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -103,3 +103,19 @@ func TestStackRestoreDrillSaysWhenTheContainerIsStillThere(t *testing.T) {
 		t.Errorf("envelope = %+v", env)
 	}
 }
+
+func TestStackRestoreDrillRmThatExitedZeroButLeftTheContainer(t *testing.T) {
+	stackFixture(t)
+	r := &drillRunner{scriptOut: "drill: tables=3\n", stillThere: true}
+	stdout, _, err := runCmdE(t, newStackRestoreCmd(), r, true, "app", "--drill")
+	if err == nil {
+		t.Fatal("a container left behind must fail the drill")
+	}
+	var env drillEnvelope
+	if e := json.Unmarshal([]byte(stdout), &env); e != nil {
+		t.Fatalf("no envelope: %v (%q)", e, stdout)
+	}
+	if env.OK || env.Data["removed"] != false {
+		t.Errorf("envelope = %+v", env)
+	}
+}
