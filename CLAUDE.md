@@ -207,10 +207,10 @@ of note. Examples worth reading before touching the relevant area:
 
 ### Licence headers
 
-Non-test source files carry the three-line MPL-2.0 notice at the top, above the
-package doc comment. Include it in any new file. A few recent files
-(`internal/update/update.go`, `internal/cli/stack_update.go`) are missing it;
-adding it while you are in there is welcome.
+Every Go file, tests included, carries the three-line MPL-2.0 notice at the top,
+above the package doc comment. Include it in any new file.
+`TestEveryGoFileCarriesTheMPLNotice` in `internal/workflows` fails without it.
+Contributor terms are in `CLA.md`.
 
 ## State
 
