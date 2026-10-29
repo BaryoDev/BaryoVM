@@ -5,6 +5,7 @@
 package rollback
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,8 +67,8 @@ func TestApplyRetagsThenUpsAndNeverTouchesTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.seen) != 2 || !strings.Contains(r.seen[0], " tag ") || !strings.Contains(r.seen[1], "up") {
-		t.Fatalf("want retag then up, got %v", r.seen)
+	if len(r.seen) != 3 || !strings.Contains(r.seen[0], "image inspect") || !strings.Contains(r.seen[1], " tag ") || !strings.Contains(r.seen[2], "up") {
+		t.Fatalf("want inspect, retag, then up, got %v", r.seen)
 	}
 	for _, c := range r.seen {
 		if strings.Contains(c, "pg_restore") || strings.Contains(c, "psql") {
@@ -83,5 +84,35 @@ func TestApplyWithNoImagesErrors(t *testing.T) {
 	}
 	if len(r.seen) != 0 {
 		t.Errorf("ran %v", r.seen)
+	}
+}
+
+type missingRunner struct {
+	seen    []string
+	missing string
+}
+
+func (r *missingRunner) Run(cmd string) (string, error) {
+	r.seen = append(r.seen, cmd)
+	if strings.Contains(cmd, "image inspect") && strings.Contains(cmd, r.missing) {
+		return "", errors.New("no such image")
+	}
+	return "", nil
+}
+
+func TestApplyChangesNothingWhenAnImageIsMissing(t *testing.T) {
+	r := &missingRunner{missing: "sha256:bbb"}
+	rec := &Record{Images: []Image{
+		{Service: "web", Ref: "app-web:1", ID: "sha256:aaa"},
+		{Service: "worker", Ref: "app-worker:1", ID: "sha256:bbb"},
+	}}
+	err := Apply(r, compose.Stack{Dir: "/opt/app"}, rec)
+	if err == nil || !strings.Contains(err.Error(), "sha256:bbb") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("want an error naming the image and saying nothing changed, got %v", err)
+	}
+	for _, c := range r.seen {
+		if strings.Contains(c, " tag ") || strings.Contains(c, " up") {
+			t.Errorf("changed something before the check passed: %s", c)
+		}
 	}
 }

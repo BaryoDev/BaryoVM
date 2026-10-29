@@ -83,6 +83,18 @@ func Apply(c sshx.Runner, s compose.Stack, r *Record) error {
 	if len(r.Images) == 0 {
 		return fmt.Errorf("the record holds no images to go back to")
 	}
+	// Check every id before the first retag. A retag moves a tag for good, so a missing image found
+	// halfway would leave the earlier services pointing at old images and the rest at new ones.
+	var missing []string
+	for _, i := range r.Images {
+		if _, err := compose.InspectImage(c, s, i.ID); err != nil {
+			missing = append(missing, fmt.Sprintf("%s (%s)", i.ID, i.Service))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("these images are gone from the host: %s; nothing was changed, so restore them or accept the current release",
+			strings.Join(missing, ", "))
+	}
 	for _, i := range r.Images {
 		if _, err := compose.Retag(c, s, i.ID, i.Ref); err != nil {
 			return fmt.Errorf("retag %s: %w", i.Service, err)

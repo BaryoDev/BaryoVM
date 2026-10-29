@@ -390,6 +390,12 @@ func Retag(c sshx.Runner, s Stack, id, ref string) (string, error) {
 	return c.Run(s.docker() + " tag " + sshx.Quote(id) + " " + sshx.Quote(ref))
 }
 
+// InspectImage fails when the image id is not on the host. Rollback uses it to check every id
+// before it moves a tag.
+func InspectImage(c sshx.Runner, s Stack, id string) (string, error) {
+	return c.Run(s.docker() + " image inspect --format '{{.Id}}' " + sshx.Quote(id))
+}
+
 // Logs returns recent logs for the stack (or selected services).
 func Logs(c sshx.Runner, s Stack, svcs []string, tail int) (string, error) {
 	args := " logs --no-color"
