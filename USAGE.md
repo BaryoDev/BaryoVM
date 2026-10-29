@@ -403,6 +403,46 @@ One rule worth carrying into any check script: a "must not contain" assertion on
 after a real body has arrived. An empty response, a 502 and a DNS failure all satisfy a negative
 grep, so assert the status and a minimum size first.
 
+#### A release that stopped part way
+
+Before its first step that changes anything, `stack release` writes a plain JSON record on the VM,
+next to the release directory: `.baryovm-release-<stack>.json`. Read it with `cat`. It holds the
+commit (`git rev-parse HEAD` of the local source, when there is one), the backup taken, each step
+with its status (`started`, `done`, `failed`) and the failed step with its error. A step is
+written as `started` before it runs, so a crash in between reads as "this step may have run". The
+write happens under a lock directory on the host, so two releases starting together cannot both
+find nothing in progress.
+
+A finished release removes the file and writes `.baryovm-release-<stack>.deployed.json` with the
+commit. A host with no record behaves as before.
+
+```sh
+baryovm stack release app            # refuses when a record exists, and prints what it did and did not touch
+baryovm stack release app --resume   # continue from the first step not done, reusing the earlier backup
+baryovm stack release app --clear    # drop the record without running anything
+```
+
+A record whose `deploy` or `tls` step did not finish cannot be resumed, since compose may be half
+applied. The refusal says so, points at `stack rollback` and names the backup it took, for
+`stack restore <name> --file <backup> --yes` if the data needs it. `--resume` also refuses when
+the local commit differs from the recorded one. In JSON the refusal carries `data.stateFile`,
+`steps`, `failedStep`, `failedError`, `backup`, `backupFile`, `resumable` and `hint`. A successful
+release reports `data.commit`.
+
+#### Rolling back the images
+
+```sh
+baryovm stack rollback app --list    # show the images recorded before the last release or update
+baryovm stack rollback app           # retag them and recreate the containers
+```
+
+`stack release` (before `compose up`) and `stack update` (before its first recreate) write
+`images-before.json` into the stack's backup directory on the VM, so the record outlives the CLI.
+Rollback puts those images back and runs `compose up`. It never touches the database: the matching
+backups are printed, and `stack restore --yes` stays the explicit word for the data. In JSON the
+record is `data.record`, the backups `data.backups`, and `data.restoredDatabase` is always
+`false`. Static sites are not covered.
+
 #### Sync transports and excludes
 
 With local `rsync` on your PATH, `sync` entries go through rsync. Without it they go as a tar

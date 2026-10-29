@@ -240,6 +240,9 @@ func (m *Manifest) BuildCmd(b Build) string {
 // different parser, so not the same function.
 func quoteRsync(p string) string { return "'" + strings.ReplaceAll(p, "'", "''") + "'" }
 
+// LocalPath is the local source root with ~ expanded.
+func (m *Manifest) LocalPath() string { return expand(m.LocalRoot) }
+
 // CheckRequireLocal refuses a release whose required local paths are not all there. It runs before
 // the sync, so nothing has been transferred and no hook has run when it says no.
 func (m *Manifest) CheckRequireLocal() error {

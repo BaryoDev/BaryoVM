@@ -8,6 +8,7 @@
 package backup
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -62,6 +63,27 @@ func (c Config) bkVar() string {
 		return "BK=" + sshx.Quote(c.BackupDir) + "\n"
 	}
 	return fmt.Sprintf("BK=\"$HOME/%s-backups\"\n", c.Name)
+}
+
+// WriteFileCmd builds the command that stores data as a plain file named name in the backup dir,
+// replacing it in one rename. name is a fixed file name chosen by the caller, never user input. It
+// runs as the SSH user, like the rest of the script's file handling.
+func (c Config) WriteFileCmd(name string, data []byte) string {
+	b64 := base64.StdEncoding.EncodeToString(data)
+	return c.bkVar() + "mkdir -p \"$BK\" && printf %s " + sshx.Quote(b64) + " | base64 -d > \"$BK\"/" + name + ".tmp && mv \"$BK\"/" + name + ".tmp \"$BK\"/" + name
+}
+
+// ReadFileCmd builds the command that prints a file from the backup dir, or nothing when it is not there.
+func (c Config) ReadFileCmd(name string) string {
+	return c.bkVar() + "if [ -f \"$BK\"/" + name + " ]; then cat \"$BK\"/" + name + "; fi"
+}
+
+// DirNote names the backup directory for messages, without resolving $HOME.
+func (c Config) DirNote() string {
+	if c.BackupDir != "" {
+		return c.BackupDir
+	}
+	return "~/" + c.Name + "-backups"
 }
 
 // ValidateEnvFile accepts an empty name (no config copy) or a relative path made of letters,

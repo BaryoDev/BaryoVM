@@ -17,10 +17,12 @@ baryovm stack release <name> [flags]
 
 ```
       --adopt           with a tls block: take over a vhost file BaryoVM did not write (backed up first)
+      --clear           drop the record of an earlier release that stopped, without running anything
       --config string   release manifest path (overrides the stack's --release-file)
   -h, --help            help for release
       --no-backup       skip the automatic pre-release DB backup
       --no-build        skip building images (just sync + compose up)
+      --resume          continue an earlier release that stopped, from the first step not done, reusing its backup
 ```
 
 ### Options inherited from parent commands
