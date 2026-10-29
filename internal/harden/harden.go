@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
@@ -276,6 +277,27 @@ func Apply(c *sshx.Client, o Options) (Report, error) {
 	return r, nil
 }
 
+// clean drops control, format and line-separator characters from text the remote host chose
+// (an authorized_keys comment, an sshd banner). Printed raw, an escape sequence could rewrite the
+// operator's terminal. Same rule as the scan package, kept local so harden does not import it.
+func clean(s string) string {
+	const max = 300
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			continue
+		}
+		if n == max {
+			b.WriteString("...")
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
+
 // parseApply turns the script's line protocol into a Report. Separated from the SSH
 // call so the parsing has tests that do not need a machine.
 func parseApply(out string) Report {
@@ -286,16 +308,16 @@ func parseApply(out string) Report {
 		case len(parts) >= 3 && parts[0] == "FACT":
 			switch parts[1] {
 			case "os":
-				r.OS = parts[2]
+				r.OS = clean(parts[2])
 			case "sshVersion":
-				r.SSHVersion = strings.Join(parts[2:], "|")
+				r.SSHVersion = clean(strings.Join(parts[2:], "|"))
 			case "penalties":
 				r.PenaltiesUsed = parts[2] == "1"
 			case "fail2ban":
-				r.Fail2ban = parts[2]
+				r.Fail2ban = clean(parts[2])
 			}
 		case len(parts) >= 4 && parts[0] == "CHANGE":
-			r.Changes = append(r.Changes, Change{Item: parts[1], Action: parts[2], Detail: strings.Join(parts[3:], "|")})
+			r.Changes = append(r.Changes, Change{Item: clean(parts[1]), Action: parts[2], Detail: clean(strings.Join(parts[3:], "|"))})
 			if parts[2] == StateReport {
 				r.Reported++
 			}
