@@ -13,7 +13,6 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/rollback"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/BaryoDev/BaryoVM/internal/update"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
@@ -82,6 +81,9 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	if err := requireLinux(vm, action); err != nil {
 		return err
 	}
+	if vm.Forced() {
+		return forcedUpdate(vm, name, svcs, auto, dryRun, noBackup)
+	}
 
 	if len(svcs) == 0 {
 		svcs = st.UpdateServices
@@ -136,7 +138,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	}
 
 	runErr := ui.Step(step, func() error {
-		c, err := sshx.Dial(vm.Target())
+		c, err := dialChecked(vm)
 		if err != nil {
 			return err
 		}
@@ -179,6 +181,11 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		return err
 	})
 
+	return reportUpdate(action, name, res, runErr)
+}
+
+// reportUpdate renders the outcome of an update, whether this process ran it or a forced VM did.
+func reportUpdate(action, name string, res update.Result, runErr error) error {
 	if ui.JSON() {
 		data := updateData(res)
 		if runErr != nil {

@@ -18,13 +18,14 @@ baryovm vm add <name> [flags]
 ### Options
 
 ```
-  -h, --help           help for add
-      --host string    public IP or hostname (required)
-      --key string     path to the private SSH key (required)
-      --os string      host OS, linux or windows (default: detect over SSH)
-      --port int       SSH port (default 22)
-      --shell string   SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)
-      --user string    SSH user (default "ubuntu")
+  -h, --help                          help for add
+      --host string                   public IP or hostname (required)
+      --key string                    path to the private SSH key (required)
+      --os string                     host OS, linux or windows (default: detect over SSH)
+      --port int                      SSH port (default 22)
+      --remote baryovm remote serve   "forced" when the key is pinned to baryovm remote serve (see `vm remote install`)
+      --shell string                  SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)
+      --user string                   SSH user (default "ubuntu")
 ```
 
 ### Options inherited from parent commands

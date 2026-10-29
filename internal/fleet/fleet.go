@@ -40,6 +40,12 @@ type VM struct {
 	// Empty means cmd.exe, the OpenSSH default, and is always the value on Linux.
 	Shell sshx.Shell `json:"shell,omitempty"`
 
+	// Remote is "forced" when the VM's SSH key is pinned in authorized_keys to `baryovm remote
+	// serve`. Such a key discards any command it is sent, so on this VM baryovm sends structured
+	// requests for update, backup, status and logs and refuses every other command. Empty means an
+	// ordinary key.
+	Remote string `json:"remote,omitempty"`
+
 	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
 	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
 	rest unknownFields
@@ -245,3 +251,9 @@ func (s *Store) UpsertSite(site Site) {
 	}
 	s.Sites = append(s.Sites, site)
 }
+
+// RemoteForced is the Remote value of a VM behind a forced command.
+const RemoteForced = "forced"
+
+// Forced reports whether the VM's key is pinned to `baryovm remote serve`.
+func (v VM) Forced() bool { return v.Remote == RemoteForced }

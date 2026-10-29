@@ -311,7 +311,7 @@ func contains(ss []string, s string) bool {
 
 // SSHRunner is the real Runner: compose over SSH.
 type SSHRunner struct {
-	Client *sshx.Client
+	Client sshx.Runner
 	Stack  compose.Stack
 	// Verify is the stack's verify plan, built for an update. Release reads the same spec.
 	Verify   verify.Plan

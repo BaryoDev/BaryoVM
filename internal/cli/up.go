@@ -10,7 +10,6 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +65,7 @@ func newUpCmd() *cobra.Command {
 			// 2. Install Docker.
 			var boot bootstrap.Report
 			if err := ui.Step(fmt.Sprintf("installing Docker on %s", vm.Name), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
@@ -85,7 +84,7 @@ func newUpCmd() *cobra.Command {
 			}
 			var rep deploy.Report
 			if err := ui.Step(fmt.Sprintf("deploying %s", image), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
