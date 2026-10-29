@@ -339,6 +339,65 @@ func TestGitCommitRelativeFileIsRefusedWhenGitIsRedirected(t *testing.T) {
 	}
 }
 
+func TestGhFlagsBeforeTheVerbAreRefused(t *testing.T) {
+	// The files hold a clean body, so the only reason to refuse is the flag before the verb.
+	for _, args := range [][]string{
+		{"gh", "pr", "-XR", "o/r", "create", "--body-file", "f"},
+		{"gh", "pr", "--foo", "create", "--body-file", "f"},
+		{"gh", "issue", "-wR", "o/r", "comment", "1", "--body-file", "f"},
+		{"gh", "release", "-v", "create", "v1", "--notes-file", "f"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"f": "clean\n"}}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 || !strings.Contains(err.Error(), "before the command") {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+	// The three accepted forms still work.
+	for _, args := range [][]string{
+		{"gh", "pr", "-R", "o/r", "create", "--body-file", "f"},
+		{"gh", "pr", "--repo", "o/r", "create", "--body-file", "f"},
+		{"gh", "pr", "--repo=o/r", "create", "--body-file", "f"},
+		{"gh", "--version"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"f": "clean\n"}}, 0)
+		if err := runGroup(t, args...); err != nil || len(*ran) != 1 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+}
+
+func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
+	files := map[string]string{"m.txt": "clean\n"}
+	for _, args := range [][]string{
+		{"git", "-c", "core.worktree=/x", "commit", "-F", "m.txt"},
+		{"git", "-c", "core.bare=true", "commit", "-F", "m.txt"},
+		{"git", "-c", "Core.WorkTree=/x", "commit", "-F", "m.txt"},
+		{"git", "--bare", "commit", "-F", "m.txt"},
+		{"git", "--config-env=core.worktree=X", "commit", "-F", "m.txt"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		err := runGroup(t, args...)
+		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
+		t.Setenv(env, "1")
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		err := runGroup(t, "git", "commit", "-F", "m.txt")
+		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
+			t.Fatalf("%s: err=%v ran=%v", env, err, *ran)
+		}
+		t.Setenv(env, "")
+	}
+	// An unrelated -c is not a redirect.
+	ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+	if err := runGroup(t, "git", "-c", "user.name=x", "commit", "-F", "m.txt"); err != nil || len(*ran) != 1 {
+		t.Fatalf("unrelated -c: err=%v ran=%v", err, *ran)
+	}
+}
+
 func TestGitPushShortClusterDoesNotHideAScan(t *testing.T) {
 	for _, args := range [][]string{
 		{"git", "push", "-qod", "origin", "main"},
@@ -372,7 +431,7 @@ func TestGhGroupedShortFlagsAreWalked(t *testing.T) {
 		{"gh", "pr", "create", "-wb", cliFakeKey},
 		{"gh", "pr", "create", "-dbtext" + cliFakeKey},
 		{"gh", "pr", "create", "-wF", "f"},
-		{"gh", "pr", "-wR", "o/r", "create", "-b", cliFakeKey},
+		{"gh", "pr", "--repo=o/r", "create", "-b", cliFakeKey},
 		{"gh", "pr", "review", "1", "-ab", cliFakeKey},
 		{"gh", "release", "create", "v1", "-pn", cliFakeKey},
 		{"gh", "release", "create", "v1", "-dpt", cliFakeKey},
