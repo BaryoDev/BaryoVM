@@ -5,6 +5,7 @@
 package repomove
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -85,22 +86,36 @@ func Run(o Options, d Deps) (*Report, error) {
 	}
 	rep.Refs = len(srcRefs)
 
+	// classify decides what a readable destination means. Identical refs need no push. A strict
+	// subset with the same ids is what a push cut off halfway leaves: finish it, since pushing the
+	// missing refs changes nothing that is already there. Anything else is refused.
 	identical, needCreate := false, false
-	dstRefs, out, exit, derr := lsRemote(d.Exec, o.To.URL)
-	switch {
-	case derr == nil && len(dstRefs) > 0:
-		if diff := Diff(srcRefs, dstRefs); !diff.Empty() {
-			return rep, fmt.Errorf("the destination already has commits and they differ from the source (%s): baryovm never force-pushes, so empty it or pick another repository", diff)
+	classify := func(dstRefs Refs) error {
+		if len(dstRefs) == 0 {
+			return nil // exists and empty: ready for the mirror
 		}
-		identical = true
+		diff := Diff(srcRefs, dstRefs)
+		switch {
+		case diff.Empty():
+			identical = true
+		case diff.OnlyMissing():
+			rep.note("the destination holds part of the source (%s): finishing the push", diff)
+		default:
+			return fmt.Errorf("the destination already has commits and they differ from the source (%s): baryovm never force-pushes, so empty it or pick another repository", diff)
+		}
+		return nil
+	}
+	dstRefs, _, exit, derr := lsRemote(d.Exec, o.To.URL)
+	switch {
 	case derr == nil:
-		// exists and empty: ready for the mirror
+		if err := classify(dstRefs); err != nil {
+			return rep, err
+		}
 	case exit == -1:
 		return rep, derr
 	case o.Create:
 		needCreate = true
 	default:
-		_ = out
 		return rep, fmt.Errorf("cannot read the destination (%v): if it does not exist yet, create it empty or run again with --create", derr)
 	}
 
@@ -157,11 +172,24 @@ func Run(o Options, d Deps) (*Report, error) {
 			return rep, err
 		}
 		out, exit, err := d.Exec(argv)
-		if err != nil || exit != 0 {
+		switch {
+		case err == nil && exit == 0:
+			rep.Created = true
+			rep.did("created %s", o.To.URL)
+		case exit == -1:
 			return rep, fmt.Errorf("create the destination: %w", callError(argv, out, exit, err))
+		default:
+			// A failed create is often "already exists" on a repository ls-remote could not read.
+			// Look again before giving up.
+			again, _, _, rerr := lsRemote(d.Exec, o.To.URL)
+			if rerr != nil {
+				return rep, fmt.Errorf("the destination could not be created (%v) and exists but is unreadable (%v): check the sign-in and the repository name", callError(argv, out, exit, err), rerr)
+			}
+			rep.note("the destination already existed: create was not needed")
+			if err := classify(again); err != nil {
+				return rep, err
+			}
 		}
-		rep.Created = true
-		rep.did("created %s", o.To.URL)
 	}
 
 	if identical {
@@ -215,6 +243,24 @@ func Run(o Options, d Deps) (*Report, error) {
 		}
 		sudo := sudoOf[c.VM]
 		owner := c.Owner
+		// Build every command first, so a refusal (a hostile path, a token with a line break)
+		// comes before anything is written on this checkout.
+		var helper, approve, cleanup, input string
+		if useCred {
+			var err error
+			if helper, err = CredHelperCmd(sudo, owner, c.Dir); err != nil {
+				return fail(err)
+			}
+			if approve, err = CredApproveCmd(sudo, owner, c.Dir); err != nil {
+				return fail(err)
+			}
+			if cleanup, err = CredUndoCmd(sudo, owner, c.Dir); err != nil {
+				return fail(err)
+			}
+			if input, err = CredInput(o.To.Host, o.CredUser, token); err != nil {
+				return fail(err)
+			}
+		}
 		if _, err := r.Run(SetURLCmd(sudo, owner, c.Dir, o.To.URL)); err != nil {
 			return fail(fmt.Errorf("repoint %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 		}
@@ -222,18 +268,11 @@ func Run(o Options, d Deps) (*Report, error) {
 		undo = append(undo, func() { _, _ = r.Run(SetURLCmd(sudo, owner, c.Dir, old)) })
 		c.Repointed = true
 		if useCred {
-			helper, err := CredHelperCmd(sudo, owner, c.Dir)
-			if err != nil {
-				return fail(err)
-			}
-			approve, err := CredApproveCmd(sudo, owner, c.Dir)
-			if err != nil {
-				return fail(err)
-			}
+			undo = append(undo, func() { _, _ = r.Run(cleanup) })
 			if _, err := r.Run(helper); err != nil {
 				return fail(fmt.Errorf("set the credential helper on %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 			}
-			in := strings.NewReader(CredInput(o.To.Host, o.CredUser, token))
+			in := strings.NewReader(input)
 			if _, err := r.RunStdin(approve, in); err != nil {
 				return fail(fmt.Errorf("store the read-only credential on %s:%s: %w", c.VM, c.Dir, scrub(err, token)))
 			}
@@ -244,6 +283,15 @@ func Run(o Options, d Deps) (*Report, error) {
 
 	switch localAction {
 	case "repoint":
+		// rename moves branch.<b>.remote along with the remote, so a branch that pulled from
+		// origin would keep pulling from old-origin. Note which ones, and point them back.
+		var tracked []string
+		if bo, bx, berr := d.Exec(LocalBranchRemotesArgv(o.LocalDir)); berr == nil && bx == 0 {
+			tracked = TrackedBranches(bo, "origin")
+		}
+		setRemote := func(branch, remote string) []string {
+			return []string{"git", "-C", o.LocalDir, "config", "branch." + branch + ".remote", remote}
+		}
 		for _, argv := range [][]string{
 			{"git", "-C", o.LocalDir, "remote", "rename", "origin", "old-origin"},
 			{"git", "-C", o.LocalDir, "remote", "add", "origin", o.To.URL},
@@ -256,9 +304,18 @@ func Run(o Options, d Deps) (*Report, error) {
 			}
 		}
 		undo = append(undo, func() {
+			for _, b := range tracked {
+				_, _, _ = d.Exec(setRemote(b, "old-origin"))
+			}
 			_, _, _ = d.Exec([]string{"git", "-C", o.LocalDir, "remote", "remove", "origin"})
 			_, _, _ = d.Exec([]string{"git", "-C", o.LocalDir, "remote", "rename", "old-origin", "origin"})
 		})
+		for _, b := range tracked {
+			argv := setRemote(b, "origin")
+			if out, exit, err := d.Exec(argv); err != nil || exit != 0 {
+				return fail(fmt.Errorf("point branch %s at the new origin: %w", b, callError(argv, out, exit, err)))
+			}
+		}
 		rep.Local = "origin now points at the new remote, the old one is kept as old-origin"
 		rep.did("repointed the local clone %s (old remote kept as old-origin)", o.LocalDir)
 	case "already":
@@ -267,7 +324,17 @@ func Run(o Options, d Deps) (*Report, error) {
 		rep.Local = localAction
 	}
 
-	if d.Record != nil {
+	// A checkout that was skipped still pulls from the old remote. Recording the new source would
+	// make a rerun say "nothing to do" and never come back to it, so the old one stays recorded.
+	skipped := 0
+	for _, c := range rep.Checkouts {
+		if c.Skipped != "" {
+			skipped++
+		}
+	}
+	if skipped > 0 {
+		rep.note("the new source was not recorded for stack %s: %d checkout(s) were skipped and still use the old remote. Fix them and run the move again", o.Stack, skipped)
+	} else if d.Record != nil {
 		changed, err := d.Record(o.To.URL)
 		if err != nil {
 			return fail(fmt.Errorf("record the new source for the stack: %w", err))
@@ -371,6 +438,14 @@ func discover(o Options, d Deps) ([]Checkout, []Reference, error) {
 				continue // a .git with no origin is not ours
 			}
 			cur, err := Parse(strings.TrimSpace(url))
+			if errors.Is(err, ErrCredential) {
+				// Ours or not, it holds a secret that must not be printed or stored. Say so only
+				// when it is this repository, and never show the URL.
+				if lenient, lerr := ParseLenient(strings.TrimSpace(url)); lerr == nil && (Same(lenient, o.From) || Same(lenient, o.To)) {
+					checkouts = append(checkouts, Checkout{VM: v.Name, Dir: dir, Owner: owner, Skipped: "origin carries a credential: repoint by hand"})
+				}
+				continue
+			}
 			if err != nil {
 				continue
 			}

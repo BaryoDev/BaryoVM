@@ -47,6 +47,12 @@ type RefDiff struct {
 // Empty reports whether the two lists are the same.
 func (d RefDiff) Empty() bool { return len(d.Missing)+len(d.Changed)+len(d.Extra) == 0 }
 
+// OnlyMissing reports whether the new side is a strict subset of the old: some refs are not there
+// yet and nothing it holds differs or is extra. That is what a push cut off halfway leaves.
+func (d RefDiff) OnlyMissing() bool {
+	return len(d.Missing) > 0 && len(d.Changed) == 0 && len(d.Extra) == 0
+}
+
 // Diff compares the old side's refs with the new side's.
 func Diff(old, now Refs) RefDiff {
 	var d RefDiff

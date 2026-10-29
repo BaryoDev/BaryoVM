@@ -148,12 +148,43 @@ func (e *Export) Write(dir string) error {
 		name string
 		v    any
 	}{{"issues.json", e.Issues}, {"pulls.json", e.PullRequests}}
+	// Both files go to temp names first and are renamed into place afterwards, so a write cut off
+	// halfway never leaves a short file under the real name. A rename replaces a symlink at the
+	// target instead of following it, so the file a link points at is not overwritten.
+	var temps, finals []string
+	cleanup := func() {
+		for _, t := range temps {
+			_ = os.Remove(t)
+		}
+	}
 	for _, f := range files {
 		b, err := json.MarshalIndent(f.v, "", "  ")
 		if err != nil {
+			cleanup()
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, f.name), b, 0o600); err != nil {
+		tmp := filepath.Join(dir, "."+f.name+".tmp")
+		_ = os.Remove(tmp) // a stale temp name, or a link planted there, is replaced
+		h, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			cleanup()
+			return err
+		}
+		temps = append(temps, tmp)
+		if _, err := h.Write(b); err != nil {
+			_ = h.Close()
+			cleanup()
+			return err
+		}
+		if err := h.Close(); err != nil {
+			cleanup()
+			return err
+		}
+		finals = append(finals, filepath.Join(dir, f.name))
+	}
+	for i, t := range temps {
+		if err := os.Rename(t, finals[i]); err != nil {
+			cleanup()
 			return err
 		}
 	}
@@ -161,10 +192,17 @@ func (e *Export) Write(dir string) error {
 	return nil
 }
 
-// ExportPresent reports whether a finished export already sits in dir.
+// ExportPresent reports whether a finished export already sits in dir: both files are regular
+// files holding valid JSON. A file cut off halfway does not parse and does not count.
 func ExportPresent(dir string) bool {
 	for _, n := range []string{"issues.json", "pulls.json"} {
-		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+		p := filepath.Join(dir, n)
+		st, err := os.Lstat(p)
+		if err != nil || !st.Mode().IsRegular() {
+			return false
+		}
+		b, err := os.ReadFile(p)
+		if err != nil || !json.Valid(b) {
 			return false
 		}
 	}

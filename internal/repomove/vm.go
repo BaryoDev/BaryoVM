@@ -180,16 +180,59 @@ func CredApproveCmd(sudo bool, owner, dir string) (string, error) {
 	if err := checkCredDir(dir); err != nil {
 		return "", err
 	}
-	inner := "if [ -L " + sshx.Quote(credFile(dir)) + " ]; then echo 'credential file is a symlink' >&2; exit 1; fi; umask 077; " + gitEnv + gitC(dir) + " credential approve"
-	if !sudo {
-		return "sh -c " + sshx.Quote(inner), nil
-	}
-	return "sudo -n -u " + sshx.Quote(owner) + " sh -c " + sshx.Quote(inner), nil
+	// credential approve goes to every configured helper, the owner's global ones included. An empty
+	// credential.helper first resets that list, then only the store file of this checkout is named.
+	helper := "-c credential.helper= -c " + sshx.Quote("credential.helper=store --file="+sshx.Quote(credFile(dir)))
+	inner := "if [ -L " + sshx.Quote(credFile(dir)) + " ]; then echo 'credential file is a symlink' >&2; exit 1; fi; umask 077; " +
+		gitEnv + gitOpts + helper + " -C " + sshx.Quote(dir) + " credential approve"
+	return asOwnerShell(sudo, owner, inner), nil
 }
 
-// CredInput is the stdin for CredApproveCmd.
-func CredInput(host, user, token string) string {
-	return "protocol=https\nhost=" + host + "\nusername=" + user + "\npassword=" + token + "\n\n"
+// CredUndoCmd removes what CredHelperCmd and CredApproveCmd wrote: the credential file and the
+// helper setting. It runs when a later step fails and the move is undone.
+func CredUndoCmd(sudo bool, owner, dir string) (string, error) {
+	if err := checkCredDir(dir); err != nil {
+		return "", err
+	}
+	inner := "rm -f -- " + sshx.Quote(credFile(dir)) + "; " + gitEnv + gitC(dir) + " config --unset-all credential.helper; true"
+	return asOwnerShell(sudo, owner, inner), nil
+}
+
+func asOwnerShell(sudo bool, owner, inner string) string {
+	if !sudo {
+		return "sh -c " + sshx.Quote(inner)
+	}
+	return "sudo -n -u " + sshx.Quote(owner) + " sh -c " + sshx.Quote(inner)
+}
+
+// CredInput is the stdin for CredApproveCmd. The credential protocol is line based, so a value
+// with a line break or NUL would add fields of its own and is refused.
+func CredInput(host, user, token string) (string, error) {
+	for _, v := range []string{host, user, token} {
+		if strings.ContainsAny(v, "\r\n\x00") {
+			return "", fmt.Errorf("the credential holds a line break or NUL: refusing to send it")
+		}
+	}
+	return "protocol=https\nhost=" + host + "\nusername=" + user + "\npassword=" + token + "\n\n", nil
+}
+
+// LocalBranchRemotesArgv is the argv that lists branch.<name>.remote settings of a clone.
+func LocalBranchRemotesArgv(dir string) []string {
+	return []string{"git", "-C", dir, "config", "--get-regexp", `^branch\..*\.remote$`}
+}
+
+// TrackedBranches returns the branches whose upstream remote is remote, from the output of
+// LocalBranchRemotesArgv.
+func TrackedBranches(out, remote string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || strings.TrimSpace(val) != remote || !strings.HasPrefix(key, "branch.") || !strings.HasSuffix(key, ".remote") {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(strings.TrimPrefix(key, "branch."), ".remote"))
+	}
+	return names
 }
 
 // ReferencesCmd finds lines in the system crontabs, the user's crontab and systemd units that

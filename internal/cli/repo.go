@@ -5,10 +5,14 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/repomove"
@@ -16,10 +20,52 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Deadlines for the programs repo move runs. A read (ls-remote, a gh api page, a config call) is
+// short; a clone or a push of a large repository is not.
+var (
+	repoReadTimeout  = 2 * time.Minute
+	repoCloneTimeout = 15 * time.Minute
+)
+
+// repoTimeout picks the deadline for one argv.
+func repoTimeout(argv []string) time.Duration {
+	if len(argv) > 1 && argv[0] == "git" {
+		for _, a := range argv[1:] {
+			if a == "clone" || a == "push" {
+				return repoCloneTimeout
+			}
+		}
+	}
+	return repoReadTimeout
+}
+
 // repoExec runs git, gh and az on this machine as an argv, never a shell. A variable so tests fake
-// the hosts and no test needs a network. The real one is the same runner the managed database
-// snapshot uses.
-var repoExec repomove.Exec = func(argv []string) (string, int, error) { return managedExec(argv) }
+// the hosts and no test needs a network. It has a deadline per call, and GIT_TERMINAL_PROMPT=0 so a
+// git that wants a password fails instead of waiting on a terminal nobody is watching. exit is -1
+// when the program could not start, 124 when the deadline passed.
+var repoExec repomove.Exec = func(argv []string) (string, int, error) {
+	if len(argv) == 0 {
+		return "", -1, fmt.Errorf("empty command")
+	}
+	timeout := repoTimeout(argv)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is built by repomove, no shell
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1")
+	cmd.WaitDelay = 2 * time.Second
+	b, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(b), 0, nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(b), 124, fmt.Errorf("%s timed out after %s", argv[0], timeout)
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return string(b), ee.ExitCode(), err
+	}
+	return string(b), -1, err
+}
 
 // repoTempDir makes the scratch directory the mirror clone lives in. A variable for the same reason.
 var repoTempDir = func() (string, func(), error) {
