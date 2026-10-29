@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Package compose drives `docker compose` on a VM over SSH, the day-to-day
-// path for real workloads (barakoCMS, BaryoClub) that run as compose stacks
+// path for real workloads (a CMS, a web app) that run as compose stacks
 // rather than single containers.
 package compose
 
@@ -15,12 +15,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
 // Stack points at a remote compose project.
 type Stack struct {
-	Dir  string // project directory, e.g. /opt/barakocms
+	Dir  string // project directory, e.g. /opt/app
 	File string // compose file name; empty uses compose's default
 	// Sudo runs compose through sudo.
 	//
@@ -29,12 +30,14 @@ type Stack struct {
 	// with "permission denied" for an ordinary SSH user, even though Docker itself is reachable.
 	// Loosening the file to fix the tool would be the wrong trade.
 	Sudo bool
+	// Runtime is the container runtime: docker (the default, also when empty) or podman. See package ctr.
+	Runtime string
 }
 
 // base is the unelevated `cd <dir> && docker compose [-f <file>]` prefix. It is not a command on
 // its own: everything goes through cmd, which appends the subcommand and elevates the result.
 func (s Stack) base() string {
-	cmd := "docker compose"
+	cmd := ctr.Compose(s.Runtime)
 	if s.File != "" {
 		cmd += " -f " + sshx.Quote(s.File)
 	}
@@ -57,7 +60,7 @@ func (s Stack) cmd(args string) string {
 }
 
 // docker returns a plain `docker` invocation (not compose), honouring the same sudo choice.
-func (s Stack) docker() string { return sshx.Sudo(s.Sudo, "docker") }
+func (s Stack) docker() string { return sshx.Sudo(s.Sudo, ctr.Bin(s.Runtime)) }
 
 // UpOptions controls a deploy.
 type UpOptions struct {
@@ -144,6 +147,7 @@ type NameConflict struct {
 type NameConflictError struct {
 	Conflicts []NameConflict
 	Sudo      bool
+	Runtime   string
 }
 
 func (e *NameConflictError) Error() string {
@@ -153,7 +157,7 @@ func (e *NameConflictError) Error() string {
 		if c.Project != "" {
 			holder = fmt.Sprintf("a container from compose project %q", c.Project)
 		}
-		fix := sshx.Sudo(e.Sudo, "docker") + " rm -f " + sshx.Quote(c.Name)
+		fix := sshx.Sudo(e.Sudo, ctr.Bin(e.Runtime)) + " rm -f " + sshx.Quote(c.Name)
 		parts = append(parts, fmt.Sprintf("container name %q is held by %s: check it is safe to remove, then run `%s` on the VM and try again", c.Name, holder, fix))
 	}
 	return strings.Join(parts, "; ")
@@ -226,7 +230,7 @@ func CheckContainerNames(c sshx.Runner, s Stack) error {
 		return nil
 	}
 	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Name < conflicts[j].Name })
-	return &NameConflictError{Conflicts: conflicts, Sudo: s.Sudo}
+	return &NameConflictError{Conflicts: conflicts, Sudo: s.Sudo, Runtime: s.Runtime}
 }
 
 // Pull fetches the latest images for the stack (or selected services).

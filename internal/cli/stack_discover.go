@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/discover"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -30,6 +31,7 @@ var stdinIsTerminal = func(cmd *cobra.Command) bool {
 
 func newStackDiscoverCmd() *cobra.Command {
 	var adopt, yes, useSudo bool
+	var runtimeName string
 	cmd := &cobra.Command{
 		Use:   "discover <vm>",
 		Short: "List the compose projects already running on a VM and the `stack add` for each (read-only unless --adopt)",
@@ -48,6 +50,9 @@ func newStackDiscoverCmd() *cobra.Command {
 			const action = "stack discover"
 			if yes && !adopt {
 				return fmt.Errorf("--yes only confirms --adopt: add --adopt, or drop --yes")
+			}
+			if err := ctr.Valid(runtimeName); err != nil {
+				return err
 			}
 			interactive := !ui.JSON() && stdinIsTerminal(cmd)
 			if adopt && !yes && !interactive {
@@ -69,7 +74,7 @@ func newStackDiscoverCmd() *cobra.Command {
 			err = ui.Step(fmt.Sprintf("discovering compose projects on %s", vm.Name), func() error {
 				_, err := runOnVM(vm, func(c sshx.Runner) (opOutput, error) {
 					var err error
-					projects, err = discoverProjects(c, useSudo)
+					projects, err = discoverProjects(c, useSudo, runtimeName)
 					return opOutput{}, err
 				})
 				return err
@@ -78,10 +83,10 @@ func newStackDiscoverCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 				return &exitError{code: 1, msg: err.Error(), silent: true}
 			}
-			planProjects(projects, store, vm.Name, useSudo)
+			planProjects(projects, store, vm.Name, useSudo, runtimeName)
 
 			if adopt {
-				if err := adoptProjects(cmd, store, projects, vm.Name, useSudo, yes); err != nil {
+				if err := adoptProjects(cmd, store, projects, vm.Name, useSudo, runtimeName, yes); err != nil {
 					ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: projects})
 					return &exitError{code: 1, msg: err.Error(), silent: true}
 				}
@@ -99,15 +104,16 @@ func newStackDiscoverCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "register the projects found in the local fleet, asking about each one on a terminal")
 	cmd.Flags().BoolVar(&yes, "yes", false, "with --adopt, register every project without asking (required without a terminal or under -o json)")
 	cmd.Flags().BoolVar(&useSudo, "sudo", false, "run docker through sudo -n, for a VM where the SSH user cannot reach the docker socket. Adopted stacks are registered with --sudo")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "container runtime on the VM: docker (default) or podman. Adopted stacks are registered with it")
 	return cmd
 }
 
 // discoverProjects lists the projects and reads each one's config. A project whose config cannot be
 // read stays in the list with a note: the rest of the VM is still worth showing.
-func discoverProjects(c sshx.Runner, sudo bool) ([]discover.Project, error) {
-	out, err := c.Run(discover.LsCmd(sudo))
+func discoverProjects(c sshx.Runner, sudo bool, runtime string) ([]discover.Project, error) {
+	out, err := c.Run(discover.LsCmd(sudo, runtime))
 	if err != nil {
-		return nil, fmt.Errorf("docker compose ls failed: %w", err)
+		return nil, fmt.Errorf("%s ls failed: %w", ctr.Compose(runtime), err)
 	}
 	projects, err := discover.ParseLs(out)
 	if err != nil {
@@ -118,7 +124,7 @@ func discoverProjects(c sshx.Runner, sudo bool) ([]discover.Project, error) {
 		if p.State == "skipped" {
 			continue // unsafe strings from the VM: do not hand them back to it
 		}
-		cfg, err := c.Run(discover.ConfigCmd(p.ConfigFiles, sudo))
+		cfg, err := c.Run(discover.ConfigCmd(p.ConfigFiles, sudo, runtime))
 		if err == nil {
 			err = discover.Inspect(p, cfg)
 		}
@@ -146,7 +152,7 @@ func joinNotes(a, b string) string {
 
 // planProjects sets each project's state and `stack add` line against what is already registered.
 // A stack counts as already registered when it points at the same directory on the same VM.
-func planProjects(projects []discover.Project, store *fleet.Store, vm string, sudo bool) {
+func planProjects(projects []discover.Project, store *fleet.Store, vm string, sudo bool, runtime string) {
 	names, dirs := map[string]bool{}, map[string]bool{}
 	for i := range projects {
 		p := &projects[i]
@@ -180,7 +186,7 @@ func planProjects(projects []discover.Project, store *fleet.Store, vm string, su
 			p.State = "skipped"
 			continue
 		}
-		p.AddCommand = discover.AddCommand(*p, vm, sudo)
+		p.AddCommand = discover.AddCommand(*p, vm, sudo, runtime)
 	}
 }
 
@@ -195,7 +201,7 @@ func registeredAt(store *fleet.Store, vm, dir string) string {
 
 // adoptProjects registers every project still in state found, through the same code `stack add`
 // runs. Nothing is saved until the end, so a refusal part way leaves the fleet as it was.
-func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.Project, vm string, sudo, yes bool) (err error) {
+func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.Project, vm string, sudo bool, runtime string, yes bool) (err error) {
 	// Nothing is saved on an error, so no project may claim to be registered.
 	defer func() {
 		if err != nil {
@@ -218,9 +224,9 @@ func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.P
 			p.Note = joinNotes(p.Note, "declined")
 			continue
 		}
-		named := map[string]bool{"sudo": sudo, "file": p.File != "", "db-container": p.PostgresGuess != ""}
+		named := map[string]bool{"sudo": sudo, "file": p.File != "", "db-container": p.PostgresGuess != "", "runtime": runtime != ""}
 		_, _, err := registerStackFn(store, stackAddInput{
-			Name: p.Name, VM: vm, Path: p.Dir, File: p.File, DBContainer: p.PostgresGuess, Sudo: sudo,
+			Name: p.Name, VM: vm, Path: p.Dir, File: p.File, DBContainer: p.PostgresGuess, Sudo: sudo, Runtime: runtime,
 			Changed: func(n string) bool { return named[n] },
 		})
 		if err != nil {

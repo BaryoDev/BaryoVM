@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -17,6 +18,7 @@ func newDeployCmd() *cobra.Command {
 	var vmName, image, name string
 	var ports, envs, envRefs []string
 	var pull, dryRun bool
+	var runtimeName string
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy a container image to a VM",
@@ -36,7 +38,10 @@ func newDeployCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error()})
 				return err
 			}
-			spec := deploy.Spec{Name: name, Image: image, Ports: ports, Env: env, Pull: pull}
+			spec := deploy.Spec{Name: name, Image: image, Ports: ports, Env: env, Pull: pull, Runtime: runtimeName}
+			if err := ctr.Valid(runtimeName); err != nil {
+				return err
+			}
 			if dryRun {
 				return dryDeploy(vmName, spec)
 			}
@@ -71,6 +76,7 @@ func newDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", nil, "environment KEY=value (repeatable)")
 	cmd.Flags().StringArrayVar(&envRefs, "env-ref", nil, "environment KEY=<reference> (repeatable): env:NAME, file:PATH or cmd:<command>, resolved here, never stored")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull the image before running")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "container runtime on the VM: docker (default) or podman")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the docker commands without connecting (env values are masked)")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("image")

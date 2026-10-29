@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
@@ -81,13 +82,26 @@ type Stack struct {
 	// survives a save: it says there is genuinely nothing to back up. See BackupStrategies.
 	Backup *[]backup.Strategy `json:"backup,omitempty"`
 
+	// Managed names the managed database beside this VM and the AWS profile or Azure subscription
+	// whose CLI sign-in reaches it. Names only, never a credential (#81).
+	Managed *managed.Spec `json:"managed,omitempty"`
+
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
+
+	// RecipeFile is a local recipe (a file, or a directory holding baryovm.recipe.json) that the
+	// app's repository owns. When set, `stack release` deploys the recipe's services. A stack
+	// without one releases exactly as before.
+	RecipeFile string `json:"recipeFile,omitempty"`
 
 	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
 	// .env is root-owned, which is the right posture for a file holding a database password.
 	// Without it every command fails with "permission denied" for the SSH user.
 	Sudo bool `json:"sudo,omitempty"`
+
+	// Runtime is the container runtime on the VM: "docker" (also when empty) or "podman". Validated
+	// by ctr.Valid at `stack add`.
+	Runtime string `json:"runtime,omitempty"`
 
 	// Update policy, used by `stack update`.
 	//
@@ -173,6 +187,9 @@ func dir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".baryovm")
 }
+
+// Dir is the directory fleet.json and pulled backups live in (BARYOVM_HOME or ~/.baryovm).
+func Dir() string { return dir() }
 
 func path() string { return filepath.Join(dir(), "fleet.json") }
 

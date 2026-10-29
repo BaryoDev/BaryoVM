@@ -40,6 +40,7 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm bootstrap oracle --runtime podman   # install podman from the distro package
 baryovm vm bootstrap oracle --dry-run   # print the install script, no connection
 baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
 baryovm vm runner remove oracle --repo acme/app
@@ -208,6 +209,7 @@ It never edits `authorized_keys`. Without `--binary` it uses the running binary 
       "sudo": true,
       "services": ["api"],
       "healthUrl": "http://127.0.0.1:8080/health",
+      "runtime": "docker",
       "dbContainer": "pg",
       "dbName": "app",
       "envFile": ".env",
@@ -219,7 +221,7 @@ It never edits `authorized_keys`. Without `--binary` it uses the running binary 
 }
 ```
 
-A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
+`runtime` is `docker` (the default) or `podman`; anything else is refused when the file loads. A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
 
 The request is `baryovm-remote v1 <op> <stack>`, parsed without a shell. `<op>` is `update`, `backup`, `status` or `logs`, and `<stack>` matches `^[a-z0-9][a-z0-9-]{0,62}$` and must be a key in the file. `logs` returns the last 200 lines per service. `exec` and `release` are not available: exec is arbitrary shell and release uploads files.
 
@@ -472,6 +474,40 @@ existing stack is:
 ```sh
 baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy-postgres-1 --db-name barako
 ```
+
+### Podman instead of Docker
+
+A stack runs on docker unless told otherwise. `stack add --runtime podman` stores `podman` on the
+stack, and every command for that stack (deploy, update, release builds, recipe releases, ps, logs,
+backup, restore, the restore drill) then runs `podman` and `podman compose` instead of `docker` and `docker compose`.
+The value is a fixed set: `docker` or `podman`, anything else is refused by the command and by
+`remote.json`. `deploy`, `up`, `stack discover` and `vm bootstrap` take the same `--runtime` flag.
+`stack add` without the flag keeps the stored value.
+
+`vm bootstrap` detects the package manager (apt-get, dnf, yum, apk or pacman) and says which it
+found; any other host is refused with that list. Docker comes from get.docker.com on apt-get, dnf
+and yum, and from the distro package on apk and pacman. Podman always comes from the distro package.
+Enabling the service uses systemctl. On a host with no systemd (an Alpine container host, for
+example) that step is skipped and the output says `NO_SYSTEMD`, so start the service with the
+host's own init. systemctl errors are not swallowed. For podman, `podman.socket` is enabled only
+when the host has that unit; without it the output carries a `NO_SOCKET` note and the script goes
+on. pacman installs run `pacman -Sy --noconfirm --needed`.
+
+What is covered: the commands BaryoVM builds itself (`podman run`, `rm`, `pull`, `exec`, `inspect`,
+`tag`, `build`, `ps`) and the compose commands it passes (`up -d --force-recreate --no-deps`,
+`pull --ignore-pull-failures`, `config --format json`, `ps -a --format`, `ps --format json`,
+`ps -q`, `logs --no-color --tail`, `compose ls --format json`). This code passes none of `--wait`
+or `--project-directory`.
+
+What is not verified: those compose commands were checked against `docker compose` only. `podman
+compose` hands them to whichever provider is installed. With docker-compose v2 as the provider they
+behave as on docker. With podman-compose, `config --format json`, the JSON shape of `ps --format
+json`, `pull --ignore-pull-failures` and `compose ls` may be missing or differ, which breaks the
+health-gated update, image rollback and `stack discover`. None of this was run on a live podman host.
+A rootless podman host also needs `podman.socket` for a docker-compose provider.
+
+Left on docker, not covered by `--runtime`: the TLS and nginx/caddy helpers (a separate stack),
+`vm health`, `vm patch`, `vm prune`, `site scan`, `vm runner` and `vm ping`'s docker version line.
 
 ### Onboarding a VM that is already running things
 
@@ -862,6 +898,59 @@ What the check does not do:
   compose directory through a symlink is not caught.
 - It is the same with or without `--sudo`.
 
+### Recipes: a stack described by its own repository
+
+An app repository can publish a recipe, `baryovm.recipe.json`, so BaryoVM needs no knowledge of the
+app. Register it, or pass it at release time (a file, or a directory holding the file):
+
+```sh
+baryovm stack add app --vm oracle --path /opt/app --recipe ~/repos/app
+baryovm stack release app --input DB_PASSWORD=env:APP_DB_PASSWORD
+baryovm stack release app --recipe ~/repos/app --input DB_PASSWORD=file:secrets/db
+```
+
+```json
+{
+  "schema": 1,
+  "name": "app",
+  "services": [
+    { "name": "api", "image": "registry.example/app-api:1.2.0", "ports": ["8080:80"] },
+    { "name": "web", "image": "registry.example/app-web:1.2.0", "healthUrl": "http://127.0.0.1:3000/health" }
+  ],
+  "inputs": [ { "name": "DB_PASSWORD", "secret": true }, { "name": "SITE_URL", "default": "http://localhost" } ]
+}
+```
+
+`stack add --recipe` checks the file and sets the stack's compose file to
+`docker-compose.recipe.yml`. A release writes that file in the stack directory, pulls every image
+first (a registry failure changes nothing, `.env` included: inputs are written after the pull), then runs `compose up -d --no-deps` for each service in
+order, waiting on its `healthUrl` from the VM. Inputs go to the stack's `.env` on stdin at mode 600.
+A secret input takes `env:NAME` or `file:PATH` only: no default, no literal, no `cmd:`. Optional
+inputs take a literal or their default.
+
+An unknown `schema` is refused by both commands, and so is any unknown field. Service names,
+images, ports, health URLs and file paths are checked against a plain shape (no `;`, spaces,
+`$`, backticks or `..`) and every remote command quotes them anyway.
+
+If a service fails (up or health), the release rolls back. What rolls back: the compose file
+(restored from `docker-compose.recipe.yml.prev`) and the containers of every service the release had
+touched, which are started again from the old file. A service the previous recipe did not have is
+removed (`compose rm -sf`). On a first deploy the touched services are removed and the compose file
+dropped. What does not roll back: `.env` values, volumes and data, and anything a service did to its
+own data on start.
+
+Before anything changes, a recipe release takes the same safety steps as a manifest release: the managed
+database snapshot when the stack names one (`data.managedSnapshot` and `data.cloud` in `-o json`),
+then the VM backup when the stack declares a database, and `--no-backup` skips both. A failed
+snapshot or backup stops the release with nothing sent to compose. It takes the same host lock as a
+manifest release for its whole run, and refuses while another release holds it. It keeps no step
+record, because a failed deploy rolls itself back and there is nothing to resume. A default that
+holds a line break is refused when the recipe is loaded.
+
+Not supported in a recipe release yet: `files`, `routes`, `backup` and service `build` (a service
+needs an `image`), `--dry-run`, `--resume`, `--clear`, `--adopt`, `--no-build`, and `--config`.
+A stack with a recipe cannot also use a release file, and a stack without a recipe is unchanged.
+
 ### Project files: one fleet definition for a team and for CI
 
 `fleet.json` is one file on one machine. It holds an absolute key path and an absolute path to each
@@ -1067,6 +1156,7 @@ baryovm stack add baryoclub --vm oracle --path /home/deploy/baryoclub-src/BaryoC
   --backup-dir /home/deploy/baryoclub-backups --keep 14
 
 baryovm stack backup baryoclub      # pg_dump (custom format) + copy .env, prune to --keep
+baryovm stack backup baryoclub --pull   # also copy this run's files to ~/.baryovm/backups/baryoclub/
 baryovm stack backups baryoclub     # list backups, newest first
 baryovm stack restore baryoclub --yes                    # newest (REPLACES data)
 baryovm stack restore baryoclub --file db-YYYY….dump --yes
@@ -1089,6 +1179,42 @@ baryovm stack add baryodev --vm oracle --path /opt/baryo-cms --sudo \
 Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
+
+`stack backup --pull` takes the backup, then copies the files that run made (the dumps and the config
+copy, never a `.partial`) over the same SSH connection to `~/.baryovm/backups/<stack>/` (under
+`BARYOVM_HOME` if set). That gives you a second copy that does not die with the VM. The directory is
+created `0700` and the files are written `0600`; an existing directory that is writable by group or
+others is refused. The pulled set includes the stack's config copy (`.env`), so treat the directory
+like `fleet.json`. `-o json` lists the pulled paths and sizes under `data.pulled`. It is refused on a
+forced-command VM (its key cannot read files) and cannot be combined with `--dry-run`. Each file is read whole
+into memory before it is written, so a very large dump needs that much free memory on this machine.
+Old pulled files are not pruned.
+
+### Managed database snapshot (AWS and Azure CLI)
+
+A stack can name the managed database that sits beside its VM, and the AWS profile or Azure
+subscription that reaches it. BaryoVM stores only those names in `fleet.json`. It runs the `aws` or
+`az` already installed and signed in on your machine; the CLI's own sign-in (`aws sso login`,
+`az login`) does the authentication, and no key, token or password is read or stored.
+
+```sh
+baryovm stack set-managed shop --provider aws --profile prod --region ap-southeast-1 --database shop-db
+baryovm stack set-managed shop --provider azure --subscription prod-sub --resource-group shop-rg --database shop-pg
+baryovm stack set-managed shop --clear
+```
+
+`stack release` then takes a snapshot first and waits for it, before the VM backup and before
+anything changes. On AWS that is `aws rds create-db-snapshot` then `aws rds wait
+db-snapshot-available`; on Azure, `az postgres flexible-server backup create`. A failed call stops
+the release. `--no-backup` skips the snapshot along with the backup, and `--dry-run` lists the
+calls without running them. Every value that goes into a call is checked (letters, digits, `.`, `_`
+and `-`, starting with a letter or digit) and the calls are run as an argv, never through a shell.
+
+Under `-o json` the release envelope carries `data.cloud`, one entry per CLI call with its `argv`,
+`exitCode` and `output`, and `data.managedSnapshot` with the snapshot name. A failed release carries
+the same list. `baryovm doctor` checks, for every stack that names a CLI, that it is installed and
+signed in (`aws sts get-caller-identity`, `az account show`), and names the command to run when it
+is not. Not built: the reachability check, and the managed pieces in `vm ping` or `stack ps`.
 
 ### Backup strategies
 
@@ -1165,6 +1291,7 @@ baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
 baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
 baryovm stack set-verify barako --file verify.json   # store a verify spec, or --clear
 baryovm stack set-backup barako --file backup.json   # store backup strategies, or --clear
+baryovm stack set-managed barako --provider aws --profile prod --region ap-southeast-1 --database barako-db
 
 baryovm stack update barako --dry-run   # report what is pending, change nothing
 baryovm stack update barako             # apply, verify, roll back if it does not come up

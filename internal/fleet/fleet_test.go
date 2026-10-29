@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
@@ -29,10 +30,13 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		DBContainer: "pg", DBName: "appdb", DBUser: "postgres", EnvFile: ".env",
 		BackupDir: "/backups", Keep: 7,
 		Sudo:           true,
+		Runtime:        "podman",
 		AutoUpdate:     true,
 		HealthURL:      "http://127.0.0.1:8080/health",
 		NoDatabase:     true,
+		RecipeFile:     "/repo/baryovm.recipe.json",
 		UpdateServices: []string{"app", "admin"},
+		Managed:        &managed.Spec{Provider: managed.AWS, Profile: "prod", Region: "ap-southeast-1", Database: "appdb"},
 		Verify: &verify.Spec{
 			Checks:   []verify.Check{{Path: "/", Contains: []string{"marker"}}, {Command: "true"}},
 			Attempts: 7,
@@ -57,6 +61,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	if !got.Sudo {
 		t.Error("Sudo was lost: an elevated stack would silently run unelevated")
 	}
+	if got.Runtime != "podman" {
+		t.Errorf("Runtime was lost: a podman stack would run docker commands, got %q", got.Runtime)
+	}
 	if !got.AutoUpdate {
 		t.Error("AutoUpdate was lost: a stack would be skipped by --auto, or worse, picked up when it should not be")
 	}
@@ -68,6 +75,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	}
 	if got.DBContainer != want.DBContainer || got.DBName != want.DBName || got.EnvFile != want.EnvFile {
 		t.Errorf("backup settings lost: %+v", got)
+	}
+	if got.Managed == nil || *got.Managed != *want.Managed {
+		t.Errorf("managed settings lost: %+v", got.Managed)
 	}
 	if got.Keep != want.Keep {
 		t.Errorf("Keep: got %d", got.Keep)

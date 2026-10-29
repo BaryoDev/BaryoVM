@@ -1,6 +1,6 @@
 ## baryovm vm bootstrap
 
-Install Docker on a VM (idempotent)
+Install the container runtime (docker or podman) on a VM (idempotent)
 
 ```
 baryovm vm bootstrap <name> [flags]
@@ -9,8 +9,9 @@ baryovm vm bootstrap <name> [flags]
 ### Options
 
 ```
-      --dry-run   print the install script without connecting
-  -h, --help      help for bootstrap
+      --dry-run          print the install script without connecting
+  -h, --help             help for bootstrap
+      --runtime string   runtime to install: docker (default) or podman
 ```
 
 ### Options inherited from parent commands

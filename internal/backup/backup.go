@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
@@ -29,7 +30,9 @@ type Config struct {
 	// write: the dump then fails at the redirect, having already run pg_dump. Point BackupDir
 	// somewhere the SSH user owns, or elevate those too in a change that can be tested against a
 	// real directory.
-	Sudo        bool
+	Sudo bool
+	// Runtime is the container runtime for every exec and run below: docker (default) or podman.
+	Runtime     string
 	Name        string // stack name (used for the default backup dir)
 	Dir         string // project dir (holds the env/config files)
 	EnvFile     string // config file to copy, relative to Dir (e.g. ".env"); empty skips it
@@ -49,8 +52,8 @@ type Config struct {
 	Skip map[int]bool
 }
 
-// dockerCmd is `docker`, elevated when the stack needs it.
-func (c Config) dockerCmd() string { return sshx.Sudo(c.Sudo, "docker") }
+// dockerCmd is the container runtime binary (docker, or podman), run through sudo when the stack needs it.
+func (c Config) dockerCmd() string { return sshx.Sudo(c.Sudo, ctr.Bin(c.Runtime)) }
 
 func (c Config) user() string {
 	if c.DBUser != "" {

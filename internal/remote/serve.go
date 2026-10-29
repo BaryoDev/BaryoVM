@@ -168,12 +168,12 @@ type RunnerExecutor struct {
 }
 
 func composeStack(sc StackConfig) compose.Stack {
-	return compose.Stack{Dir: sc.Dir, File: sc.File, Sudo: sc.Sudo}
+	return compose.Stack{Dir: sc.Dir, File: sc.File, Sudo: sc.Sudo, Runtime: sc.Runtime}
 }
 
 func backupConfig(sc StackConfig, name string) backup.Config {
 	return backup.Config{
-		Sudo: sc.Sudo, Name: name, Dir: sc.Dir, EnvFile: sc.EnvFile,
+		Sudo: sc.Sudo, Runtime: sc.Runtime, Name: name, Dir: sc.Dir, EnvFile: sc.EnvFile,
 		DBContainer: sc.DBContainer, DBName: sc.DBName, DBUser: sc.DBUser,
 		BackupDir: sc.BackupDir, Keep: sc.Keep,
 	}

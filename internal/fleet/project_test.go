@@ -156,7 +156,11 @@ func TestProjectValidation(t *testing.T) {
 		"order unknown":    {func(m map[string]any) { m["order"] = []any{"nope"} }, "order[0]"},
 		"order twice":      {func(m map[string]any) { m["order"] = []any{"s", "s"} }, "order[1]"},
 		"no release file":  {func(m map[string]any) { delete(m["stacks"].([]any)[0].(map[string]any), "releaseFile") }, "releaseFile"},
-		"bad host key":     {func(m map[string]any) { m["vms"].([]any)[0].(map[string]any)["hostKey"] = "nope" }, "vms[0].hostKey"},
+		"bad runtime":      {func(m map[string]any) { m["stacks"].([]any)[0].(map[string]any)["runtime"] = "rkt" }, "stacks[0].runtime"},
+		"bad managed": {func(m map[string]any) {
+			m["stacks"].([]any)[0].(map[string]any)["managed"] = map[string]any{"provider": "aws", "region": "us-east-1", "database": "db;ls"}
+		}, "stacks[0].managed"},
+		"bad host key": {func(m map[string]any) { m["vms"].([]any)[0].(map[string]any)["hostKey"] = "nope" }, "vms[0].hostKey"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -168,6 +172,14 @@ func TestProjectValidation(t *testing.T) {
 	}
 	if _, err := ParseProject([]byte(base(func(map[string]any) {}))); err != nil {
 		t.Errorf("the base file should be valid: %v", err)
+	}
+	good := base(func(m map[string]any) {
+		st := m["stacks"].([]any)[0].(map[string]any)
+		st["runtime"] = "podman"
+		st["managed"] = map[string]any{"provider": "aws", "region": "us-east-1", "database": "shop-db"}
+	})
+	if _, err := ParseProject([]byte(good)); err != nil {
+		t.Errorf("podman with a managed database should be valid: %v", err)
 	}
 }
 

@@ -82,6 +82,8 @@ func TestParseConfigRefusesBadFiles(t *testing.T) {
 		"health url scheme":  `{"stacks":{"app":{"dir":"/opt/app","healthUrl":"file:///etc/passwd"}}}`,
 		"relative backupDir": `{"stacks":{"app":{"dir":"/opt/app","backupDir":"b"}}}`,
 		"negative keep":      `{"stacks":{"app":{"dir":"/opt/app","keep":-1}}}`,
+		"unknown runtime":    `{"stacks":{"app":{"dir":"/opt/app","runtime":"nerdctl"}}}`,
+		"runtime injection":  `{"stacks":{"app":{"dir":"/opt/app","runtime":"docker; id"}}}`,
 	}
 	for name, body := range cases {
 		if _, err := ParseConfig([]byte(body)); err == nil {

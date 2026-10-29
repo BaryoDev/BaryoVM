@@ -12,8 +12,10 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/bootstrap"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 )
@@ -189,7 +191,11 @@ func dryStackDeploy(name string, o compose.UpOptions) error {
 }
 
 // dryVMBootstrap is the --dry-run of `vm bootstrap`.
-func dryVMBootstrap(name string) error {
+func dryVMBootstrap(name, runtime string) error {
+	script, err := bootstrap.Script(runtime)
+	if err != nil {
+		return err
+	}
 	vm, err := requireVM(name)
 	if err != nil {
 		return err
@@ -198,7 +204,7 @@ func dryVMBootstrap(name string) error {
 		return err
 	}
 	p := newDryRunPlan(vm.Name)
-	p.add("install docker", bootstrap.Script())
+	p.add("install "+ctr.Bin(runtime), script)
 	emitDryRun("vm bootstrap", p)
 	return nil
 }
@@ -224,7 +230,7 @@ func dryDeploy(vmName string, spec deploy.Spec) error {
 		switch {
 		case spec.Pull && i == 0:
 			step = "pull"
-		case strings.HasPrefix(c, "docker rm") || strings.Contains(c, " rm -f"):
+		case strings.HasPrefix(c, "docker rm") || strings.HasPrefix(c, "podman rm") || strings.Contains(c, " rm -f"):
 			step = "remove old container"
 		}
 		p.add(step, c)
@@ -252,6 +258,17 @@ func planRelease(name string, st *fleet.Stack, vm *fleet.VM, m *release.Manifest
 	p := newDryRunPlan(name)
 	if o.Resume {
 		p.note("--resume is ignored in a dry run: the earlier release record is on the VM and is not read")
+	}
+
+	// 0. The managed database snapshot, run locally through the AWS or Azure CLI.
+	if st.Managed != nil && !o.NoBackup {
+		argvs, err := st.Managed.SnapshotArgvs(managed.SnapshotID(managedNow()))
+		if err != nil {
+			p.note("managed snapshot would fail: %v", err)
+		}
+		for _, a := range argvs {
+			p.add("managed snapshot (local)", managed.Join(a))
+		}
 	}
 
 	// 1. Backup, ahead of everything that changes the host.

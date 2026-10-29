@@ -2,8 +2,32 @@ set -e
 if command -v docker >/dev/null 2>&1; then
   echo "ALREADY_INSTALLED"
 else
-  curl -fsSL https://get.docker.com | sudo -n sh
+  if command -v apt-get >/dev/null 2>&1; then PM=apt-get
+  elif command -v dnf >/dev/null 2>&1; then PM=dnf
+  elif command -v yum >/dev/null 2>&1; then PM=yum
+  elif command -v apk >/dev/null 2>&1; then PM=apk
+  elif command -v pacman >/dev/null 2>&1; then PM=pacman
+  else
+    echo "no supported package manager found (apt-get, dnf, yum, apk, pacman): install docker by hand" >&2
+    exit 1
+  fi
+  echo "PACKAGE_MANAGER=$PM"
+  case "$PM" in
+    apt-get|dnf|yum)
+      curl -fsSL https://get.docker.com | sudo -n sh
+      ;;
+    apk)
+      sudo -n apk add --no-cache docker
+      ;;
+    pacman)
+      sudo -n pacman -Sy --noconfirm --needed docker
+      ;;
+  esac
   sudo -n usermod -aG docker "$(whoami)" || true
 fi
-sudo -n systemctl enable --now docker >/dev/null 2>&1 || true
+if [ -d /run/systemd/system ]; then
+  sudo -n systemctl enable --now docker
+else
+  echo "NO_SYSTEMD: skipped systemctl, start the docker service with the host's own init"
+fi
 docker --version 2>/dev/null || sudo -n docker --version

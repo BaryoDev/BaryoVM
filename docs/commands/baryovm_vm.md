@@ -23,7 +23,7 @@ baryovm vm [flags]
 
 * [baryovm](baryovm.md)	 - Provision VMs and deploy apps to your own boxes
 * [baryovm vm add](baryovm_vm_add.md)	 - Register an existing VM by host + SSH key
-* [baryovm vm bootstrap](baryovm_vm_bootstrap.md)	 - Install Docker on a VM (idempotent)
+* [baryovm vm bootstrap](baryovm_vm_bootstrap.md)	 - Install the container runtime (docker or podman) on a VM (idempotent)
 * [baryovm vm exec](baryovm_vm_exec.md)	 - Run a command on a registered VM over SSH
 * [baryovm vm forget-key](baryovm_vm_forget-key.md)	 - Forget a VM's recorded SSH host key, so the next connection learns it again
 * [baryovm vm harden](baryovm_vm_harden.md)	 - Apply the SSH hardening policy to a VM

@@ -405,3 +405,22 @@ func TestDiscoverSkipsRepeatsWithinTheBatch(t *testing.T) {
 		t.Errorf("%+v", store.Stacks)
 	}
 }
+
+func TestDiscoverWithPodmanRunsPodmanCompose(t *testing.T) {
+	discoverFixture(t)
+	f := &fakeRunner{answers: discoverAnswers()}
+	if _, _, err := runDiscover(t, f, true, false, "", "oracle", "--runtime", "podman"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.seen) == 0 {
+		t.Fatal("nothing ran")
+	}
+	for _, c := range f.seen {
+		if strings.Contains(c, "docker compose") || strings.HasPrefix(c, "docker ") {
+			t.Errorf("a podman discover ran docker: %s", c)
+		}
+	}
+	if !didRun(f.seen, "podman compose ls") || !didRun(f.seen, "podman compose") {
+		t.Errorf("want podman compose calls: %v", f.seen)
+	}
+}

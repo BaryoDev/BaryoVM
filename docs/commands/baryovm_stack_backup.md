@@ -11,6 +11,7 @@ baryovm stack backup <name> [flags]
 ```
       --dry-run   print the backup script without connecting
   -h, --help      help for backup
+      --pull      after the backup, copy this run's files to ~/.baryovm/backups/<stack>/ on this machine (owner-only). Not available on a forced-command VM
 ```
 
 ### Options inherited from parent commands

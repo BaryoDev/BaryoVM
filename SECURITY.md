@@ -47,6 +47,13 @@ down.
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.
+- **Cloud CLIs**. A stack can name an AWS profile or Azure subscription and a managed database
+  (`stack set-managed`). BaryoVM runs the `aws` or `az` already on your machine and signed in, and the
+  CLI's own sign-in is what authenticates. `fleet.json` holds the names (profile, region,
+  subscription, resource group, database identifier) and nothing else. The calls are built as an
+  argv and run without a shell, every name is checked against an allowed character set and may not
+  start with `-`, and `-o json` records each call's argv, exit code and output (the CLIs print no
+  credential for these calls).
 - **Publishing**. `baryovm publish npm` and `baryovm publish nuget` scan every file a package would ship for keys and refuse a registry outside `baryovm.allowedRegistries` (git config) or `BARYOVM_ALLOWED_REGISTRIES`. The npm registry is read from `npm config get`, and NuGet needs an explicit `--source` and symbol handling while a list is set. With neither set any registry is allowed; a policy that cannot be read refuses. Oversized files are refused, not skipped. See USAGE.md.
 - **Remote commands**. All values interpolated into remote shell commands are
   single-quote escaped (`internal/sshx.Quote`, covered by tests) to prevent
@@ -80,6 +87,10 @@ down.
 - `vm exec` runs arbitrary remote commands as the SSH user for that VM. That is
   the same authority as opening an interactive SSH session with the registered
   key; the CLI only shortens the path.
+- `stack backup --pull` copies a backup set to `~/.baryovm/backups/<stack>/` on your machine. The set
+  includes the stack's config copy (`.env`, which holds secrets), so the directory is created `0700`,
+  files are written `0600` like `fleet.json`, and an existing directory writable by group or others is
+  refused. Nothing prunes pulled files.
 - Restore is destructive (`stack restore` replaces a database) and requires
   `--yes`.
 

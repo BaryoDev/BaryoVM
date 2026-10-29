@@ -241,7 +241,9 @@ generated command string.
 `internal/provider/<name>/`, and wire it into the switch in `newProvider`
 (`internal/cli/provision.go`). Keep heavy cloud SDKs out of the core packages.
 Cloud auth uses the in-process Go SDKs reading `~/.aws` / `~/.oci`; do not shell
-out to a cloud CLI.
+out to a cloud CLI to provision a VM. The one exception is `internal/managed` (#81): the managed
+database snapshot beside a VM runs the operator's own `aws` or `az` as an argv, behind the
+`managedExec` seam.
 
 ## Docs to keep in sync
 

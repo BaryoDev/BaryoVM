@@ -1,0 +1,40 @@
+set -e
+if command -v podman >/dev/null 2>&1; then
+  echo "ALREADY_INSTALLED"
+else
+  if command -v apt-get >/dev/null 2>&1; then PM=apt-get
+  elif command -v dnf >/dev/null 2>&1; then PM=dnf
+  elif command -v yum >/dev/null 2>&1; then PM=yum
+  elif command -v apk >/dev/null 2>&1; then PM=apk
+  elif command -v pacman >/dev/null 2>&1; then PM=pacman
+  else
+    echo "no supported package manager found (apt-get, dnf, yum, apk, pacman): install podman by hand" >&2
+    exit 1
+  fi
+  echo "PACKAGE_MANAGER=$PM"
+  case "$PM" in
+    apt-get)
+      sudo -n apt-get update
+      sudo -n apt-get install -y podman
+      ;;
+    dnf|yum)
+      sudo -n "$PM" install -y podman
+      ;;
+    apk)
+      sudo -n apk add --no-cache podman
+      ;;
+    pacman)
+      sudo -n pacman -Sy --noconfirm --needed podman
+      ;;
+  esac
+fi
+if [ -d /run/systemd/system ]; then
+  if systemctl cat podman.socket >/dev/null 2>&1; then
+    sudo -n systemctl enable --now podman.socket
+  else
+    echo "NO_SOCKET: this host has no podman.socket unit, skipped enabling it; a compose provider needs the socket started by hand"
+  fi
+else
+  echo "NO_SYSTEMD: skipped systemctl, podman needs no daemon but a compose provider needs its socket started by the host's own init"
+fi
+podman --version

@@ -17,8 +17,11 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/compose"
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
+	"github.com/BaryoDev/BaryoVM/internal/recipe"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
 	"github.com/BaryoDev/BaryoVM/internal/remote"
@@ -35,7 +38,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackSetBackupCmd(), newStackTLSCmd(), newStackEnvCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackSetBackupCmd(), newStackSetManagedCmd(), newStackTLSCmd(), newStackEnvCmd(),
 		newStackRollbackCmd(), newStackDiscoverCmd(),
 	)
 	return cmd
@@ -57,9 +60,10 @@ func validStackName(name string) error {
 type stackAddInput struct {
 	Name, VM, Path, File                            string
 	DBContainer, DBName, DBUser, EnvFile, BackupDir string
-	ReleaseFile                                     string
+	ReleaseFile, Recipe                             string
 	Keep                                            int
 	Sudo                                            bool
+	Runtime                                         string
 	Changed                                         func(name string) bool
 }
 
@@ -82,6 +86,21 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		verb = "updated"
 	}
 	st.VM, st.Dir = in.VM, in.Path
+	if in.Changed("recipe") && in.Recipe != "" {
+		_, abs, err := loadRecipeFile(in.Recipe)
+		if err != nil {
+			return fleet.Stack{}, "", err
+		}
+		in.Recipe = abs
+		if st.File == "" && !in.Changed("file") {
+			st.File = recipe.DefaultComposeFile
+		}
+	}
+	if in.Changed("runtime") {
+		if err := ctr.Valid(in.Runtime); err != nil {
+			return fleet.Stack{}, "", err
+		}
+	}
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
 		return fleet.Stack{}, "", err
 	}
@@ -116,7 +135,9 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		"backup-dir":   func() { st.BackupDir = in.BackupDir },
 		"keep":         func() { st.Keep = in.Keep },
 		"release-file": func() { st.ReleaseFile = in.ReleaseFile },
+		"recipe":       func() { st.RecipeFile = in.Recipe },
 		"sudo":         func() { st.Sudo = in.Sudo },
+		"runtime":      func() { st.Runtime = in.Runtime },
 	} {
 		if in.Changed(name) {
 			apply()
@@ -140,9 +161,10 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
-	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile string
+	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile, recipePath string
 	var keep int
 	var useSudo bool
+	var runtimeName string
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Register a compose stack (a project dir on a VM)",
@@ -156,7 +178,7 @@ func newStackAddCmd() *cobra.Command {
 			st, verb, err := registerStack(store, stackAddInput{
 				Name: args[0], VM: vm, Path: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser, EnvFile: envFile,
-				BackupDir: backupDir, ReleaseFile: releaseFile, Keep: keep, Sudo: useSudo,
+				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, Keep: keep, Sudo: useSudo, Runtime: runtimeName,
 				Changed: f.Changed,
 			})
 			if err != nil {
@@ -170,7 +192,7 @@ func newStackAddCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&vm, "vm", "", "VM the stack runs on (required)")
-	cmd.Flags().StringVar(&path, "path", "", "remote project directory, e.g. /opt/barakocms (required)")
+	cmd.Flags().StringVar(&path, "path", "", "remote project directory, e.g. /opt/app (required)")
 	cmd.Flags().StringVar(&file, "file", "", "compose file name (default: compose's own default)")
 	cmd.Flags().StringVar(&dbContainer, "db-container", "", "postgres container for backups, e.g. deploy-postgres-1")
 	cmd.Flags().StringVar(&dbName, "db-name", "", "database to back up")
@@ -179,9 +201,11 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
+	cmd.Flags().StringVar(&recipePath, "recipe", "", "recipe file (or a directory holding baryovm.recipe.json) from the app repository; `stack release` then deploys its services")
 	cmd.Flags().BoolVar(&useSudo, "sudo", false,
 		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
 			"root-owned. See USAGE.md for what it covers and the three things that change with it")
+	cmd.Flags().StringVar(&runtimeName, "runtime", "", "container runtime on the VM: docker (default) or podman. See USAGE.md for which commands podman covers")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
@@ -352,6 +376,9 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 type stackReleaseOpts struct {
 	Config                                          string
 	NoBuild, NoBackup, Adopt, Resume, Clear, DryRun bool
+	// Recipe overrides the stack's registered recipe; Inputs are NAME=ref bindings for its inputs.
+	Recipe string
+	Inputs []string
 }
 
 // releaseStack releases one stack of store. It does not emit: the result the caller should emit is
@@ -370,6 +397,9 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	if err := requireLinux(vm, "stack release"); err != nil {
 		return err
 	}
+	if o.Recipe != "" || st.RecipeFile != "" {
+		return releaseRecipe(st, vm, o, out)
+	}
 	manifestPath := config
 	if manifestPath == "" {
 		manifestPath = st.ReleaseFile
@@ -381,6 +411,10 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	if err != nil {
 		return err
 	}
+	m.Runtime = st.Runtime
+
+	// cloudCalls are the AWS or Azure CLI calls of the pre-release snapshot, kept for the envelope.
+	var cloudCalls []managed.Call
 
 	// rr is the progress record once a release has begun one. Until then a failure has
 	// nothing on the host to report or clean up.
@@ -394,6 +428,14 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 				res.Data = stateData(rr.loc, rr.st, name)
 				ui.Notef("release state kept at %s: %s", rr.loc.File, stateHint(name, rr.st))
 			}
+		}
+		if len(cloudCalls) > 0 {
+			d, _ := res.Data.(map[string]any)
+			if d == nil {
+				d = map[string]any{}
+			}
+			d["cloud"] = cloudCalls
+			res.Data = d
 		}
 		*out = res
 		return e
@@ -496,6 +538,22 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 			return refuseState(loc, existing, name)
 		}
 		rr.st = cur
+	}
+
+	// A managed database beside the VM is snapshotted first, through the operator's own AWS or
+	// Azure CLI sign-in, and the release waits for it. --no-backup skips it with the rest.
+	snapshotID := ""
+	if !noBackup && st.Managed != nil {
+		spec := *st.Managed
+		if err := rr.step("managed-snapshot", func() error {
+			return ui.Step("snapshot managed database "+spec.Database, func() error {
+				id, calls, e := managedSnapshot(spec)
+				snapshotID, cloudCalls = id, calls
+				return e
+			})
+		}); err != nil {
+			return fail(err)
+		}
 	}
 
 	// Safety first: back up before releasing (unless opted out / no DB configured).
@@ -709,16 +767,20 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 
 	// Say which check ran, so a release that verified nothing cannot read as one that did.
-	*out = ui.Result{OK: true, Action: "stack release", Message: name + " released",
-		Data: map[string]any{
-			"transport": string(transport),
-			"commit":    commit,
-			"verify": map[string]any{
-				"source":   plan.Source,
-				"checks":   len(plan.Commands),
-				"attempts": attemptsUsed,
-			},
-		}}
+	data := map[string]any{
+		"transport": string(transport),
+		"commit":    commit,
+		"verify": map[string]any{
+			"source":   plan.Source,
+			"checks":   len(plan.Commands),
+			"attempts": attemptsUsed,
+		},
+	}
+	if len(cloudCalls) > 0 {
+		data["managedSnapshot"] = snapshotID
+		data["cloud"] = cloudCalls
+	}
+	*out = ui.Result{OK: true, Action: "stack release", Message: name + " released", Data: data}
 	if len(plan.Commands) > 0 {
 		ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", name,
 			verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)
@@ -730,6 +792,8 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 func newStackReleaseCmd() *cobra.Command {
 	var config string
 	var noBuild, noBackup, adopt, resume, clearState, dryRun bool
+	var recipeFlag string
+	var inputs []string
 	cmd := &cobra.Command{
 		Use:   "release <name>",
 		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
@@ -743,7 +807,7 @@ func newStackReleaseCmd() *cobra.Command {
 			}
 			var res ui.Result
 			err = releaseStack(store, args[0], stackReleaseOpts{Config: config, NoBuild: noBuild, NoBackup: noBackup,
-				Adopt: adopt, Resume: resume, Clear: clearState, DryRun: dryRun}, &res)
+				Adopt: adopt, Resume: resume, Clear: clearState, DryRun: dryRun, Recipe: recipeFlag, Inputs: inputs}, &res)
 			if res.Action != "" {
 				ui.Emit(res)
 			}
@@ -751,6 +815,8 @@ func newStackReleaseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
+	cmd.Flags().StringVar(&recipeFlag, "recipe", "", "deploy the services in this recipe (a file, or a directory holding baryovm.recipe.json) instead of a release manifest")
+	cmd.Flags().StringArrayVar(&inputs, "input", nil, "bind a recipe input, NAME=env:VAR or NAME=file:PATH (a literal only for a non-secret input); repeatable")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed with docker rm -f and NOT recoverable: its writable layer and anonymous volumes are lost; refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
@@ -818,7 +884,7 @@ func lastLines(s string, n int) string {
 // a stack goes through here, so Sudo cannot be dropped by a call site assembling the struct by hand,
 // which is how `stack deploy`, `stack release` and the release hooks each lost it in turn.
 func composeStack(st *fleet.Stack) compose.Stack {
-	return compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo}
+	return compose.Stack{Dir: st.Dir, File: st.File, Sudo: st.Sudo, Runtime: st.Runtime}
 }
 
 // releaseComposeStack is the compose target for a release's `compose up`. The release made one
@@ -843,7 +909,7 @@ func releaseBackupConfig(st *fleet.Stack, m *release.Manifest) backup.Config {
 
 func backupConfig(st *fleet.Stack) backup.Config {
 	cfg := backup.Config{
-		Sudo: st.Sudo,
+		Sudo: st.Sudo, Runtime: st.Runtime,
 		Name: st.Name, Dir: st.Dir, EnvFile: st.EnvFile,
 		DBContainer: st.DBContainer, DBName: st.DBName, DBUser: st.DBUser,
 		BackupDir: st.BackupDir, Keep: st.Keep,
@@ -927,12 +993,18 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 }
 
 func newStackBackupCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, pull bool
 	cmd := &cobra.Command{
 		Use:   "backup <name>",
 		Short: "Back up the stack's database + config (pg_dump + .env)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if pull && dryRun {
+				return fmt.Errorf("--pull and --dry-run cannot be combined: --dry-run connects to nothing, so there is nothing to pull")
+			}
+			if pull {
+				return runStackBackupPull(args[0])
+			}
 			if dryRun {
 				return dryStackBackup(args[0])
 			}
@@ -943,6 +1015,7 @@ func newStackBackupCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the backup script without connecting")
+	cmd.Flags().BoolVar(&pull, "pull", false, "after the backup, copy this run's files to ~/.baryovm/backups/<stack>/ on this machine (owner-only). Not available on a forced-command VM")
 	return cmd
 }
 
@@ -1081,8 +1154,8 @@ func newStackDeployCmd() *cobra.Command {
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
 		Args:  cobra.ExactArgs(1),
-		Example: "  baryovm stack deploy barako --force-recreate --service api,console\n" +
-			"  baryovm stack deploy barako --pull",
+		Example: "  baryovm stack deploy app --force-recreate --service api,console\n" +
+			"  baryovm stack deploy app --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dryRun {
 				return dryStackDeploy(args[0], compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
