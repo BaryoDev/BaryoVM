@@ -101,7 +101,7 @@ A key is refused with the file and line, never the value, and the message points
 "wrangler secret put NAME". If the dry run fails, the deploy is refused. "pages
 deploy <dir>" and "pages publish <dir>" scan the directory; --assets and the config assets directory are scanned too. Other wrangler commands pass through. Put
 options after the command: a leading option is refused. --outdir is set by
-baryovm and cannot be given. With --dry-run nothing is sent, so nothing is checked.
+baryovm and cannot be given.
 
 Flags after "wrangler" belong to wrangler, so this command takes none of its own.
 For JSON output of a refusal set BARYOVM_OUTPUT=json.

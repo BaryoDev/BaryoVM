@@ -314,3 +314,82 @@ func TestCloudWranglerDryRunErrorIsCapped(t *testing.T) {
 		t.Fatalf("the whole log is in the refusal: %v", err)
 	}
 }
+
+func TestCloudDryRunWordIsNotASkip(t *testing.T) {
+	key := "var k = \"" + cliFakeKey + "\";\n"
+	t.Run("wrangler: --dry-run as a flag value", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": "[vars]\nK = \"" + cliFakeKey + "\"\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy", "--name", "--dry-run"), ran, 0, "wrangler.toml:2")
+	})
+	t.Run("wrangler: --dry-run=false", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": "[vars]\nK = \"" + cliFakeKey + "\"\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy", "--dry-run=false"), ran, 0, "wrangler.toml:2")
+	})
+	t.Run("wrangler: a user --dry-run is not passed to the bundle run twice", func(t *testing.T) {
+		calls := withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"/out": {"index.js"}}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/out/index.js": key}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy", "--dry-run=false"), ran, 0, "/out/index.js:1")
+		if len(*calls) != 1 || (*calls)[0] != "wrangler deploy --dry-run --outdir /out" {
+			t.Fatalf("dry run: %v", *calls)
+		}
+	})
+	t.Run("pages: --dry-run as a flag value", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"dist": {"a.js"}}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"dist/a.js": key}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "pages", "deploy", "dist", "--commit-message", "--dry-run"), ran, 0, "dist/a.js:1")
+	})
+	t.Run("firebase: --dry-run as a flag value", func(t *testing.T) {
+		ran := fbSeams(t, map[string]string{"dist/app.js": key}, nil, []string{"app.js"})
+		wantRefused(t, runGroup(t, "cloud", "firebase", "deploy", "--message", "--dry-run"), ran, 0, "dist/app.js:1")
+	})
+}
+
+func TestCloudGcloudFlagsFileOnKeyCommandIsRefused(t *testing.T) {
+	cases := [][]string{
+		{"secrets", "versions", "access", "latest", "--secret", "s", "--flags-file", "f.yaml"},
+		{"secrets", "versions", "access", "latest", "--flags-file=f.yaml"},
+		{"iam", "service-accounts", "keys", "create", "-", "--flags-file", "f.yaml"},
+	}
+	for _, c := range cases {
+		ran := gcloudSeams(t, nil, nil)
+		wantRefused(t, runGroup(t, append([]string{"cloud", "gcloud"}, c...)...), ran, 0, "--flags-file")
+	}
+	ran := gcloudSeams(t, nil, nil)
+	if err := runGroup(t, "cloud", "gcloud", "run", "deploy", "--flags-file", "f.yaml"); err != nil || len(*ran) != 1 {
+		t.Fatalf("a non-key command with --flags-file must pass: %v %v", err, *ran)
+	}
+}
+
+func TestCloudWranglerSiteAndParentConfig(t *testing.T) {
+	key := "var k = \"" + cliFakeKey + "\";\n"
+	t.Run("--site directory", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"site": {"a.js"}, "/out": {"index.js"}}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"site/a.js": key, "/out/index.js": "x\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy", "--site", "site"), ran, 0, "site/a.js:1")
+	})
+	t.Run("config site bucket", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"public": {"a.js"}, "/out": {"index.js"}}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{
+			"wrangler.toml": "name = \"w\"\n[site]\nbucket = \"./public\"\n", "public/a.js": key, "/out/index.js": "x\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "public/a.js:1")
+	})
+	t.Run("site with no readable bucket refuses", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": "[site]\nentry-point = \"x\"\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "site")
+	})
+	t.Run("a config in a parent directory refuses", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/work/wrangler.toml": "name = \"w\"\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "/work/wrangler.toml", "Run baryovm from that directory")
+	})
+	t.Run("the search stops at the git root", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"/out": {"index.js"}}, exists: map[string]bool{"/work/app/.git": true}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/work/wrangler.toml": "name = \"w\"\n", "/out/index.js": "x\n"}}, 0)
+		if err := runGroup(t, "cloud", "wrangler", "deploy"); err != nil || len(*ran) != 1 {
+			t.Fatalf("err %v ran %v", err, *ran)
+		}
+	})
+}

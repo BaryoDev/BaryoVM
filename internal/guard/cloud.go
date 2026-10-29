@@ -151,9 +151,6 @@ func CheckWrangler(env CloudEnv, args []string) Verdict {
 		return allow(action)
 	}
 	for _, a := range args {
-		if a == "--dry-run" {
-			return allow(action) // nothing is sent
-		}
 		if a == "--outdir" || strings.HasPrefix(a, "--outdir=") {
 			return refuse(action, action+" refused: --outdir is set by baryovm for the bundle check; remove it", nil)
 		}
@@ -180,6 +177,14 @@ func CheckWrangler(env CloudEnv, args []string) Verdict {
 		}
 	}
 
+	if cfg.path == "" && !hasConfigFlag(args) {
+		if p, err := parentWranglerConfig(env); err != nil {
+			return refuse(action, action+" refused: "+err.Error(), nil)
+		} else if p != "" {
+			return refuse(action, fmt.Sprintf("%s refused: wrangler would find its config at %s, a parent of this directory, and that cannot be scanned from here. Run baryovm from that directory", action, p), nil)
+		}
+	}
+
 	assetDirs, why := wranglerAssetDirs(args, cfg)
 	if why != "" {
 		return refuse(action, action+" refused: "+why, nil)
@@ -195,7 +200,13 @@ func CheckWrangler(env CloudEnv, args []string) Verdict {
 		return refuse(action, fmt.Sprintf("%s refused: cannot make a scratch directory for the bundle (%v)", action, err), nil)
 	}
 	defer cleanup()
-	dry := append([]string{}, args...)
+	// The user's own --dry-run, in any form, is dropped: the bundle run sets it once.
+	var dry []string
+	for _, a := range args {
+		if a != "--dry-run" && !strings.HasPrefix(a, "--dry-run=") {
+			dry = append(dry, a)
+		}
+	}
 	dry = append(dry, "--dry-run", "--outdir", out)
 	if _, err := env.Run("", "wrangler", dry); err != nil {
 		return refuse(action, fmt.Sprintf("%s refused: wrangler %s --dry-run failed (%s), so the bundle cannot be checked", action, args[0], tailLines(err.Error(), 4)), nil)
@@ -220,9 +231,6 @@ func checkWranglerPages(env CloudEnv, rest []string) Verdict {
 	var dir string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
-		if a == "--dry-run" {
-			return allow(action)
-		}
 		if strings.HasPrefix(a, "-") {
 			if !strings.Contains(a, "=") && wranglerValueFlags[a] {
 				i++
@@ -281,7 +289,56 @@ func wranglerAssetDirs(args []string, cfg wranglerCfg) ([]string, string) {
 			dirs = append(dirs, filepath.Join(base, x[1]))
 		}
 	}
+	vals, err = flagValues(args, "--site")
+	if err != nil {
+		return nil, err.Error()
+	}
+	dirs = append(dirs, vals...)
+	if cfg.path != "" && siteMention.MatchString(cfg.text) {
+		base := filepath.Dir(cfg.path)
+		m := siteBucket.FindAllStringSubmatch(cfg.text, -1)
+		if len(m) == 0 {
+			return nil, "the config sets site but its bucket cannot be read, so the site files cannot be scanned"
+		}
+		for _, x := range m {
+			dirs = append(dirs, filepath.Join(base, x[1]))
+		}
+	}
 	return dirs, ""
+}
+
+var siteMention = regexp.MustCompile(`(?m)^\s*\[(?:env\.[^\].]+\.)?site\]|\bsite\s*=|"site"\s*:`)
+var siteBucket = regexp.MustCompile(`"?\bbucket"?\s*[=:]\s*["']([^"']+)["']`)
+
+func hasConfigFlag(args []string) bool {
+	v, _ := flagValues(args, "--config", "-c")
+	return len(v) > 0
+}
+
+// parentWranglerConfig looks for a wrangler config above the current directory, up to the git root
+// or the file system root, because wrangler searches upward and would deploy from it.
+func parentWranglerConfig(env CloudEnv) (string, error) {
+	wd, err := env.FS.Getwd()
+	if err != nil {
+		return "", errors.New("cannot read the current directory, so a parent wrangler config cannot be ruled out")
+	}
+	for dir := wd; !env.FS.Exists(filepath.Join(dir, ".git")); {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+		for _, name := range wranglerConfigs {
+			text, err := readOptional(env.R, filepath.Join(dir, name))
+			if err != nil {
+				return "", fmt.Errorf("cannot read %s to look for a wrangler config", filepath.Join(dir, name))
+			}
+			if text != "" {
+				return filepath.Join(dir, name), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // tailLines keeps the last n non-empty lines of a tool's error output and withholds any line that
@@ -381,12 +438,6 @@ func CheckFirebase(env CloudEnv, args []string, pol Policy) FirebaseDeploy {
 		return FirebaseDeploy{Verdict: allow(action)}
 	}
 	rest := args[1:]
-	for _, a := range rest {
-		if a == "--dry-run" {
-			return FirebaseDeploy{Verdict: allow(action)}
-		}
-	}
-
 	rcText, rcErr := readOptional(env.R, ".firebaserc")
 	if rcErr != nil {
 		return fail("cannot read .firebaserc")
@@ -656,6 +707,9 @@ func CheckGcloud(env CloudEnv, args []string) Verdict {
 		}
 		// An unknown option's value stays among the positionals, so every word after the command
 		// is a possible file. All of them are checked.
+		if _, ok := flags["--flags-file"]; ok {
+			return refuse(action, action+" refused: "+strings.Join(kc.words, " ")+" with --flags-file can set the output file from the file, which cannot be checked. Pass the options on the command line", nil)
+		}
 		var files []string
 		if kc.flag != "" {
 			if f := flags[kc.flag]; f != "" {

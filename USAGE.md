@@ -1288,7 +1288,9 @@ baryovm cloud gcloud iam service-accounts keys create ~/.config/gcloud/key.json 
   `--config` file) and a `--var NAME:value` argument are scanned too. A key in `vars` is refused and the
   message points at `wrangler secret put NAME`. If the dry run fails, the deploy is refused.
   The `--assets` directory and the `directory` under `[assets]` in the config are scanned too (assets
-  are not in the dry-run bundle); assets in the config with no readable directory are refused. A failed
+  are not in the dry-run bundle), and so are `--site` and the `[site] bucket`; assets or a site in the config with no readable directory are refused. A `--dry-run` you give is dropped and never skips the
+  checks. If no config is in the current directory but one is in a parent (up to the git root),
+  the deploy is refused: run from that directory. A failed
   dry run shows only the last 4 lines of its output. `pages deploy <dir>` and `pages publish <dir>` scan
   the directory. Other commands pass through.
 - firebase: for `deploy` and `hosting:channel:deploy`, the project id is read from `--project` (an id or
@@ -1300,6 +1302,7 @@ baryovm cloud gcloud iam service-accounts keys create ~/.config/gcloud/key.json 
 - gcloud: everything passes through except commands that write a key or secret to a file
   (`iam service-accounts keys create <file>`, `secrets versions access --out-file`,
   `kms decrypt --plaintext-file`). If the file is inside a git working tree, the command is refused. A
+  key command that uses `--flags-file` is refused, since the file can set the output path. A
   key command that cannot be read, or a path git cannot place, is refused. The command words are found
   anywhere among the arguments, and every word after them is checked as a possible file, so an unknown
   option cannot hide the command.

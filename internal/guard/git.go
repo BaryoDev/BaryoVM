@@ -138,15 +138,15 @@ func refuseConfigGlobals(globals []string) (Verdict, bool) {
 			bad = g
 		case g == "-c" && i+1 < len(globals):
 			i++
-			if strings.HasPrefix(strings.ToLower(globals[i]), "alias.") {
+			if k := strings.ToLower(globals[i]); strings.HasPrefix(k, "alias.") || strings.HasPrefix(k, "baryovm.") {
 				bad = "-c " + globals[i]
 			}
-		case strings.HasPrefix(g, "-c") && len(g) > 2 && strings.HasPrefix(strings.ToLower(g[2:]), "alias."):
+		case strings.HasPrefix(g, "-c") && len(g) > 2 && (strings.HasPrefix(strings.ToLower(g[2:]), "alias.") || strings.HasPrefix(strings.ToLower(g[2:]), "baryovm.")):
 			bad = g
 		}
 		if bad != "" {
 			name, _, _ := strings.Cut(bad, "=")
-			return refuse("git", fmt.Sprintf("git refused: %s can define an alias or change config for one command, which the guard cannot check. Set it with git config instead", name), nil), true
+			return refuse("git", fmt.Sprintf("git refused: %s can define an alias or set a baryovm.* policy key for one command, which the guard cannot check. Set it with git config instead", name), nil), true
 		}
 	}
 	return Verdict{}, false

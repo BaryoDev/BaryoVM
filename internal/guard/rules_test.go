@@ -96,6 +96,27 @@ func TestAliasIsReclassified(t *testing.T) {
 	})
 }
 
+func TestPolicyKeysCannotBeSetWithDashC(t *testing.T) {
+	for _, args := range [][]string{
+		{"-c", "baryovm.rules.off=protected-branches", "push", "origin", "main"},
+		{"-c", "baryovm.rules.off=protected-branches", "push", "origin", "feature"},
+		{"-c", "baryovm.gatepass=abc123", "push", "origin", "feature"},
+		{"-c", "baryovm.gate=true", "push", "origin", "feature"},
+		{"-c", "BaryoVM.Rules.Off=files", "commit", "-m", "x"},
+		{"-cbaryovm.rules.off=text", "commit", "-m", "x"},
+		{"-c", "user.name=x", "-c", "baryovm.protectedBranches=none", "status"},
+	} {
+		v := CheckGit(&fake{answers: map[string]string{"remote get-url": "https://github.com/o/r.git\n"}}, args, Policy{})
+		if v.Allowed {
+			t.Errorf("%v passed", args)
+			continue
+		}
+		if !strings.Contains(v.Reason, "git config") {
+			t.Errorf("%v: refusal does not say to use git config: %s", args, v.Reason)
+		}
+	}
+}
+
 func TestCommitPathspecFromFileIsRefused(t *testing.T) {
 	for _, args := range [][]string{
 		{"commit", "--pathspec-from-file", "paths.txt", "-m", "x"},
