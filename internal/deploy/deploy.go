@@ -34,18 +34,33 @@ type Report struct {
 // Run pulls (optionally), removes any same-named container, and starts the new one.
 func Run(c *sshx.Client, spec Spec) (Report, error) {
 	if spec.Pull {
-		if _, err := c.Run("docker pull " + sshx.Quote(spec.Image)); err != nil {
+		if _, err := c.Run(PullCmd(spec)); err != nil {
 			return Report{}, err
 		}
 	}
 	// Replace any existing container with the same name (ignore "no such container").
-	_, _ = c.Run("docker rm -f " + sshx.Quote(spec.Name))
+	_, _ = c.Run(RemoveCmd(spec))
 
 	out, err := c.Run(runCmd(spec))
 	if err != nil {
 		return Report{}, err
 	}
 	return Report{Container: spec.Name, Image: spec.Image, ID: strings.TrimSpace(out)}, nil
+}
+
+// PullCmd is the image pull Run does when Pull is set.
+func PullCmd(spec Spec) string { return "docker pull " + sshx.Quote(spec.Image) }
+
+// RemoveCmd is the removal of any same-named container Run does before starting the new one.
+func RemoveCmd(spec Spec) string { return "docker rm -f " + sshx.Quote(spec.Name) }
+
+// Commands lists, in order, what Run would send to the VM, without running any of it.
+func Commands(spec Spec) []string {
+	var cmds []string
+	if spec.Pull {
+		cmds = append(cmds, PullCmd(spec))
+	}
+	return append(cmds, RemoveCmd(spec), runCmd(spec))
 }
 
 // runCmd builds the `docker run` line for a spec, so the command can be pinned without a host.

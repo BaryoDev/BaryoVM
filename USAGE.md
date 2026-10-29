@@ -38,6 +38,7 @@ baryovm vm exec oracle -- uname -sr
 baryovm vm exec oracle -- df -h /var/www
 baryovm vm exec oracle -o json -- cat /etc/os-release
 baryovm vm bootstrap oracle      # install Docker if missing
+baryovm vm bootstrap oracle --dry-run   # print the install script, no connection
 baryovm vm runner oracle --repo acme/app   # GitHub Actions self-hosted runner
 baryovm vm runner remove oracle --repo acme/app
 baryovm vm remove oracle         # forget it (does not destroy the machine)
@@ -377,7 +378,17 @@ baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy
 ```
 
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
-`--force-recreate`, `--no-deps`.
+`--force-recreate`, `--no-deps`, `--dry-run` (print the compose commands, no connection).
+
+`stack release --dry-run` prints, in the order they would run, the backup script, the rsync
+invocation for each `sync` entry (with `--delete` and the trailing slash as it would be sent), the
+builds, the `preDeploy` hooks, the compose up, the TLS commands, the `postDeploy` hooks and the
+verification checks. Hooks are listed and never run. It opens no connection, takes no lock,
+writes no release record and leaves `fleet.json` alone. Things only the VM can answer (whether the
+database container exists, `container_name` conflicts, the tar listing, the saved rollback images,
+the `--resume` record) are named in the output as not checked. `--dry-run` cannot be combined with
+`--clear`. In `-o json` the plan is in `data`: `commands` (flat, in order), `steps`, `transport`,
+`rsync`, `hooks`, `verify`, `tls` and `notes`.
 
 ### Release: sync source, build, deploy (config-driven)
 
@@ -767,6 +778,11 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
+`stack backup --dry-run` prints the backup script and `stack restore --dry-run` prints the restore
+script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
+which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
+restore runs.
+
 Example: recreating the barakoCMS API and the barakoBrew console together is one command:
 
 ```sh
@@ -826,7 +842,11 @@ separately, that a genuine new image is kept when it comes up healthy.
 baryovm deploy --vm oracle --image nginx:alpine --name site -p 80:80
 baryovm deploy --vm oracle --image app:latest --name app \
   -p 127.0.0.1:8080:8080 -e KEY=value --pull
+baryovm deploy --vm oracle --image app:latest --name app -e KEY=value --dry-run
 ```
+
+`--dry-run` prints the docker commands to stderr and in the result's `data`, and opens no
+connection. Env values are masked as `***` in that output.
 
 ## Provision + deploy in one (untested, billable)
 

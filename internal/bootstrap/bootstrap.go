@@ -24,6 +24,9 @@ sudo -n systemctl enable --now docker >/dev/null 2>&1 || true
 docker --version 2>/dev/null || sudo -n docker --version
 `
 
+// Script is the script EnsureDocker runs on the VM.
+func Script() string { return dockerScript }
+
 // Report describes the outcome of EnsureDocker.
 type Report struct {
 	DockerVersion string `json:"dockerVersion"`

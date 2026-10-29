@@ -9,7 +9,8 @@ baryovm vm bootstrap <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for bootstrap
+      --dry-run   print the install script without connecting
+  -h, --help      help for bootstrap
 ```
 
 ### Options inherited from parent commands

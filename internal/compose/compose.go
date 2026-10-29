@@ -67,6 +67,22 @@ type UpOptions struct {
 	NoDeps        bool
 }
 
+// upArgs is the argument tail of the up command, shared by Up and UpCmd.
+func upArgs(o UpOptions) string {
+	args := " up -d"
+	if o.ForceRecreate {
+		args += " --force-recreate"
+	}
+	if o.NoDeps {
+		args += " --no-deps"
+	}
+	return args + services(o.Services)
+}
+
+// UpCmd is the exact up command Up runs, without running it. It leaves out the pull step, which
+// PullCmd builds.
+func (s Stack) UpCmd(o UpOptions) string { return s.cmd(upArgs(o)) }
+
 // Up brings the stack (or selected services) up in the background, optionally
 // pulling first. Mirrors the manual `compose up -d --force-recreate` flow.
 func Up(c sshx.Runner, s Stack, o UpOptions) (string, error) {
@@ -78,14 +94,7 @@ func Up(c sshx.Runner, s Stack, o UpOptions) (string, error) {
 			return out.String(), err
 		}
 	}
-	args := " up -d"
-	if o.ForceRecreate {
-		args += " --force-recreate"
-	}
-	if o.NoDeps {
-		args += " --no-deps"
-	}
-	args += services(o.Services)
+	args := upArgs(o)
 	r, err := c.Run(s.cmd(args))
 	out.WriteString(r)
 	if id := staleRenamedContainer(err); id != "" {

@@ -17,6 +17,7 @@ baryovm stack deploy <name> [flags]
 
 ```
       --adopt             remove a container started by hand that holds a container_name the compose file wants (refused if it uses a named volume the compose file does not declare external)
+      --dry-run           print the compose commands without connecting
       --force-recreate    recreate containers even if unchanged
   -h, --help              help for deploy
       --no-deps           don't touch linked services
