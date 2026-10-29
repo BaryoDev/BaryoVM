@@ -251,7 +251,7 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 
 func newStackReleaseCmd() *cobra.Command {
 	var config string
-	var noBuild, noBackup, adopt, resume, clearState bool
+	var noBuild, noBackup, adopt, resume, clearState, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "release <name>",
 		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
@@ -308,6 +308,9 @@ func newStackReleaseCmd() *cobra.Command {
 			}
 			loc := releasestate.For(m.RemoteRoot, args[0], m.Sudo)
 			if clearState {
+				if dryRun {
+					return fail(fmt.Errorf("--dry-run and --clear cannot be used together: clear changes the release record"))
+				}
 				return runReleaseClear(vm, loc, args[0])
 			}
 
@@ -323,6 +326,13 @@ func newStackReleaseCmd() *cobra.Command {
 			// VM and not in the local source, and a database password is exactly such a file.
 			if err := m.CheckComposeDir(st.Dir); err != nil {
 				return fail(err)
+			}
+
+			// A dry run stops here: it has read only local files and fleet.json, and opens no
+			// connection, takes no lock and writes no record.
+			if dryRun {
+				emitDryRun("stack release", planRelease(args[0], st, vm, m, releaseDryOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt, Resume: resume}))
+				return nil
 			}
 
 			// The progress record. It is written under the host lock before the first step that
@@ -621,6 +631,7 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed, refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "continue an earlier release that stopped, from the first step not done, reusing its backup")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the rsync, build, hook, backup and compose commands without connecting or changing anything")
 	cmd.Flags().BoolVar(&clearState, "clear", false, "drop the record of an earlier release that stopped, without running anything")
 	return cmd
 }
@@ -718,17 +729,23 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 }
 
 func newStackBackupCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "backup <name>",
 		Short: "Back up the stack's database + config (pg_dump + .env)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackBackup(args[0])
+			}
 			return runStackBackup(args[0], "stack backup", fmt.Sprintf("backing up %s", args[0]),
 				func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
 					return bareOutput(backup.Backup(c, backupConfig(st)))
 				})
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the backup script without connecting")
+	return cmd
 }
 
 func newStackBackupsCmd() *cobra.Command {
@@ -754,7 +771,7 @@ func newStackBackupsCmd() *cobra.Command {
 
 func newStackRestoreCmd() *cobra.Command {
 	var file string
-	var yes bool
+	var yes, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "restore <name>",
 		Short: "Restore the stack's database from a backup (REPLACES current data)",
@@ -762,6 +779,9 @@ func newStackRestoreCmd() *cobra.Command {
 		Example: "  baryovm stack restore baryoclub --yes\n" +
 			"  baryovm stack restore baryoclub --file db-20260717-011514.dump --yes",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackRestore(args[0], file)
+			}
 			if !yes {
 				return fmt.Errorf("restore REPLACES the %q database: re-run with --yes to confirm", args[0])
 			}
@@ -773,6 +793,7 @@ func newStackRestoreCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "", "backup to restore (name or path); default: newest")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the destructive restore")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the restore script and the backup it would use, without connecting (needs no --yes)")
 	return cmd
 }
 
@@ -826,7 +847,7 @@ func newStackRemoveCmd() *cobra.Command {
 
 func newStackDeployCmd() *cobra.Command {
 	var svcs []string
-	var pull, force, noDeps, adopt bool
+	var pull, force, noDeps, adopt, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
@@ -834,6 +855,9 @@ func newStackDeployCmd() *cobra.Command {
 		Example: "  baryovm stack deploy barako --force-recreate --service api,console\n" +
 			"  baryovm stack deploy barako --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return dryStackDeploy(args[0], compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
+			}
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (string, error) {
 					if err := checkContainerNames(c, cs, adopt); err != nil {
@@ -845,6 +869,7 @@ func newStackDeployCmd() *cobra.Command {
 	}
 	cmd.Flags().StringSliceVar(&svcs, "service", nil, "limit to these services (comma-separated)")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull images before recreating")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the compose commands without connecting")
 	cmd.Flags().BoolVar(&force, "force-recreate", false, "recreate containers even if unchanged")
 	cmd.Flags().BoolVar(&noDeps, "no-deps", false, "don't touch linked services")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "remove a container started by hand that holds a container_name the compose file wants (refused if it uses a named volume the compose file does not declare external)")

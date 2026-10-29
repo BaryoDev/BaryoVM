@@ -17,7 +17,7 @@ import (
 func newDeployCmd() *cobra.Command {
 	var vmName, image, name string
 	var ports, envs []string
-	var pull bool
+	var pull, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy a container image to a VM",
@@ -36,6 +36,9 @@ func newDeployCmd() *cobra.Command {
 				return err
 			}
 			spec := deploy.Spec{Name: name, Image: image, Ports: ports, Env: env, Pull: pull}
+			if dryRun {
+				return dryDeploy(vmName, spec)
+			}
 
 			var rep deploy.Report
 			err = ui.Step(fmt.Sprintf("deploying %s to %s", image, vm.Name), func() error {
@@ -66,6 +69,7 @@ func newDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&ports, "publish", "p", nil, "port mapping host:container (repeatable)")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", nil, "environment KEY=value (repeatable)")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull the image before running")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the docker commands without connecting (env values are masked)")
 	_ = cmd.MarkFlagRequired("vm")
 	_ = cmd.MarkFlagRequired("image")
 	_ = cmd.MarkFlagRequired("name")
