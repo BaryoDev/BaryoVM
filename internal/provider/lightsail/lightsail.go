@@ -20,9 +20,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lightsail"
 )
 
+// DefaultBundle is the smallest bundle and what BaryoVM uses when --size is unset.
+// DefaultBundleCost is the price noted when it was chosen, not a live quote.
+const (
+	DefaultBundle     = "nano_3_0"
+	DefaultBundleCost = "about USD 3.50 per month"
+)
+
 const (
 	defaultBlueprint = "ubuntu_24_04"
-	defaultBundle    = "nano_3_0" // ~$3.50/mo, smallest
+	defaultBundle    = DefaultBundle
 	sshUser          = "ubuntu"
 )
 

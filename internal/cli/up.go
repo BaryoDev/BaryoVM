@@ -27,7 +27,8 @@ func newUpCmd() *cobra.Command {
 		Use:   "up <name>",
 		Short: "Provision (if new) → install Docker → deploy, in one command",
 		Long: "If <name> is already registered, up just installs Docker and deploys.\n" +
-			"If it is new, pass --provider/--key to provision it first.",
+			"If it is new, pass --provider/--key to provision it first. Provisioning bills, so\n" +
+			"without --yes it prints the plan and creates nothing.",
 		Args: cobra.ExactArgs(1),
 		Example: "  baryovm up web1 --image nginx:alpine --container site -p 80:80\n" +
 			"  baryovm up web1 --provider lightsail --key ~/.ssh/id_ed25519 --image app:latest --container app -p 80:8080",
