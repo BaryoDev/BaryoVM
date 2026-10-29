@@ -87,11 +87,11 @@ type edge struct {
 
 func (e *edge) add(check, name string, sev Severity, detail string) {
 	e.out = append(e.out, Finding{
-		Name:     name,
+		Name:     cleanText(name),
 		Severity: sev.String(),
 		Count:    1,
 		Check:    check,
-		Detail:   detail,
+		Detail:   cleanText(detail),
 		severity: sev,
 	})
 }
@@ -331,6 +331,14 @@ func (e *edge) checkBareIP(ips []string) {
 		return
 	}
 	ip := ips[0]
+	// The A record is attacker-controllable DNS. Probing 127.0.0.1 or the cloud
+	// metadata address from the user's machine would be a request forgery, so a
+	// non-global address is reported and left alone.
+	if !isGlobalIP(net.ParseIP(ip)) {
+		e.add(CheckBareIP, "Bare IP checks skipped", SeverityInformational,
+			ip+" is not a globally routable address (loopback, private, link-local, shared or unspecified), so it was not probed")
+		return
+	}
 	for _, p := range []struct {
 		label, url string
 		skip       bool
