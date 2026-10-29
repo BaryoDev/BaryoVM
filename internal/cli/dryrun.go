@@ -14,6 +14,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/managed"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 )
@@ -252,6 +253,17 @@ func planRelease(name string, st *fleet.Stack, vm *fleet.VM, m *release.Manifest
 	p := newDryRunPlan(name)
 	if o.Resume {
 		p.note("--resume is ignored in a dry run: the earlier release record is on the VM and is not read")
+	}
+
+	// 0. The managed database snapshot, run locally through the AWS or Azure CLI.
+	if st.Managed != nil && !o.NoBackup {
+		argvs, err := st.Managed.SnapshotArgvs(managed.SnapshotID(managedNow()))
+		if err != nil {
+			p.note("managed snapshot would fail: %v", err)
+		}
+		for _, a := range argvs {
+			p.add("managed snapshot (local)", managed.Join(a))
+		}
 	}
 
 	// 1. Backup, ahead of everything that changes the host.
