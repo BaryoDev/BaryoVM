@@ -159,6 +159,12 @@ func runStackUpdateCore(name string, svcs []string, auto, dryRun, noBackup bool,
 	if err := requireLinux(vm, action); err != nil {
 		return updateOutcome{}, err
 	}
+	// Refuse an unattended run before opening a connection (or sending a request to a forced VM), so a misconfigured cron entry is a clean
+	// no-op rather than a partially applied change.
+	if auto && !st.AutoUpdate {
+		err := fmt.Errorf("%w: %s is not marked autoUpdate: set it deliberately with `baryovm stack set-update %s --auto`", update.ErrNotAutoUpdatable, name, name)
+		return fail(err)
+	}
 	if vm.Forced() {
 		return forcedUpdate(vm, name, svcs, dryRun, noBackup)
 	}
@@ -172,12 +178,6 @@ func runStackUpdateCore(name string, svcs []string, auto, dryRun, noBackup bool,
 	// to back up. A stack that said nothing is refused by --auto below.
 	noDatabase := declared && !hasBackup
 
-	// Refuse an unattended run before opening a connection, so a misconfigured cron entry is a clean
-	// no-op rather than a partially applied change.
-	if auto && !st.AutoUpdate {
-		err := fmt.Errorf("%w: %s is not marked autoUpdate: set it deliberately with `baryovm stack set-update %s --auto`", update.ErrNotAutoUpdatable, name, name)
-		return fail(err)
-	}
 	// The same builder `stack release` uses, so the two cannot disagree about what healthy means.
 	// Built before any connection: a spec that cannot be read is refused with nothing touched.
 	vctx := verify.Context{

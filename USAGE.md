@@ -223,7 +223,7 @@ A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that
 
 The request is `baryovm-remote v1 <op> <stack>`, parsed without a shell. `<op>` is `update`, `backup`, `status` or `logs`, and `<stack>` matches `^[a-z0-9][a-z0-9-]{0,62}$` and must be a key in the file. `logs` returns the last 200 lines per service. `exec` and `release` are not available: exec is arbitrary shell and release uploads files.
 
-On a VM marked `forced` (`vm add --remote forced` or `vm remote set <vm> forced`) only `stack update`, `stack backup`, `stack ps` (the status op) and `stack logs` work, and they take no `--service`, `--tail`, `--dry-run` or `--no-backup`. `stack update --auto` is accepted so a scheduled run can use `--notify`; the backup and health settings come from the VM's allowlist. Every other command on that VM is refused before anything is sent. Replies come back as the usual `-o json` envelope.
+On a VM marked `forced` (`vm add --remote forced` or `vm remote set <vm> forced`) only `stack update`, `stack backup`, `stack ps` (the status op) and `stack logs` work, and they take no `--service`, `--tail`, `--dry-run` or `--no-backup`. `stack update --auto` is accepted so a scheduled run can use `--notify`, and still needs the stack marked `autoUpdate` on this machine; the backup and health settings come from the VM's allowlist. Every other command on that VM is refused before anything is sent. Replies come back as the usual `-o json` envelope.
 
 ## Hardening, and seeing what hits the box
 

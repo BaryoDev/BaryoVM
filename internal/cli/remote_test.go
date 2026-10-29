@@ -134,6 +134,21 @@ func TestForcedVMRefusesFlagsTheRequestCannotCarry(t *testing.T) {
 	if len(*reqs) != 0 {
 		t.Errorf("a request went out: %v", *reqs)
 	}
+	// --auto still needs the stack to be marked autoUpdate, forced VM or not.
+	if _, _, err := runCmdE(t, newStackUpdateCmd(), noShell(t), true, "app", "--auto"); err == nil {
+		t.Error("--auto accepted on a forced VM for a stack that is not autoUpdate")
+	}
+	if len(*reqs) != 0 {
+		t.Errorf("a request went out: %v", *reqs)
+	}
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FindStack("app").AutoUpdate = true
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
 	// --auto is accepted so a scheduled run can notify; the request is the same plain update.
 	if _, _, err := runCmdE(t, newStackUpdateCmd(), noShell(t), true, "app", "--auto"); err != nil {
 		t.Fatalf("--auto refused on a forced VM: %v", err)
