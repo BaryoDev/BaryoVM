@@ -19,7 +19,8 @@ owner-only (0600) and references SSH key paths, not key contents.
 - Install Docker on a VM (idempotent).
 - Deploy single containers, and manage docker compose stacks (the day-to-day path).
 - `doctor` checks the local tools a release actually runs, and installs what it can with `--fix`.
-- Every command supports `-o json` for machine consumers (MAUI/MCP/agents).
+- Every command supports `-o json` for machine consumers (MAUI/MCP/agents). One JSON document per run, success or failure, with the
+  command name in `action`, even for a bad flag. The shape is in [docs/JSON.md](docs/JSON.md).
 
 ## What is built but untested
 
@@ -423,6 +424,31 @@ existing stack is:
 baryovm stack add barako --vm oracle --path /opt/barakocms --db-container deploy-postgres-1 --db-name barako
 ```
 
+### Onboarding a VM that is already running things
+
+`stack discover` lists the compose projects running on a VM, so you do not start with raw ssh and
+`docker ps`:
+
+```sh
+baryovm stack discover oracle
+baryovm stack discover oracle --sudo                  # docker needs sudo -n for the SSH user
+baryovm stack discover oracle --adopt                 # register them, asking about each on a terminal
+baryovm stack discover oracle --adopt --yes -o json   # no prompts: required without a terminal
+```
+
+It runs `docker compose ls --format json`, then `docker compose config` for each project to count
+services and look for a database. For each project it prints the directory, the service count, the
+postgres container and the `stack add` command that would register it, every value quoted for a
+shell. Without `--adopt` it changes nothing, locally or on the VM.
+
+The postgres container is a guess: the first service whose image name contains `postgres`. It can be
+a replica or the wrong database, so check it before backups rely on it. A project that uses several
+compose files is listed but not adopted, since `stack add` takes one file. A project already
+registered (same VM and directory) is skipped and reported as `already-registered`, and so is one
+whose name another stack already uses. Under `-o json` the data is a list of projects with `name`,
+`dir`, `services`, `postgresGuess`, `addCommand`, `state` and `note`. `--adopt` needs `--yes` when
+there is no terminal or the output is JSON.
+
 `stack deploy` flags: `--service a,b` (limit to services), `--pull`,
 `--force-recreate`, `--no-deps`, `--dry-run` (print the compose commands, no connection).
 
@@ -798,6 +824,46 @@ means a broken config fails the release loudly instead of reloading nothing and 
 **No backup runs for a static stack**, because there is no database registered. The previous
 release is not kept, so the rollback is to rebuild the previous commit and release again.
 
+### Provisioning a static site (`site add`, `site deploy`)
+
+`site add` sets a static site up on a VM you already own, end to end. DNS is not part of it: the
+name must resolve to the VM before the certificate can be issued.
+
+```sh
+baryovm site add example.com --vm web1 --root /var/www/example.com --email ops@example.com --dry-run
+baryovm site add example.com --vm web1 --root /var/www/example.com --email ops@example.com
+npm run build                                   # produces out/
+baryovm site deploy example.com ./out
+```
+
+`site add` creates the webroot and the ACME challenge directory (`/var/www/letsencrypt`), writes
+`/etc/nginx/conf.d/<domain>.conf` from a template, gets the certificate with certbot in webroot
+mode, runs `nginx -t`, and reloads. The server block redirects HTTP to HTTPS, serves a static export
+with `try_files $uri $uri.html $uri/ =404`, gives `/_next/static/` and `/assets/` a year-long
+immutable cache, and sends `Cache-Control: no-cache` for everything else, HTML included. gzip is
+switched on inside those static locations only (JS, CSS, SVG, wasm, JSON), never in the `http`
+block, so a proxied location on the same host is not compressed. Where `selinuxenabled` says SELinux
+is on, the webroot is relabelled with `restorecon -R`. It is detected, never assumed.
+
+The order is fixed by the certificate: an HTTP-only block first so certbot's challenge is served,
+then the full block. Any failing step puts the previous server block back (or removes the new file),
+reloads nginx if it had already been reloaded with the new one, and names the step in the error and
+in `data.failedStep`. A site that already exists, in the local inventory or as a file on the VM, is
+refused unless you pass `--force`. `--email` sets the ACME contact; without it certbot registers
+with none.
+
+Every command that needs root runs as `sudo -n`, so the SSH user needs passwordless sudo, including for a
+shell. Domain and root are checked before any command is built: the domain is lowercase letters,
+digits, hyphens and dots, and the root is an absolute path with no `..` that is not `/` or a system
+directory. Like `stack tls`, `site add` needs no `--yes`: it acts on a VM you own and is undone by
+removing one file, which is not the billable, hard-to-reverse case `vm provision` guards.
+
+The site is recorded in `fleet.json` (`sites`), the way a stack is. `site deploy` reads the webroot
+from there, so it only knows sites added from this machine. It syncs the contents of `<dir>` with
+the same rsync as `stack release` (host key check, `sudo -n rsync` on the far side, `--delete`),
+then relabels, runs `nginx -t` and reloads. An empty or missing directory is refused, because
+syncing it would empty the webroot. Both commands take `--dry-run` and support `-o json`.
+
 ### Backups (pg_dump + config, over SSH)
 
 Register the DB + config once, then back up / restore with one command:
@@ -1005,6 +1071,52 @@ the command is refused rather than allowed.
 git config --add baryovm.allowedHosts github.com
 export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
 ```
+
+### Publishing packages
+
+`baryovm publish npm` and `baryovm publish nuget` check a package before it leaves the machine, then
+run `npm publish` or `dotnet nuget push` with your arguments unchanged.
+
+```sh
+baryovm publish npm --access public     # npm publish --access public
+baryovm publish nuget bin/App.1.0.0.nupkg -s https://api.nuget.org/v3/index.json -k "$KEY"
+```
+
+- npm: `npm pack --dry-run --json` lists what would ship (only its JSON is read) and every file is
+  scanned with the same key rules as `git`. The registry comes from `publishConfig.registry` first,
+  then from npm itself: `npm config get registry` (and `npm config get @scope:registry` for a scoped
+  package) run with every option you gave (abbreviated and unknown flags included),
+  from the directory you run it in, so project, user, global and builtin config and environment variables count as npm
+  counts them. If npm cannot answer, or answers with something that is not a URL, the command is
+  refused. A package with `"private": true` that resolves to a public registry is refused with the
+  registry named. A tarball argument and workspace flags are refused because they cannot be checked.
+- NuGet: the `.nupkg` is opened as a zip and every entry is scanned. `--source` (`-s`) and
+  `--symbol-source` (`-ss`) are checked against the registry list. While a registry list is set, the
+  push is refused unless `--source` is given (the default comes from NuGet.Config, which is not read),
+  refused with `--configfile`, and refused unless symbols are handled: pass `--no-symbols` (`-n`), or
+  `--symbol-source` with a feed URL on the list, because dotnet otherwise pushes a `.snupkg` to an
+  implicit symbol source. With no list set, none of this applies.
+- Nested archives (zip, gzip, 7z, xz, rar, bzip2, found by their first bytes) in a package are refused,
+  naming the entry, because their contents cannot be scanned. Content with NUL bytes is also scanned
+  with them removed, which finds a key stored as UTF-16 in a .NET assembly.
+- `--ignore-scripts` is passed on to `npm pack`. Without it, pack runs the lifecycle scripts, and files
+  that `prepublishOnly` or `prepare` write only at publish time are not scanned.
+- NuGet options are read as `-s url`, `-s=url` and `-s:url`; a repeated `--source` or
+  `--symbol-source` is refused.
+- A file or entry over 64 MiB, or a package over 512 MiB in total, is refused, not skipped.
+
+To limit where a repository may publish, list the allowed registry hosts (a full URL is reduced to its
+host). With none set, every registry is allowed. A registry outside the list is refused before
+anything is sent, and a name from NuGet.Config cannot be resolved, so pass the feed URL. A folder
+source is always allowed. If the setting cannot be read, the command is refused.
+
+```sh
+git config --add baryovm.allowedRegistries registry.npmjs.org
+export BARYOVM_ALLOWED_REGISTRIES=registry.npmjs.org,api.nuget.org   # alternative; "*.corp.example" works
+```
+
+A refusal exits 1, names `file:line (rule)` and never prints the value. Flags belong to npm and dotnet;
+set `BARYOVM_OUTPUT=json` for a JSON refusal. OTP and Trusted Publishing stay with you.
 
 `guard install-hooks` writes `pre-commit`, `commit-msg` and `pre-push` hooks into the current
 repository so commits made without the wrapper are checked too. It leaves a hook

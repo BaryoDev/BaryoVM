@@ -35,6 +35,7 @@ down.
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.
+- **Publishing**. `baryovm publish npm` and `baryovm publish nuget` scan every file a package would ship for keys and refuse a registry outside `baryovm.allowedRegistries` (git config) or `BARYOVM_ALLOWED_REGISTRIES`. The npm registry is read from `npm config get`, and NuGet needs an explicit `--source` and symbol handling while a list is set. With neither set any registry is allowed; a policy that cannot be read refuses. Oversized files are refused, not skipped. See USAGE.md.
 - **Remote commands**. All values interpolated into remote shell commands are
   single-quote escaped (`internal/sshx.Quote`, covered by tests) to prevent
   command injection.

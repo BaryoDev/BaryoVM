@@ -74,20 +74,38 @@ func runReal(name string, args []string) (int, error) {
 // broken config file, git missing) is returned: reading the policy wrong must not turn into
 // "everything is allowed".
 func loadPolicy(globals []string) (guard.Policy, error) {
+	values, err := gitConfigValues(globals, guard.PolicyKey, "BARYOVM_ALLOWED_HOSTS")
+	if err != nil {
+		return guard.Policy{}, err
+	}
+	return guard.ParsePolicy(values), nil
+}
+
+// loadRegistryPolicy reads the allowed registries from git config and BARYOVM_ALLOWED_REGISTRIES,
+// with the same rule: unset means no restriction, an unreadable config refuses.
+func loadRegistryPolicy(globals []string) (guard.Policy, error) {
+	values, err := gitConfigValues(globals, guard.RegistryPolicyKey, "BARYOVM_ALLOWED_REGISTRIES")
+	if err != nil {
+		return guard.Policy{}, err
+	}
+	return guard.Policy{AllowedRegistries: guard.ParseRegistries(values)}, nil
+}
+
+func gitConfigValues(globals []string, key, envVar string) ([]string, error) {
 	var values []string
-	out, err := guardRunner.Git(globals, "config", "--get-all", guard.PolicyKey)
+	out, err := guardRunner.Git(globals, "config", "--get-all", key)
 	if err == nil {
 		values = append(values, strings.Split(out, "\n")...)
 	} else {
 		var coded interface{ ExitCode() int }
 		if !errors.As(err, &coded) || coded.ExitCode() != 1 {
-			return guard.Policy{}, fmt.Errorf("cannot read %s from git config (%v): fix the config or run inside a git repository", guard.PolicyKey, err)
+			return nil, fmt.Errorf("cannot read %s from git config (%v): fix the config or run inside a git repository", key, err)
 		}
 	}
-	if env := os.Getenv("BARYOVM_ALLOWED_HOSTS"); env != "" {
+	if env := os.Getenv(envVar); env != "" {
 		values = append(values, env)
 	}
-	return guard.ParsePolicy(values), nil
+	return values, nil
 }
 
 // policyRefusal is the verdict used when the policy cannot be read.

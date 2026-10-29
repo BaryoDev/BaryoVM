@@ -7,6 +7,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -43,10 +44,11 @@ func newRoot() *cobra.Command {
 			}
 		},
 	}
+	jsonHelp(root)
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
 		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
-	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newGuardCmd())
+	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newPublishCmd(), newGuardCmd(), newSiteCmd())
 	rejectUnknownSubcommands(root)
 	return root
 }
@@ -70,15 +72,115 @@ func rejectUnknownSubcommands(cmd *cobra.Command) {
 	}
 }
 
+// jsonHelp makes help output follow -o json. Under json the help text goes into the envelope
+// (data.usage) instead of reaching stdout as bare text, so a group run with no subcommand, or any
+// --help, still gives the caller one document.
+func jsonHelp(root *cobra.Command) {
+	plain := root.HelpFunc()
+	root.SetHelpFunc(func(c *cobra.Command, args []string) {
+		if !ui.JSON() {
+			plain(c, args)
+			return
+		}
+		prev := c.OutOrStdout()
+		var buf bytes.Buffer
+		c.SetOut(&buf)
+		plain(c, args)
+		c.SetOut(prev)
+		ui.Emit(ui.Result{OK: true, Action: actionOf(c.CommandPath()), Data: map[string]string{"usage": buf.String()}})
+	})
+}
+
+// actionOf turns a cobra command path ("baryovm stack ps") into the action name the envelopes
+// use ("stack ps"). The root itself keeps the program name.
+func actionOf(path string) string {
+	if _, rest, ok := strings.Cut(path, " "); ok && rest != "" {
+		return rest
+	}
+	return "baryovm"
+}
+
+// failedPath is the command path of the last run, for the envelope reportError writes when the
+// handler did not write one itself. Empty until a run has started.
+var failedPath string
+
+// jsonRequested reports whether args ask for -o json (or -ojson, -o=json, --output json,
+// --output=json). Cobra parses flags after the command is chosen, and a parse error stops it
+// before PersistentPreRun, so the format has to be read from the raw arguments to answer a
+// bad flag in JSON. Everything after a bare -- belongs to a remote command and is ignored.
+func jsonRequested(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "--":
+			return false
+		case "-o", "--output":
+			if i+1 < len(args) && args[i+1] == "json" {
+				return true
+			}
+		case "-ojson", "-o=json", "--output=json":
+			return true
+		}
+	}
+	return false
+}
+
+// ownArgs returns the part of args that belongs to baryovm. A command with DisableFlagParsing
+// (vm exec, git, gh, and any other that wraps a tool) owns every word after its name, and a
+// -o json there is the wrapped tool's, so only the words before it count. Those commands get JSON
+// from BARYOVM_OUTPUT=json, or parse their own prefix.
+func ownArgs(root *cobra.Command, args []string) []string {
+	cmd, _, err := root.Find(args)
+	if err != nil || cmd == nil || !cmd.DisableFlagParsing {
+		return args
+	}
+	words := len(strings.Fields(cmd.CommandPath())) - 1
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-o" || a == "--output":
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			if words--; words == 0 {
+				return args[:i+1]
+			}
+		}
+	}
+	return args
+}
+
+// execute runs root against args and returns the command that ran with its error. It switches
+// JSON on before cobra parses anything, so a bad flag is answered in JSON too.
+func execute(root *cobra.Command, args []string) error {
+	if jsonRequested(ownArgs(root, args)) {
+		outputFormat = "json"
+		ui.SetJSON(true)
+	}
+	root.SetArgs(args)
+	return runRoot(root)
+}
+
 // reportError prints a failed run in the format asked for and returns the exit code. The output
 // format is set here as well as in PersistentPreRun, because cobra rejects bad arguments before
 // that hook runs and the error would otherwise come out as text under -o json.
+//
+// This is the fallback, not an addition: stdout carries one document, so when a handler already
+// wrote its own (ui.Emit ignores every call after the first) nothing more is written, whether or
+// not it marked the error silent. The action is the command that failed, not the program name.
 func reportError(err error) int {
 	code, silent := exitCodeOf(err)
-	if !silent {
-		ui.SetJSON(outputFormat == "json")
-		ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
+	if silent {
+		return code
 	}
+	if outputFormat == "json" && !ui.JSON() {
+		ui.SetJSON(true)
+	}
+	action := "baryovm" // the human banner keeps the program name; only the document names the command
+	if ui.JSON() {
+		action = actionOf(failedPath)
+	}
+	ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 	return code
 }
 
@@ -103,7 +205,16 @@ func Execute() {
 		}
 	}()
 
-	if err := runRoot(newRoot()); err != nil {
-		os.Exit(reportError(err))
+	if code := run(newRoot(), os.Args[1:]); code != 0 {
+		os.Exit(code)
 	}
+}
+
+// run is Execute without the process exit: the command, then the error report, then the exit code.
+// Tests drive this, so they go through the same path a user does.
+func run(root *cobra.Command, args []string) int {
+	if err := execute(root, args); err != nil {
+		return reportError(err)
+	}
+	return 0
 }

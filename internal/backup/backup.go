@@ -10,6 +10,7 @@ package backup
 import (
 	"encoding/base64"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -207,6 +208,32 @@ type ListResult struct {
 	Backups []string `json:"backups"`
 	Count   int      `json:"count"`
 	Note    string   `json:"note,omitempty"`
+	// Entries is Backups with the file name and the time taken split out, in the same order.
+	Entries []ListEntry `json:"entries"`
+}
+
+// ListEntry is one backup in a listing.
+type ListEntry struct {
+	// Path is the line as listed, usually the full path on the VM.
+	Path string `json:"path"`
+	// File is the base name, db-YYYYmmdd-HHMMSS.dump, the value `stack restore --file` takes.
+	File string `json:"file"`
+	// Taken is read from the file name, as YYYY-MM-DDTHH:MM:SS in the VM's clock with no zone.
+	// Empty when the name does not carry a timestamp.
+	Taken string `json:"taken,omitempty"`
+}
+
+var backupName = regexp.MustCompile(`^db-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.dump$`)
+
+func listEntry(line string) ListEntry {
+	e := ListEntry{Path: line, File: line}
+	if i := strings.LastIndex(line, "/"); i >= 0 {
+		e.File = line[i+1:]
+	}
+	if m := backupName.FindStringSubmatch(e.File); m != nil {
+		e.Taken = fmt.Sprintf("%s-%s-%sT%s:%s:%s", m[1], m[2], m[3], m[4], m[5], m[6])
+	}
+	return e
 }
 
 // NoBackupsNote is what an empty listing says for itself.
@@ -215,13 +242,14 @@ const NoBackupsNote = "no database backups found for this stack: take one with `
 // DescribeList turns List's output into the backup names and a count. The marker line is not a
 // backup, and neither is a blank line.
 func DescribeList(out string) ListResult {
-	r := ListResult{Output: out, Backups: []string{}}
+	r := ListResult{Output: out, Backups: []string{}, Entries: []ListEntry{}}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line == NoBackupsMarker {
 			continue
 		}
 		r.Backups = append(r.Backups, line)
+		r.Entries = append(r.Entries, listEntry(line))
 	}
 	r.Count = len(r.Backups)
 	if r.Count == 0 {
