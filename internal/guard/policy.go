@@ -21,16 +21,62 @@ const PolicyKey = "baryovm.allowedHosts"
 // has no host and is always allowed: it never reaches the network.
 type Policy struct {
 	AllowedHosts []string
+	// AllowedRegistries are the package registries `publish` may reach, as hosts. Empty means no
+	// restriction.
+	AllowedRegistries []string
+}
+
+// RegistryPolicyKey is the git config key for the registries a repository may publish to:
+//
+//	git config --add baryovm.allowedRegistries registry.npmjs.org
+const RegistryPolicyKey = "baryovm.allowedRegistries"
+
+func splitList(values []string) []string {
+	var out []string
+	for _, v := range values {
+		out = append(out, strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })...)
+	}
+	return out
+}
+
+// ParseRegistries reads registry allowlist values: comma or space separated hosts. An entry may be
+// a full URL (https://pkgs.example/npm/), which is reduced to its host: only the host is checked.
+func ParseRegistries(values []string) []string {
+	var out []string
+	for _, e := range splitList(values) {
+		if strings.Contains(e, "://") {
+			if u, err := url.Parse(e); err == nil && u.Hostname() != "" {
+				e = u.Hostname()
+			}
+		}
+		out = append(out, strings.ToLower(e))
+	}
+	return out
+}
+
+// RegistriesRestricted reports whether a registry allowlist is set.
+func (p Policy) RegistriesRestricted() bool { return len(p.AllowedRegistries) > 0 }
+
+// AllowsRegistry reports whether publishing to host is allowed. Without an allowlist it always is.
+func (p Policy) AllowsRegistry(host string) bool {
+	return !p.RegistriesRestricted() || hostMatches(p.AllowedRegistries, strings.ToLower(host))
+}
+
+func hostMatches(list []string, host string) bool {
+	for _, a := range list {
+		if a == host || (strings.HasPrefix(a, "*.") && strings.HasSuffix(host, a[1:])) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParsePolicy builds a Policy from raw values, each one a host or a list split on commas and
 // whitespace. A host may start with "*." to allow every subdomain.
 func ParsePolicy(values []string) Policy {
 	var p Policy
-	for _, v := range values {
-		for _, h := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
-			p.AllowedHosts = append(p.AllowedHosts, strings.ToLower(h))
-		}
+	for _, h := range splitList(values) {
+		p.AllowedHosts = append(p.AllowedHosts, strings.ToLower(h))
 	}
 	return p
 }
@@ -43,16 +89,7 @@ func (p Policy) Allows(host string) bool {
 	if !p.Restricted() || host == "" {
 		return true
 	}
-	host = strings.ToLower(host)
-	for _, a := range p.AllowedHosts {
-		if a == host {
-			return true
-		}
-		if strings.HasPrefix(a, "*.") && strings.HasSuffix(host, a[1:]) {
-			return true
-		}
-	}
-	return false
+	return hostMatches(p.AllowedHosts, strings.ToLower(host))
 }
 
 // ParseRemoteHost returns the host a git remote URL points at, lowercased. It reads URL forms

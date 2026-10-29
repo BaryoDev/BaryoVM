@@ -1006,6 +1006,40 @@ git config --add baryovm.allowedHosts github.com
 export BARYOVM_ALLOWED_HOSTS=github.com,dev.azure.com   # alternative; "*.corp.example" works
 ```
 
+### Publishing packages
+
+`baryovm publish npm` and `baryovm publish nuget` check a package before it leaves the machine, then
+run `npm publish` or `dotnet nuget push` with your arguments unchanged.
+
+```sh
+baryovm publish npm --access public     # npm publish --access public
+baryovm publish nuget bin/App.1.0.0.nupkg -s https://api.nuget.org/v3/index.json -k "$KEY"
+```
+
+- npm: `npm pack --dry-run --json` lists what would ship (only its JSON is read) and every file is
+  scanned with the same key rules as `git`. The registry is resolved the way npm does: `publishConfig`,
+  then `--registry`, `npm_config_registry`, the project `.npmrc`, the user `.npmrc`, then
+  registry.npmjs.org (a scoped `@scope:registry` wins over the plain one). A package with
+  `"private": true` that resolves to a public registry is refused with the registry named. A tarball
+  argument and workspace flags are refused because they cannot be checked.
+- NuGet: the `.nupkg` is opened as a zip and every entry is scanned. `--source` (`-s`) and
+  `--symbol-source` are checked; with no `--source` the source is api.nuget.org. `defaultPushSource` in
+  NuGet.Config is not read.
+- A file or entry over 64 MiB, or a package over 512 MiB in total, is refused, not skipped.
+
+To limit where a repository may publish, list the allowed registry hosts (a full URL is reduced to its
+host). With none set, every registry is allowed. A registry outside the list is refused before
+anything is sent, and a name from NuGet.Config cannot be resolved, so pass the feed URL. A folder
+source is always allowed. If the setting cannot be read, the command is refused.
+
+```sh
+git config --add baryovm.allowedRegistries registry.npmjs.org
+export BARYOVM_ALLOWED_REGISTRIES=registry.npmjs.org,api.nuget.org   # alternative; "*.corp.example" works
+```
+
+A refusal exits 1, names `file:line (rule)` and never prints the value. Flags belong to npm and dotnet;
+set `BARYOVM_OUTPUT=json` for a JSON refusal. OTP and Trusted Publishing stay with you.
+
 `guard install-hooks` writes `pre-commit`, `commit-msg` and `pre-push` hooks into the current
 repository so commits made without the wrapper are checked too. It leaves a hook
 that is not BaryoVM's alone unless you pass `--force`, which keeps it as
