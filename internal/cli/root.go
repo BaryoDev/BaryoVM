@@ -125,10 +125,35 @@ func jsonRequested(args []string) bool {
 	return false
 }
 
+// ownArgs returns the part of args that belongs to baryovm. A command with DisableFlagParsing
+// (vm exec, git, gh, and any other that wraps a tool) owns every word after its name, and a
+// -o json there is the wrapped tool's, so only the words before it count. Those commands get JSON
+// from BARYOVM_OUTPUT=json, or parse their own prefix.
+func ownArgs(root *cobra.Command, args []string) []string {
+	cmd, _, err := root.Find(args)
+	if err != nil || cmd == nil || !cmd.DisableFlagParsing {
+		return args
+	}
+	words := len(strings.Fields(cmd.CommandPath())) - 1
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-o" || a == "--output":
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			if words--; words == 0 {
+				return args[:i+1]
+			}
+		}
+	}
+	return args
+}
+
 // execute runs root against args and returns the command that ran with its error. It switches
 // JSON on before cobra parses anything, so a bad flag is answered in JSON too.
 func execute(root *cobra.Command, args []string) error {
-	if jsonRequested(args) {
+	if jsonRequested(ownArgs(root, args)) {
 		outputFormat = "json"
 		ui.SetJSON(true)
 	}

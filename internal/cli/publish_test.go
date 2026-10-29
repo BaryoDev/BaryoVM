@@ -324,3 +324,58 @@ func TestPublishNuGetUnreadablePackageIsRefused(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+func TestPublishNuGetColonAndEqualsFormsAreChecked(t *testing.T) {
+	pkg := nupkg(t, map[string]string{"App.nuspec": "<package/>"})
+	t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"App.nupkg": pkg}}, 0)
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s:https://evil.example/v3", "-n"), ran, 0, "evil.example")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "--source:https://evil.example/v3", "-n"), ran, 0, "evil.example")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", "https://pkgs.corp.example/v3", "-n", "-ss:https://evil.example/s"), ran, 0, "evil.example")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", "https://pkgs.corp.example/v3", "--source=https://evil.example/v3", "-n"), ran, 0, "more than once")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", "https://pkgs.corp.example/v3", "-ss", "https://pkgs.corp.example/s", "--symbol-source", "https://evil.example/s"), ran, 0, "more than once")
+}
+
+func TestPublishNpmWorkspaceFlagInAnyFormIsRefused(t *testing.T) {
+	withPublishSeams(t, packOne, nil)
+	ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+	for _, f := range []string{"--workspaces=true", "-ws=true", "--workspace=a", "-w=a", "-wa", "--workspaces=false"} {
+		wantRefused(t, runGroup(t, "publish", "npm", f), ran, 0, "workspace")
+	}
+}
+
+func TestPublishFindsUTF16KeyInDllAndNpmFile(t *testing.T) {
+	var u16 strings.Builder
+	for _, c := range "k=" + cliFakeKey {
+		u16.WriteRune(c)
+		u16.WriteByte(0)
+	}
+	dll := "MZ\x90\x00" + u16.String()
+	pkg := nupkg(t, map[string]string{"lib/App.dll": dll})
+	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"App.nupkg": pkg}}, 0)
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg"), ran, 0, "lib/App.dll")
+	withPublishSeams(t, packOne, nil)
+	ran = withGuardSeams(t, &fakeGuardRunner{files: npmFiles(dll)}, 0)
+	wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "index.js")
+}
+
+func TestPublishNestedArchiveIsRefused(t *testing.T) {
+	inner := nupkg(t, map[string]string{"a.txt": "x"})
+	pkg := nupkg(t, map[string]string{"tools/inner.zip": inner})
+	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"App.nupkg": pkg}}, 0)
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg"), ran, 0, "tools/inner.zip", "nested zip")
+	withPublishSeams(t, packOne, nil)
+	ran = withGuardSeams(t, &fakeGuardRunner{files: npmFiles("\x1f\x8b\x08\x00data")}, 0)
+	wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "index.js", "nested gzip")
+}
+
+func TestPublishNpmIgnoreScriptsReachesPack(t *testing.T) {
+	packs := withPublishSeams(t, packOne, nil)
+	withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+	if err := runGroup(t, "publish", "npm", "--ignore-scripts"); err != nil {
+		t.Fatal(err)
+	}
+	if (*packs)[0] != ".: npm pack --dry-run --json --ignore-scripts" {
+		t.Fatalf("pack: %v", *packs)
+	}
+}

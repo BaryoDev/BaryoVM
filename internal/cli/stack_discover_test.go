@@ -6,6 +6,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -335,5 +336,72 @@ func TestAdoptNeverRegistersAControlCharacterName(t *testing.T) {
 	}
 	if store, _ := fleet.Load(); len(store.Stacks) != 0 {
 		t.Errorf("registered: %+v", store.Stacks)
+	}
+}
+
+func TestAdoptFailureMidBatchRevertsRegisteredStates(t *testing.T) {
+	discoverFixture(t)
+	calls := 0
+	prev := registerStackFn
+	registerStackFn = func(s *fleet.Store, in stackAddInput) (fleet.Stack, string, error) {
+		calls++
+		if calls == 2 {
+			return fleet.Stack{}, "", fmt.Errorf("boom")
+		}
+		return prev(s, in)
+	}
+	t.Cleanup(func() { registerStackFn = prev })
+	f := &fakeRunner{answers: discoverAnswers()}
+	stdout, _, err := runDiscover(t, f, true, false, "", "oracle", "--adopt", "--yes")
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	var env struct {
+		OK   bool               `json:"ok"`
+		Data []discover.Project `json:"data"`
+	}
+	if jerr := json.Unmarshal([]byte(stdout), &env); jerr != nil {
+		t.Fatal(jerr)
+	}
+	for _, p := range env.Data {
+		if p.State == "registered" {
+			t.Errorf("%s claims registered but nothing was saved", p.Name)
+		}
+	}
+	if store, _ := fleet.Load(); len(store.Stacks) != 0 {
+		t.Errorf("saved: %+v", store.Stacks)
+	}
+}
+
+func TestDiscoverSkipsRepeatsWithinTheBatch(t *testing.T) {
+	discoverFixture(t)
+	a := map[string]string{
+		"compose ls": `[{"Name":"app","ConfigFiles":"/opt/app/compose.yaml"},
+{"Name":"app","ConfigFiles":"/opt/other/compose.yaml"},
+{"Name":"app2","ConfigFiles":"/opt/app/docker-compose.yml"}]`,
+		"config --format json": `{"services":{"a":{"image":"a"}}}`,
+	}
+	stdout, _, err := runDiscover(t, &fakeRunner{answers: a}, true, false, "", "oracle", "--adopt", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ps := parseDiscover(t, stdout)
+	registered, skipped := 0, 0
+	for _, p := range ps {
+		switch p.State {
+		case "registered":
+			registered++
+		case "skipped":
+			skipped++
+			if !strings.Contains(p.Note, "same name or directory") {
+				t.Errorf("%+v", p)
+			}
+		}
+	}
+	if registered != 1 || skipped != 2 {
+		t.Errorf("registered %d skipped %d: %+v", registered, skipped, ps)
+	}
+	if store, _ := fleet.Load(); len(store.Stacks) != 1 {
+		t.Errorf("%+v", store.Stacks)
 	}
 }

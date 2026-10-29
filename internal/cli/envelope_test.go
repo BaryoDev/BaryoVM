@@ -289,3 +289,28 @@ func TestRemoteOutputCannotBreakTheDocument(t *testing.T) {
 	})
 	oneDocument(t, out)
 }
+
+// A command that hands its flags to another program owns every word after its name: -o json there
+// is the wrapped tool's, not ours. The old prescan read all of os.Args and switched JSON on.
+func TestPrescanLeavesFlagsOfAWrappingCommandAlone(t *testing.T) {
+	root := newRoot()
+	wrap := &cobra.Command{Use: "wrapfake", DisableFlagParsing: true, RunE: func(*cobra.Command, []string) error { return nil }}
+	root.AddCommand(wrap)
+
+	cases := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"wrapfake", "log", "-o", "json"}, false},
+		{[]string{"wrapfake", "x", "--output", "json"}, false},
+		{[]string{"wrapfake", "--output=json"}, false},
+		{[]string{"-o", "json", "wrapfake", "log"}, true},
+		{[]string{"vm", "exec", "box", "-o", "json", "--", "ls"}, false},
+		{[]string{"vm", "list", "-o", "json"}, true},
+	}
+	for _, c := range cases {
+		if got := jsonRequested(ownArgs(root, c.args)); got != c.want {
+			t.Errorf("%v: json=%v, want %v", c.args, got, c.want)
+		}
+	}
+}
