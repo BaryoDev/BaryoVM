@@ -493,6 +493,7 @@ func rollbackFixtureWithRecord(t *testing.T) (*stateHost, *fakeRunner) {
 	host.files["images-before.json"] = `{"stack":"app","at":"2026-10-29T00:00:00Z","source":"release","images":[{"service":"web","ref":"app-web:1","id":"sha256:aaa"}]}`
 	inner := &fakeRunner{answers: map[string]string{
 		" tag ":              "",
+		"image inspect":      "sha256:aaa\n",
 		"up -d":              "",
 		"db-":                "db-2.dump\ndb-1.dump\n",
 		"images-before.json": "",

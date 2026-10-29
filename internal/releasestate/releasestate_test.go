@@ -193,3 +193,20 @@ func TestWriteStampsUpdatedAndActiveReadsIt(t *testing.T) {
 		t.Error("a record with no heartbeat predates the field and counts as stopped")
 	}
 }
+
+func TestStepErrorsAndDescribeCarryNoSecrets(t *testing.T) {
+	s := New("demo", "abc")
+	s.Mark("build:x", StatusFailed, errors.New("exit 1: DB_PASSWORD=hunter2 pull https://bob:s3cret@reg.example/x failed"))
+	for _, got := range []string{s.Steps[0].Error, s.Error, s.Describe()} {
+		if strings.Contains(got, "hunter2") || strings.Contains(got, "s3cret") {
+			t.Errorf("secret kept: %s", got)
+		}
+	}
+	old := &State{Stack: "demo", Failed: "b", Error: "API_TOKEN=abc123"}
+	if strings.Contains(old.Describe(), "abc123") {
+		t.Errorf("describe prints an old record raw: %s", old.Describe())
+	}
+	if got := Redact("plain failure"); got != "plain failure" {
+		t.Errorf("changed: %s", got)
+	}
+}

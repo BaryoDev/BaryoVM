@@ -79,7 +79,7 @@ func stateData(l releasestate.Loc, s *releasestate.State, name string) map[strin
 	}
 	if s.Failed != "" {
 		d["failedStep"] = s.Failed
-		d["failedError"] = s.Error
+		d["failedError"] = releasestate.Redact(s.Error)
 	}
 	if s.Backup != "" {
 		d["backup"] = s.Backup

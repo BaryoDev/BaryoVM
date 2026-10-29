@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -56,11 +57,25 @@ func New(stack, commit string) *State {
 	return &State{Stack: stack, Commit: commit, Started: time.Now().UTC().Format(time.RFC3339), Steps: []Step{}}
 }
 
+var (
+	secretAssign = regexp.MustCompile(`(?i)\b([A-Za-z0-9_]*(?:PASS|SECRET|TOKEN|KEY)[A-Za-z0-9_]*)=\S+`)
+	urlPassword  = regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+@`)
+)
+
+// Redact strips what a failed command's output tends to carry: KEY=value pairs whose name holds
+// PASS, SECRET, TOKEN or KEY, and user:password@ in URLs. The record sits in plain text on the host
+// and in command output, so it must not hold anything a build step echoed. It is pattern based, not
+// a guarantee.
+func Redact(s string) string {
+	s = secretAssign.ReplaceAllString(s, "$1=[redacted]")
+	return urlPassword.ReplaceAllString(s, "${1}[redacted]@")
+}
+
 // Mark records a step's status, adding the step when it is new.
 func (s *State) Mark(name, status string, err error) {
 	msg := ""
 	if err != nil {
-		msg = err.Error()
+		msg = Redact(err.Error())
 	}
 	for i := range s.Steps {
 		if s.Steps[i].Name == name {
@@ -130,7 +145,7 @@ func (s *State) Describe() string {
 		b.WriteString("Steps: " + strings.Join(s.Touched(), ", ") + ". ")
 	}
 	if s.Failed != "" {
-		fmt.Fprintf(&b, "It failed at %s: %s. ", s.Failed, s.Error)
+		fmt.Fprintf(&b, "It failed at %s: %s. ", s.Failed, Redact(s.Error))
 	} else if n := lastStarted(s); n != "" {
 		fmt.Fprintf(&b, "It stopped during %s, which may have run. ", n)
 	}
