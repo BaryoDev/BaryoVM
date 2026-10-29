@@ -134,9 +134,9 @@ func TestScanDiffNamesFileAndLine(t *testing.T) {
 }
 
 func TestScanDiffAddedLineStartingWithPlusPlus(t *testing.T) {
-	// The added line "++x KEY" shows up in the diff as "+++x KEY", which must not be read as a
-	// file header inside a hunk.
-	diff := "diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1,2 @@\n ctx\n+++x " + fakeGoogle + "\n"
+	// The added line "++ x KEY" shows up in the diff as "+++ x KEY", which looks like a file
+	// header but is content inside a hunk and must be scanned.
+	diff := "diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1,2 @@\n ctx\n+++ x " + fakeGoogle + "\n"
 	fs := ScanDiff(diff)
 	if len(fs) != 1 || fs[0].File != "x.txt" || fs[0].Line != 2 {
 		t.Fatalf("got %v", fs)

@@ -975,6 +975,12 @@ Checked:
   `--notes`, `-n` and `--notes-file`. A repo flag such as `-R o/r` before the
   verb is fine.
 
+Option parsing follows the tools: git long options may be abbreviated (an
+ambiguous abbreviation is refused), grouped short flags are read letter by
+letter, a gh flag group with a letter the subcommand does not have is refused,
+and a relative `-F` path is refused when `--git-dir`, `--work-tree`, `GIT_DIR` or
+`GIT_WORK_TREE` redirect git (pass an absolute path).
+
 Every other git and gh command passes straight through with the tool's own
 output and exit code. Flags after `git` or `gh` belong to that tool, so these
 two take none of their own; set `BARYOVM_OUTPUT=json` for a JSON refusal.
