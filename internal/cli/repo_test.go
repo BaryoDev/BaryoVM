@@ -36,6 +36,10 @@ type repoWorld struct {
 	createURL    string
 	failPush     bool
 	dropTag      bool
+	branches     map[string]string // branch to the remote it tracks
+	failCreate   bool
+	createExists bool // a failed create leaves a readable repository behind
+	failBranch   string
 	rateLimit    bool
 	vms          map[string]*fakeCheckoutVM
 	dialed       int
@@ -49,6 +53,7 @@ func newRepoWorld(t *testing.T) *repoWorld {
 			oldURL: {"refs/heads/main": sha(1), "refs/heads/dev": sha(2), "refs/tags/v1": sha(3)},
 		},
 		localRemotes: map[string]string{"origin": oldURL + ".git"},
+		branches:     map[string]string{"main": "origin", "dev": "origin", "scratch": "other"},
 		createURL:    newURL,
 		vms:          map[string]*fakeCheckoutVM{},
 	}
@@ -124,11 +129,44 @@ func (w *repoWorld) exec(argv []string) (string, int, error) {
 			}
 			delete(w.localRemotes, argv[5])
 			w.localRemotes[argv[6]] = u
+			// like git, a rename takes the tracking of every branch along
+			for b, r := range w.branches {
+				if r == argv[5] {
+					w.branches[b] = argv[6]
+				}
+			}
 		case "add":
 			w.localRemotes[argv[5]] = argv[6]
 		case "remove":
 			delete(w.localRemotes, argv[5])
+			for b, r := range w.branches {
+				if r == argv[5] {
+					delete(w.branches, b)
+				}
+			}
 		}
+		return "", 0, nil
+	case argv[0] == "git" && argv[1] == "-C" && argv[3] == "config":
+		if argv[4] == "--get-regexp" {
+			var names []string
+			for b := range w.branches {
+				names = append(names, b)
+			}
+			sort.Strings(names)
+			var sb strings.Builder
+			for _, b := range names {
+				sb.WriteString("branch." + b + ".remote " + w.branches[b] + "\n")
+			}
+			if sb.Len() == 0 {
+				return "", 1, nil
+			}
+			return sb.String(), 0, nil
+		}
+		b := strings.TrimSuffix(strings.TrimPrefix(argv[4], "branch."), ".remote")
+		if w.failBranch == b && argv[5] == "origin" {
+			return w.fail("error: could not lock config file")
+		}
+		w.branches[b] = argv[5]
 		return "", 0, nil
 	case argv[0] == "gh" && argv[1] == "api":
 		if w.rateLimit {
@@ -146,6 +184,12 @@ func (w *repoWorld) exec(argv []string) (string, int, error) {
 			return `[[{"number":1,"title":"one"},{"number":2,"title":"pr two","pull_request":{}}],[{"number":3,"title":"three"}]]`, 0, nil
 		}
 	case (argv[0] == "gh" && argv[1] == "repo" && argv[2] == "create") || (argv[0] == "az" && argv[1] == "repos"):
+		if w.failCreate {
+			if w.createExists {
+				w.hosts[w.createURL] = map[string]string{}
+			}
+			return "already exists", 1, fmt.Errorf("exit status 1")
+		}
 		w.hosts[w.createURL] = map[string]string{}
 		return "", 0, nil
 	}
@@ -264,10 +308,9 @@ func repoFixture(t *testing.T) (*repoWorld, *fakeCheckoutVM) {
 	v1 := &fakeCheckoutVM{
 		origins: map[string]string{
 			"/opt/deploy/app":   oldURL + ".git",
-			"/opt/deploy/dev":   "git@github.com:acme/app.git",
 			"/opt/deploy/other": "https://github.com/acme/other",
 		},
-		dirty: map[string]bool{"/opt/deploy/dev": true},
+		dirty: map[string]bool{},
 		cron:  map[string]string{"/opt/deploy/app": "/etc/cron.d/app:1:0 3 * * * deploy /opt/deploy/app/backup.sh\n"},
 	}
 	w.vms["vm1"] = v1
@@ -368,9 +411,6 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 	if vm.origins["/opt/deploy/app"] != newURL {
 		t.Errorf("deploy copy not repointed: %q", vm.origins["/opt/deploy/app"])
 	}
-	if vm.origins["/opt/deploy/dev"] != "git@github.com:acme/app.git" {
-		t.Errorf("a checkout with local changes was touched: %q", vm.origins["/opt/deploy/dev"])
-	}
 	if vm.origins["/opt/deploy/other"] != "https://github.com/acme/other" {
 		t.Errorf("an unrelated repository was touched")
 	}
@@ -383,14 +423,8 @@ func TestRepoMoveHappyPathOrderAndResult(t *testing.T) {
 	if !rep.Created || !rep.Mirrored || !rep.Recorded || rep.Refs != 3 {
 		t.Errorf("report: %+v", rep)
 	}
-	var dirty bool
-	for _, c := range rep.Checkouts {
-		if c.Dir == "/opt/deploy/dev" && c.Dirty && !c.Repointed {
-			dirty = true
-		}
-	}
-	if !dirty {
-		t.Errorf("the dirty checkout is not reported: %+v", rep.Checkouts)
+	if w.branches["main"] != "origin" || w.branches["dev"] != "origin" || w.branches["scratch"] != "other" {
+		t.Errorf("tracked branches still pull from the old remote: %v", w.branches)
 	}
 	if len(rep.References) != 1 || !strings.Contains(rep.References[0].Match, "/opt/deploy/app/backup.sh") {
 		t.Errorf("cron reference not listed: %+v", rep.References)

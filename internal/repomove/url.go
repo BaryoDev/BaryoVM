@@ -9,6 +9,7 @@
 package repomove
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -38,39 +39,68 @@ type Repo struct {
 
 // Parse validates a remote URL and splits it. A URL that carries a credential is refused: a token
 // in a URL ends up in argv, in git's config and in every error that quotes the URL.
-func Parse(raw string) (Repo, error) {
+func Parse(raw string) (Repo, error) { return parse(raw, false) }
+
+// ErrCredential is the error for a URL that carries a user, password or token. Its text never
+// includes the URL.
+var ErrCredential = errors.New("the repository URL carries a credential: remove it and let git or the host CLI sign in")
+
+// ParseLenient reads the host and path of a URL even when it carries a credential. It is only for
+// asking whether a checkout's origin is this repository; the result is never stored or printed.
+func ParseLenient(raw string) (Repo, error) { return parse(raw, true) }
+
+func parse(raw string, lenient bool) (Repo, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return Repo{}, fmt.Errorf("empty repository URL")
 	}
-	if strings.HasPrefix(raw, "-") || strings.ContainsAny(raw, " \t\r\n") {
+	if strings.HasPrefix(raw, "-") || strings.ContainsAny(raw, " \t\r\n?#") || strings.Contains(raw, "::") ||
+		strings.HasPrefix(raw, "ext:") || strings.HasPrefix(raw, "file:") {
 		return Repo{}, fmt.Errorf("not a repository URL")
 	}
 	r := Repo{URL: raw}
+	if lenient {
+		r.URL = ""
+	}
 	var host, path string
 	if strings.Contains(raw, "://") {
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" {
 			return Repo{}, fmt.Errorf("not a repository URL")
 		}
+		switch u.Scheme {
+		case "https", "http", "ssh", "git":
+		default:
+			return Repo{}, fmt.Errorf("not a repository URL")
+		}
 		host, path = u.Hostname(), strings.Trim(u.Path, "/")
-		if u.User != nil {
+		if u.User != nil && !lenient {
 			if _, hasPw := u.User.Password(); hasPw {
-				return Repo{}, fmt.Errorf("the repository URL carries a password or token: remove it and let git or the host CLI sign in")
+				return Repo{}, ErrCredential
 			}
 			if u.Scheme == "http" || u.Scheme == "https" {
 				// Azure's own clone URL is https://<org>@dev.azure.com/<org>/..., a name and not a
 				// secret. Anything else in front of the @ may be a token.
 				org := strings.SplitN(path, "/", 2)[0]
 				if !strings.EqualFold(host, "dev.azure.com") || !strings.EqualFold(u.User.Username(), org) {
-					return Repo{}, fmt.Errorf("the repository URL carries a user or token before the host: remove it and let git or the host CLI sign in")
+					return Repo{}, ErrCredential
 				}
 			}
 		}
 	} else {
-		// scp style: git@host:path
-		at := strings.Index(raw, "@")
+		// scp style: git@host:path. A colon before the @ is user:password@host.
+		at := strings.LastIndex(raw, "@")
 		colon := strings.Index(raw, ":")
+		if at >= 0 && colon >= 0 && colon < at {
+			if !lenient {
+				return Repo{}, ErrCredential
+			}
+			rel := strings.Index(raw[at:], ":")
+			if rel < 0 {
+				return Repo{}, fmt.Errorf("not a repository URL")
+			}
+			colon = at + rel
+		}
 		if colon < 0 || strings.Contains(raw[:colon], "/") {
 			return Repo{}, fmt.Errorf("not a repository URL")
 		}
