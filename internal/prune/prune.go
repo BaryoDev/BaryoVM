@@ -98,6 +98,8 @@ type Result struct {
 	FreedBytes int64     `json:"freedBytes"`
 	Removed    []Item    `json:"removed"`
 	Failed     []Failure `json:"failed,omitempty"`
+	// Skipped items failed the host-side re-check before rm ran: nothing was deleted.
+	Skipped []Failure `json:"skipped,omitempty"`
 }
 
 // ErrLocked means another prune holds the VM's lock.
@@ -186,7 +188,7 @@ func BuildPlan(f Facts, o Options) Plan {
 	if len(o.WorkDirs) == 0 {
 		p.Notes = append(p.Notes, "no --work-dir given: skipped build output")
 	} else {
-		p.Items = append(p.Items, buildDirItems(f)...)
+		p.Items = append(p.Items, buildDirItems(f, o)...)
 	}
 	switch {
 	case len(o.WorktreeDirs) == 0:
@@ -194,7 +196,7 @@ func BuildPlan(f Facts, o Options) Plan {
 	case !f.HasGit:
 		p.Notes = append(p.Notes, "git not available: skipped worktrees")
 	default:
-		p.Items = append(p.Items, worktreeItems(f)...)
+		p.Items = append(p.Items, worktreeItems(f, o)...)
 	}
 	p.Items = append(p.Items, cacheItems(f)...)
 	for _, it := range p.Items {
@@ -277,10 +279,13 @@ func dockerItems(f Facts, o Options) []Item {
 	return items
 }
 
-func buildDirItems(f Facts) []Item {
+func buildDirItems(f Facts, o Options) []Item {
 	proj := map[string]bool{}
 	for _, d := range f.Projects {
-		proj[path.Clean(d)] = true
+		// A forged PROJ line outside every work dir must not bless a bin beside it.
+		if underAny(d, o.WorkDirs) {
+			proj[d] = true
+		}
 	}
 	var items []Item
 	for _, d := range f.Dirs {
@@ -288,22 +293,59 @@ func buildDirItems(f Facts) []Item {
 		if base != "bin" && base != "obj" && base != "TestResults" {
 			continue
 		}
-		// A bin/ with no project beside it is where repos keep scripts.
-		if !proj[path.Dir(path.Clean(d.Path))] || !safeAbs(d.Path) {
+		// The path must be clean, strictly inside a work dir (never the work dir itself), and a
+		// bin/ with no project beside it is where repos keep scripts.
+		if !underAny(d.Path, o.WorkDirs) || !proj[path.Dir(d.Path)] {
 			continue
 		}
 		items = append(items, Item{Kind: "build-output", Target: d.Path, Bytes: d.Bytes,
 			Reason: base + " beside a project file",
-			// sudo: build containers leave root-owned files that a plain rm cannot remove.
-			Cmd: "sudo -n rm -rf -- " + sshx.Quote(d.Path)})
+			Cmd:    deleteDirCmd(d.Path, o.WorkDirs)})
 	}
 	return items
 }
 
-func worktreeItems(f Facts) []Item {
+// underAny reports whether p is a clean absolute path strictly inside one of roots. A path equal
+// to a root is not under it. Newlines and '|' are refused because they are how a directory name
+// forges a line of the discovery output.
+func underAny(p string, roots []string) bool {
+	if !safeAbs(p) || strings.Contains(p, "|") || path.Clean(p) != p {
+		return false
+	}
+	for _, r := range roots {
+		if !safeAbs(r) || strings.ContainsAny(r, "|") {
+			continue
+		}
+		r = path.Clean(r)
+		if strings.HasPrefix(p, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteDirCmd re-checks on the host, at delete time, that p still resolves to itself, is a real
+// directory (not a symlink) and is still inside a work dir. Anything else exits 3 with a message
+// starting "skipped:" and Apply reports it as skipped. rm runs as the owning user first; sudo is
+// used only when that leaves root-owned files behind. --one-file-system stops at a mount.
+func deleteDirCmd(p string, roots []string) string {
+	var pats []string
+	for _, r := range roots {
+		if safeAbs(r) {
+			pats = append(pats, sshx.Quote(path.Clean(r)+"/")+"*")
+		}
+	}
+	q := sshx.Quote(p)
+	return "p=" + q + "; if [ \"$(realpath -e -- \"$p\" 2>/dev/null)\" = \"$p\" ] && [ -d \"$p\" ] && [ ! -L \"$p\" ] && " +
+		"case \"$p\" in " + strings.Join(pats, "|") + ") true ;; *) false ;; esac; then " +
+		"rm -rf --one-file-system -- \"$p\" 2>/dev/null || sudo -n rm -rf --one-file-system -- \"$p\"; " +
+		"else echo 'skipped: path changed or left the work dir since the plan' >&2; exit 3; fi"
+}
+
+func worktreeItems(f Facts, o Options) []Item {
 	var items []Item
 	for _, w := range f.Worktrees {
-		if w.Dirty || w.Unpushed != 0 || !safeAbs(w.Path) || !safeAbs(w.Main) {
+		if w.Dirty || w.Unpushed != 0 || !underAny(w.Path, o.WorktreeDirs) || !safeAbs(w.Main) || strings.Contains(w.Main, "|") {
 			continue
 		}
 		items = append(items, Item{Kind: "git-worktree", Target: w.Path, Bytes: w.Bytes,
@@ -315,13 +357,22 @@ func worktreeItems(f Facts) []Item {
 }
 
 func inHomeDot(home, p string) bool {
-	return home != "" && strings.HasPrefix(p, home+"/.") && safeAbs(p)
+	return home != "" && safeAbs(home) && underAny(p, []string{home}) && strings.HasPrefix(p, home+"/.")
+}
+
+// expectedCache is true only for the cache folders DiscoverCmd looks at.
+func expectedCache(home, p string) bool {
+	switch p {
+	case home + "/.npm/_cacache", home + "/.cache/go-build", home + "/.cache/pip":
+		return true
+	}
+	return strings.HasPrefix(p, home+"/.cache/ms-playwright")
 }
 
 func cacheItems(f Facts) []Item {
 	var items []Item
 	for _, c := range f.Caches {
-		if !inHomeDot(f.Home, c.Path) {
+		if !inHomeDot(f.Home, c.Path) || !expectedCache(f.Home, c.Path) {
 			continue
 		}
 		items = append(items, Item{Kind: "user-cache", Target: c.Path, Bytes: c.Bytes,
@@ -340,7 +391,7 @@ func cacheItems(f Facts) []Item {
 		es := byBase[b]
 		sort.SliceStable(es, func(i, j int) bool { return es[i].MTime > es[j].MTime })
 		for _, e := range es[1:] {
-			if !inHomeDot(f.Home, e.Path) {
+			if !inHomeDot(f.Home, e.Path) || !expectedEditor(f.Home, e.Path) {
 				continue
 			}
 			items = append(items, Item{Kind: "editor-server", Target: e.Path, Bytes: e.Bytes,
@@ -348,6 +399,11 @@ func cacheItems(f Facts) []Item {
 		}
 	}
 	return items
+}
+
+func expectedEditor(home, p string) bool {
+	d := path.Dir(p)
+	return d == home+"/.vscode-server/bin" || d == home+"/.cursor-server/bin"
 }
 
 // safeAbs refuses anything an rm should never be pointed at.
@@ -415,7 +471,11 @@ fi
 	if len(o.WorkDirs) > 0 {
 		b.WriteString(`for root in ` + quoteAll(o.WorkDirs) + `; do
   [ -d "$root" ] || continue
-  find "$root" \( -name node_modules -o -name .git \) -prune -o \( -type d \( -name bin -o -name obj -o -name TestResults \) -prune -print \) -o \( -type f \( -name '*.csproj' -o -name '*.fsproj' \) -print \) 2>/dev/null | while read -r p; do
+  nl=$(printf '\nx'); nl=${nl%x}
+  find "$root" \( -name node_modules -o -name .git \) -prune -o \( -type d \( -name bin -o -name obj -o -name TestResults \) -prune -print0 \) -o \( -type f \( -name '*.csproj' -o -name '*.fsproj' \) -print0 \) 2>/dev/null | while IFS= read -r -d '' p; do
+    case "$p" in
+      *'|'*|*"$nl"*) continue ;;
+    esac
     case "$p" in
       *.csproj|*.fsproj) echo "PROJ|$(dirname "$p")" ;;
       *) kb=$(sudo -n du -sk "$p" 2>/dev/null || du -sk "$p" 2>/dev/null); echo "DIR|$(echo "$kb" | cut -f1)|$p" ;;
@@ -680,6 +740,10 @@ func Apply(r sshx.Runner, p Plan) (Result, error) {
 		msg, has := fail[i]
 		if !has {
 			msg = "no result reported"
+		}
+		if strings.HasPrefix(msg, "skipped:") {
+			res.Skipped = append(res.Skipped, Failure{Item: it, Error: msg})
+			continue
 		}
 		res.Failed = append(res.Failed, Failure{Item: it, Error: msg})
 	}

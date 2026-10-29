@@ -103,6 +103,9 @@ func newVMPruneCmd() *cobra.Command {
 				for _, f := range res.Failed {
 					ui.Errorf("%s %s: %s", f.Item.Kind, f.Item.Target, f.Error)
 				}
+				for _, f := range res.Skipped {
+					ui.Detail("skipped", fmt.Sprintf("%s %s (%s)", f.Item.Kind, f.Item.Target, f.Error))
+				}
 			}
 			if len(res.Failed) > 0 {
 				return fmt.Errorf("%d item(s) did not delete: see the list above, fix them and run vm prune again", len(res.Failed))

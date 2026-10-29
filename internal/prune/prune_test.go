@@ -111,11 +111,69 @@ func TestBinWithoutProjectFileIsNeverPlanned(t *testing.T) {
 	}
 }
 
-func TestRootOwnedObjIsDeletedWithSudo(t *testing.T) {
+func TestDeleteCmdRechecksOnTheHost(t *testing.T) {
 	f := Facts{Projects: []string{"/home/u/work/api"}, Dirs: []Dir{{Path: "/home/u/work/api/obj"}}}
 	p := BuildPlan(f, opts())
-	if len(p.Items) != 1 || !strings.HasPrefix(p.Items[0].Cmd, "sudo -n rm -rf -- ") {
+	if len(p.Items) != 1 {
 		t.Fatalf("%+v", p.Items)
+	}
+	c := p.Items[0].Cmd
+	for _, want := range []string{
+		`realpath -e -- "$p"`, `= "$p"`, `[ -d "$p" ]`, `[ ! -L "$p" ]`,
+		`'/home/u/work/'*`, "--one-file-system", "sudo -n rm -rf --one-file-system",
+		"p='/home/u/work/api/obj'",
+	} {
+		if !strings.Contains(c, want) {
+			t.Fatalf("delete command lacks %q:\n%s", want, c)
+		}
+	}
+}
+
+func TestForgedPathsNeverReachThePlan(t *testing.T) {
+	forged := "/home/u/work/x\nDIR|1|/etc"
+	f := Facts{
+		Projects: []string{"/home/u/work/api", "/etc", "/home/u/work/../../etc"},
+		Dirs: []Dir{
+			{Path: "/etc/obj"}, {Path: "/etc"}, {Path: forged + "/obj"},
+			{Path: "/home/u/work/a|b/obj"}, {Path: "/home/u/work/api/../../../etc/obj"},
+			{Path: "/home/u/workother/api/obj"}, {Path: "/home/u/work/api/obj"},
+		},
+	}
+	p := BuildPlan(f, opts())
+	if len(p.Items) != 1 || p.Items[0].Target != "/home/u/work/api/obj" {
+		t.Fatalf("%+v", p.Items)
+	}
+}
+
+func TestWorkDirItselfIsNeverPlanned(t *testing.T) {
+	f := Facts{Projects: []string{"/home/u"}, Dirs: []Dir{{Path: "/home/u/work"}, {Path: "/home/u/work/bin"}}}
+	o := opts()
+	o.WorkDirs = []string{"/home/u/work/bin", "/home/u/work"}
+	p := BuildPlan(f, o)
+	if has(p, "build-output", "/home/u/work/bin") || has(p, "build-output", "/home/u/work") {
+		t.Fatalf("%+v", p.Items)
+	}
+}
+
+func TestDiscoverSkipsForgedNames(t *testing.T) {
+	c := DiscoverCmd(opts())
+	for _, want := range []string{"-print0", "read -r -d ''", `*'|'*|*"$nl"*`} {
+		if !strings.Contains(c, want) {
+			t.Fatalf("discovery lacks %q", want)
+		}
+	}
+}
+
+func TestApplyReportsSkipped(t *testing.T) {
+	r := &fakeRunner{out: func(cmd string) string {
+		if strings.Contains(cmd, "flock") {
+			return "FAIL|0|skipped: path changed or left the work dir since the plan\nDONE\n"
+		}
+		return "DF|100|50|50\n"
+	}}
+	res, err := Apply(r, Plan{Disk: Disk{}, Items: []Item{{Kind: "build-output", Target: "/home/u/work/a/obj", Cmd: "x"}}})
+	if err != nil || len(res.Skipped) != 1 || len(res.Failed) != 0 {
+		t.Fatalf("%+v %v", res, err)
 	}
 }
 
