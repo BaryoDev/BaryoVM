@@ -48,7 +48,7 @@ func (HTTPFetcher) Fetch(ctx context.Context, fr FetchRequest) (FetchResponse, e
 		DisableKeepAlives: true,
 		DialContext:       (&net.Dialer{Control: guardDial}).DialContext,
 		// A bare-IP URL sends no SNI (crypto/tls omits it for IP hosts).
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: fr.SkipVerify}, //nolint:gosec // see FetchRequest.SkipVerify
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: fr.SkipVerify}, // #nosec G402 -- opt-in per request, see FetchRequest.SkipVerify
 	}
 	defer tr.CloseIdleConnections()
 	c := &http.Client{

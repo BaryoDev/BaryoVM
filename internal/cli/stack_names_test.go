@@ -116,7 +116,7 @@ func TestReleaseRefusesAHandRunContainerNameBeforeBuildAndUp(t *testing.T) {
 	if rsync < 0 || config < 0 || names < 0 {
 		t.Fatalf("want the sync, the config read and the container list to run, got:\n%s", strings.Join(f.seen, "\n"))
 	}
-	if !(rsync < config && config < names) {
+	if rsync >= config || config >= names {
 		t.Errorf("the name check must come after the sync, got:\n%s", strings.Join(f.seen, "\n"))
 	}
 	for _, cmd := range f.seen {

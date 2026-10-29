@@ -225,7 +225,7 @@ func (m *Manifest) RsyncCmdKnownHosts(sub, user, host string, port int, key, kno
 	}
 	dst := fmt.Sprintf("%s@%s:%s/", user, host, m.RemoteRoot)
 	args = append(args, src, dst)
-	return exec.Command("rsync", args...)
+	return exec.Command("rsync", args...) // #nosec G204 -- fixed rsync binary, arguments built from the manifest
 }
 
 // BuildCmd is the remote `docker build` command for one image.

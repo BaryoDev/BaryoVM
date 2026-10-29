@@ -141,8 +141,8 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 	b.WriteString(cfg.bkVar())
 	b.WriteString("mkdir -p \"$BK\" && chmod 700 \"$BK\"\n")
 	b.WriteString("ts=$(date +%Y%m%d-%H%M%S)\n")
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec %s pg_dump -U %s -Fc %s > \"$BK/db-$ts.dump\"\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	if cfg.EnvFile != "" {
 		// The config file is the reason Sudo exists: it is the one holding the database password, so
 		// it is often root-owned and mode 600. Copy it the same way the rest of the stack is reached,
@@ -154,12 +154,12 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 			chown = " && " + sshx.Sudo(cfg.Sudo, `chown "$(id -u):$(id -g)" "$BK/env-$ts"`)
 		}
 		envPath := q(cfg.Dir + "/" + cfg.EnvFile)
-		b.WriteString(fmt.Sprintf("if [ -f %s ]; then %s %s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
-			envPath, cp, envPath, chown))
+		fmt.Fprintf(&b, "if [ -f %s ]; then %s %s \"$BK/env-$ts\"%s && chmod 600 \"$BK/env-$ts\"; fi\n",
+			envPath, cp, envPath, chown)
 	}
 	// Retention: keep the newest N of each kind.
-	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))
-	b.WriteString(fmt.Sprintf("ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1))
+	fmt.Fprintf(&b, "ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
+	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
 	b.WriteString("sz=$(du -h \"$BK/db-$ts.dump\" | cut -f1)\n")
 	b.WriteString(`echo "backup ok: db-$ts.dump ($sz) in $BK"` + "\n")
 	return c.Run(b.String())
@@ -236,12 +236,12 @@ func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
 	}
 	b.WriteString(`[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }` + "\n")
 	b.WriteString(`echo "restoring $f"` + "\n")
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
-	b.WriteString(fmt.Sprintf(cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
-		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName)))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
+		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	b.WriteString(`echo "restored from $f"` + "\n")
 	return c.Run(b.String())
 }

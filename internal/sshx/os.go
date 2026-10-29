@@ -121,7 +121,7 @@ func (o OS) Script(sh Shell, script string) string {
 	u := utf16.Encode([]rune(windowsPayload(script)))
 	b := make([]byte, 0, len(u)*2)
 	for _, c := range u {
-		b = append(b, byte(c), byte(c>>8))
+		b = append(b, byte(c), byte(c>>8)) // #nosec G115 -- UTF-16LE encoding takes the low and high byte on purpose
 	}
 	line := powerShell + " -EncodedCommand " + base64.StdEncoding.EncodeToString(b)
 	if sh.Resolved() == ShellPowerShell {

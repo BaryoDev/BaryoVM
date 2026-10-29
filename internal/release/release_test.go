@@ -14,7 +14,7 @@ import (
 func TestLoadDefaultsAndValidation(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "r.json")
-	os.WriteFile(p, []byte(`{"localRoot":"~/src","remoteRoot":"/srv/app","sync":["api"],
+	_ = os.WriteFile(p, []byte(`{"localRoot":"~/src","remoteRoot":"/srv/app","sync":["api"],
 		"builds":[{"image":"app:1","dockerfile":"Dockerfile","context":"api"}]}`), 0o600)
 
 	m, err := Load(p, false)
@@ -28,7 +28,7 @@ func TestLoadDefaultsAndValidation(t *testing.T) {
 
 	// Missing required fields must error.
 	bad := filepath.Join(dir, "bad.json")
-	os.WriteFile(bad, []byte(`{"sync":["api"]}`), 0o600)
+	_ = os.WriteFile(bad, []byte(`{"sync":["api"]}`), 0o600)
 	if _, err := Load(bad, false); err == nil {
 		t.Error("expected error for missing localRoot/remoteRoot")
 	}
@@ -226,7 +226,7 @@ func TestBuildCmdIsUntouchedWithoutSudo(t *testing.T) {
 func TestAStackRegisteredSudoReleasesAsRoot(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "r.json")
-	os.WriteFile(p, []byte(`{"localRoot":"/src","remoteRoot":"/opt/app","sync":["api"],
+	_ = os.WriteFile(p, []byte(`{"localRoot":"/src","remoteRoot":"/opt/app","sync":["api"],
 		"postDeploy":["restorecon -R /opt/app"]}`), 0o600)
 
 	m, err := Load(p, true)

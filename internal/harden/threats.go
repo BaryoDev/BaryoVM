@@ -171,9 +171,7 @@ func parseThreats(out string) Threats {
 		case "BANNEDTOTAL":
 			t.BannedTotal = atoi(p[1])
 		case "BANNEDNOW":
-			for _, ip := range strings.Fields(p[1]) {
-				t.BannedNow = append(t.BannedNow, ip)
-			}
+			t.BannedNow = append(t.BannedNow, strings.Fields(p[1])...)
 		case "USER":
 			if len(p) >= 3 {
 				t.TopUsernames = append(t.TopUsernames, Attempt{Name: p[1], Count: atoi(p[2]), Existing: len(p) >= 4 && p[3] == "existing"})

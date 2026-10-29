@@ -118,7 +118,7 @@ type Route struct {
 
 // Load reads a recipe from a path.
 func Load(path string) (*Recipe, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- recipe path is a CLI argument
 	if err != nil {
 		return nil, fmt.Errorf("read recipe %s: %w", path, err)
 	}

@@ -54,7 +54,7 @@ func EnsureCLI(name string) (string, error) {
 
 // run executes a local command, surfacing combined output on failure.
 func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- callers pass fixed command names
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %v: %w: %s", name, args, err, string(out))
@@ -93,11 +93,11 @@ func installDocker() error {
 			"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "120",
 			"https://get.docker.com").Output()
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("fetching the docker install script: %w", err)
 		}
 		if _, err := f.Write(out); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		// Checked, not deferred: a write that only fails at close leaves a truncated

@@ -91,7 +91,7 @@ type LocalRunner struct{}
 
 // Run shells out to docker on the local machine.
 func (LocalRunner) Run(ctx context.Context, argv []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is built by the scan package, always starting with docker
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, wrapExec(err)

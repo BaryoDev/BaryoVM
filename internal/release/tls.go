@@ -291,7 +291,7 @@ func (t *TLS) Vhost(remoteRoot string, f SSLFiles) string {
 	// caller impersonate another address or claim https. Upgrade is the one value that has to come
 	// from the client, since it is what asks for a websocket.
 	b.WriteString("    location / {\n")
-	b.WriteString(fmt.Sprintf("        proxy_pass http://127.0.0.1:%d;\n", t.Proxy.Port))
+	fmt.Fprintf(&b, "        proxy_pass http://127.0.0.1:%d;\n", t.Proxy.Port)
 	b.WriteString("        proxy_http_version 1.1;\n")
 	b.WriteString("        proxy_set_header Host $host;\n")
 	b.WriteString("        proxy_set_header X-Forwarded-For $remote_addr;\n")
@@ -538,7 +538,7 @@ func (m *Manifest) TLSDryRun(o TLSOptions) string {
 	b.WriteString("# full vhost, " + p.VhostPath + "\n" + p.Vhost + "\n")
 	b.WriteString("# commands\n")
 	for i, c := range p.Commands {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, c))
+		fmt.Fprintf(&b, "%d. %s\n", i+1, c)
 	}
 	return b.String()
 }

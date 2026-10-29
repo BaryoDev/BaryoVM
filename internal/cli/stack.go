@@ -209,7 +209,7 @@ var knownHostsFileFor = func(vm *fleet.VM) (string, func(), error) {
 		if err != nil {
 			return "", func() {}, err
 		}
-		c.Close()
+		_ = c.Close()
 		if keys, err = store.KnownHostsFor(addr); err != nil {
 			return "", func() {}, err
 		}
@@ -221,9 +221,9 @@ var knownHostsFileFor = func(vm *fleet.VM) (string, func(), error) {
 	if err != nil {
 		return "", func() {}, err
 	}
-	cleanup := func() { os.Remove(f.Name()) }
+	cleanup := func() { _ = os.Remove(f.Name()) }
 	if _, err := f.WriteString(keys); err != nil {
-		f.Close()
+		_ = f.Close()
 		cleanup()
 		return "", func() {}, err
 	}

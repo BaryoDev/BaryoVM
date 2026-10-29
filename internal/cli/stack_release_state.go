@@ -24,7 +24,7 @@ var gitHead = func(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output() // #nosec G204 -- fixed git binary, dir is the stack's local root
 	if err != nil {
 		return ""
 	}

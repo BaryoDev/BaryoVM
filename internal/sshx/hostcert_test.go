@@ -65,7 +65,7 @@ func serveSSH(t *testing.T, hostKeys ...ssh.Signer) (string, int) {
 				}
 				go ssh.DiscardRequests(reqs)
 				for ch := range chans {
-					ch.Reject(ssh.Prohibited, "")
+					_ = ch.Reject(ssh.Prohibited, "")
 				}
 			}()
 		}

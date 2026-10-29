@@ -27,7 +27,7 @@ type failingRunner struct {
 func (r failingRunner) Run(cmd string) (string, error) {
 	for match, msg := range r.fail {
 		if strings.Contains(cmd, match) {
-			r.fakeRunner.seen = append(r.fakeRunner.seen, cmd)
+			r.seen = append(r.seen, cmd)
 			return "", errors.New(msg)
 		}
 	}

@@ -26,7 +26,7 @@ package hostkeys
 
 import (
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- OpenSSH hashed known_hosts entries are HMAC-SHA1, the format requires it
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -259,7 +259,7 @@ func algorithmsIn(path, hostname string) []string {
 	if path == "" {
 		return nil
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- known_hosts path chosen by the user or the store
 	if err != nil {
 		return nil
 	}
@@ -366,7 +366,7 @@ func isChanged(err error) bool {
 
 // storedFingerprint reads back the fingerprint recorded for a host, for the error message.
 func (s *Store) storedFingerprint(path, hostname string) (string, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- known_hosts path chosen by the user or the store
 	if err != nil {
 		return "", err
 	}
@@ -450,7 +450,7 @@ func (s *Store) Forget(hostname string) (int, error) {
 	if out != "" && !strings.HasSuffix(out, "\n") {
 		out += "\n"
 	}
-	if err := os.WriteFile(s.path, []byte(out), 0o600); err != nil {
+	if err := os.WriteFile(s.path, []byte(out), 0o600); err != nil { // #nosec G703 -- s.path is the store file, not request input
 		return 0, fmt.Errorf("write %s: %w", s.path, err)
 	}
 	return dropped, nil
@@ -468,7 +468,7 @@ func (s *Store) KnownHostsFor(hostport string) (string, error) {
 		if path == "" {
 			continue
 		}
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(path) // #nosec G304 -- known_hosts path chosen by the user or the store
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue

@@ -180,7 +180,7 @@ func buildQuery(id uint16, name string, qtype uint16) ([]byte, error) {
 		if l == "" || len(l) > 63 {
 			return nil, fmt.Errorf("bad DNS name %q", name)
 		}
-		msg = append(msg, byte(len(l)))
+		msg = append(msg, byte(len(l))) // #nosec G115 -- label length is checked to be at most 63 above
 		msg = append(msg, l...)
 	}
 	msg = append(msg, 0)
@@ -311,7 +311,7 @@ func queryCAATCP(ctx context.Context, server string, id uint16, q []byte) ([]CAA
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
-	framed := binary.BigEndian.AppendUint16(nil, uint16(len(q)))
+	framed := binary.BigEndian.AppendUint16(nil, uint16(len(q))) // #nosec G115 -- q is a query this package built, far below 64 KiB
 	if _, err := conn.Write(append(framed, q...)); err != nil {
 		return nil, ctxOr(ctx, err)
 	}
