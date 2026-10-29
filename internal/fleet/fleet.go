@@ -94,6 +94,10 @@ type Stack struct {
 	// without one releases exactly as before.
 	RecipeFile string `json:"recipeFile,omitempty"`
 
+	// Source is the Git remote the stack's code comes from. `repo move` reads it as the old remote
+	// and writes the new one; nothing else sets it.
+	Source string `json:"source,omitempty"`
+
 	// Sudo runs this stack's docker and file operations through sudo. Needed when the project's
 	// .env is root-owned, which is the right posture for a file holding a database password.
 	// Without it every command fails with "permission denied" for the SSH user.

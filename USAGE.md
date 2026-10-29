@@ -1427,6 +1427,28 @@ returns an empty list, the command stops before creating anything, and it never
 falls back to an empty or open list. The dry run prints how many ranges each
 port gets. The same flags work on `up`.
 
+## Moving a repository to another Git host
+
+```sh
+baryovm repo move app --to https://dev.azure.com/acme/proj/_git/app            # plan only
+baryovm repo move app --to https://dev.azure.com/acme/proj/_git/app --yes      # do it
+```
+
+`repo move <stack> --to <url>` moves the stack's source repository and repoints what pulls from it. Without `--yes`, or with `--dry-run`, it prints the plan and makes no call. `-o json` gives the same plan as data.
+
+The source is `--from`, then the stack's recorded source, then the `origin` of the local clone (`--local`, default `.`). In order, with `--yes`:
+
+1. Read the refs on both sides. A destination that already holds different commits is refused; nothing is ever force-pushed or deleted there. A missing destination is created only with `--create` (GitHub through `gh`, Azure Repos through `az`); on any other host create it by hand first.
+2. Export issues and pull requests, with their comments, from GitHub to `issues.json` and `pulls.json` in `--export-dir` (default `./<stack>-repo-export`). A rate-limit reply fails the export and nothing moves.
+3. Push every branch and tag to the new remote, then list the refs on both sides again. If any ref is missing or differs, the move stops with the old remote untouched.
+4. Find checkouts of the repository on the registered VMs (`--vm` names one, repeatable; VMs behind a forced command are skipped unless named) and set their `origin` to the new URL. A checkout with local changes is skipped and reported. With `--read-cred <ref>` the token is read from a secretref reference and sent to the VM on stdin to `git credential approve`, stored in a `0600` file inside that checkout's `.git`. A token is never in argv, errors or the activity log. URLs that carry a user, password or token are refused.
+5. List crontab lines, `/etc/cron.d` entries and systemd units on the VMs that mention those checkouts. They are listed, not edited.
+6. Repoint the local clone: the old remote is kept as `old-origin` and `origin` points to the new URL. A later failure restores the earlier repoints.
+
+The old repository is never deleted or archived. After the checks pass the command prints the `gh repo archive` and `gh repo delete` lines for you to run yourself. A rerun after a finished move changes nothing.
+
+Not covered: importing issues into Azure Boards, and rewriting CI workflow files.
+
 ## Guarding commits, pushes and PR text
 
 `baryovm git` and `baryovm gh` run the real tool after checking for keys. Agents
