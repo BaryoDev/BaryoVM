@@ -26,6 +26,7 @@ baryovm stack [flags]
 * [baryovm stack backup](baryovm_stack_backup.md)	 - Back up the stack's database + config (pg_dump + .env)
 * [baryovm stack backups](baryovm_stack_backups.md)	 - List the stack's database backups
 * [baryovm stack deploy](baryovm_stack_deploy.md)	 - compose up -d the stack (optionally pull + recreate)
+* [baryovm stack env](baryovm_stack_env.md)	 - Set, list and unset keys in a stack's .env without ssh
 * [baryovm stack list](baryovm_stack_list.md)	 - List registered stacks
 * [baryovm stack logs](baryovm_stack_logs.md)	 - Show recent logs for the stack
 * [baryovm stack ps](baryovm_stack_ps.md)	 - Show the stack's containers
