@@ -17,7 +17,7 @@ import (
 
 func newVMHardenCmd() *cobra.Command {
 	var dryRun bool
-	var ignore []string
+	var ignore, sshFrom []string
 	cmd := &cobra.Command{
 		Use:   "harden <name>",
 		Short: "Apply the SSH hardening policy to a VM",
@@ -25,9 +25,16 @@ func newVMHardenCmd() *cobra.Command {
 			"where the daemon supports them, fail2ban with escalating bans, and the small\n" +
 			"surface reductions that cost nothing.\n\n" +
 			"It never changes the SSH port, never disables public key authentication and\n" +
-			"never touches authorized_keys, so it cannot lock you out. The sshd config is\n" +
-			"validated before anything is reloaded, and reloaded rather than restarted, so\n" +
-			"an open session survives a mistake.",
+			"never removes an authorized_keys entry, so it cannot lock you out. The sshd\n" +
+			"config is validated before anything is reloaded, and reloaded rather than\n" +
+			"restarted, so an open session survives a mistake.\n\n" +
+			"It fixes ~/.ssh permissions, moves authorized_keys.* backups aside, puts the\n" +
+			"post-quantum key exchange first where OpenSSH has one, and sets nginx\n" +
+			"server_tokens off. It only reports stale keys, pending updates, unattended\n" +
+			"upgrades, a missing default_server on 443, a kernel waiting for a reboot and\n" +
+			"port 22 open to everyone. Those are decisions, so they are marked as reports\n" +
+			"and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses\n" +
+			"a list that excludes the address you are connecting from.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, c, err := dialVM(args[0], "vm harden")
@@ -36,7 +43,7 @@ func newVMHardenCmd() *cobra.Command {
 			}
 			defer c.Close()
 
-			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore})
+			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom})
 			if err != nil {
 				return err
 			}
@@ -54,9 +61,14 @@ func newVMHardenCmd() *cobra.Command {
 				ui.Warnf("this sshd has no PerSourcePenalties (needs OpenSSH 9.8+); fail2ban is doing all the work")
 			}
 			for _, ch := range rep.Changes {
+				if ch.Action == harden.StateReport {
+					ui.Warnf("%s: %s", ch.Item, ch.Detail)
+					continue
+				}
 				ui.Detail(ch.Item, fmt.Sprintf("%s: %s", ch.Action, ch.Detail))
 			}
 			ui.Detail("fail2ban", rep.Fail2ban)
+			ui.Detail("summary", hardenSummary(rep, dryRun))
 			if dryRun {
 				ui.Warnf("dry run: nothing was changed")
 			} else {
@@ -67,7 +79,23 @@ func newVMHardenCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would change and write nothing")
 	cmd.Flags().StringSliceVar(&ignore, "ignore", nil, "extra CIDRs fail2ban must never ban (loopback is always exempt)")
+	cmd.Flags().StringSliceVar(&sshFrom, "ssh-from", nil, "limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)")
 	return cmd
+}
+
+// hardenSummary says in one line how many findings were changed and how many were
+// only reported, so a run with open findings does not read as clean.
+func hardenSummary(rep harden.Report, dryRun bool) string {
+	changed := 0
+	for _, ch := range rep.Changes {
+		if ch.Action == "applied" || ch.Action == "would-apply" {
+			changed++
+		}
+	}
+	if dryRun {
+		return fmt.Sprintf("%d would change, %d would only be reported", changed, rep.Reported)
+	}
+	return fmt.Sprintf("%d changed, %d reported for you to decide", changed, rep.Reported)
 }
 
 func newVMThreatsCmd() *cobra.Command {

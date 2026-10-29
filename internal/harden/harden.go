@@ -7,7 +7,7 @@
 //
 // The policy is deliberately narrow. It only touches things that cannot lock the
 // owner out: it never changes the port, never disables public key authentication,
-// and never edits authorized_keys. Every run validates the sshd configuration
+// and never edits authorized_keys (stale keys are reported, not removed). Every run validates the sshd configuration
 // before reloading, and reloads rather than restarts, so established sessions
 // survive even if something is wrong.
 package harden
@@ -20,10 +20,11 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
 
-// Change is one thing the policy did, or would do under DryRun.
+// Change is one thing the policy did, or would do under DryRun. Action report
+// means it only looked: the finding is for a person to decide.
 type Change struct {
 	Item   string `json:"item"`
-	Action string `json:"action"` // applied, already-correct, skipped, would-apply
+	Action string `json:"action"` // applied, already-correct, skipped, would-apply, report
 	Detail string `json:"detail"`
 }
 
@@ -35,6 +36,8 @@ type Report struct {
 	Fail2ban      string   `json:"fail2ban"`
 	DryRun        bool     `json:"dryRun"`
 	Changes       []Change `json:"changes"`
+	// Reported counts findings left for a person: neither changed nor clean.
+	Reported int `json:"reported"`
 }
 
 // Options controls Apply.
@@ -43,6 +46,9 @@ type Options struct {
 	DryRun bool
 	// IgnoreCIDRs are never banned. Loopback is always included.
 	IgnoreCIDRs []string
+	// SSHFrom limits port 22 to these source CIDRs in firewalld or ufw. Empty
+	// leaves the firewall alone and only reports when 22 is open to everyone.
+	SSHFrom []string
 }
 
 const sshdDropIn = "/etc/ssh/sshd_config.d/10-baryovm-hardening.conf"
@@ -67,7 +73,7 @@ if ! sudo -n true 2>/dev/null; then
   echo "ERROR|non-interactive sudo is required on this host, and is not available for this user"
   exit 1
 fi
-
+` + sshFromGuard(o) + `
 # --- facts the policy branches on -------------------------------------------------
 if [ -f /etc/os-release ]; then . /etc/os-release; OSID="${ID:-unknown}"; else OSID=unknown; fi
 echo "FACT|os|$OSID"
@@ -92,6 +98,7 @@ echo "FACT|penalties|$PENALTIES"
 # itself connects as. The session in flight survives a reload, so the damage only shows
 # up the next time somebody needs in, which is the worst time to find it. For a root
 # connection the policy still hardens, to key-only, rather than to nothing.
+` + kexPrep + `
 WHOAMI=$(id -un)
 if [ "$WHOAMI" = "root" ]; then ROOTLOGIN="prohibit-password"; else ROOTLOGIN="no"; fi
 
@@ -105,6 +112,7 @@ NEW=$(mktemp)
   echo "PermitRootLogin $ROOTLOGIN"
   echo "PasswordAuthentication no"
   echo "PubkeyAuthentication yes"
+  if [ -n "$KEXLINE" ]; then echo "KexAlgorithms $KEXLINE"; fi
   if [ "$PENALTIES" = "1" ]; then
     echo "PerSourcePenaltyExemptList 127.0.0.1,::1"
     echo "PerSourcePenalties crash:180 authfail:40 noauth:20 grace-exceeded:60 refuseconnection:60 max:3600 min:60"
@@ -114,9 +122,11 @@ NEW=$(mktemp)
 # sudo test, not [ -f ]: /etc/ssh/sshd_config.d is mode 700 on RHEL-family images, so
 # an unprivileged existence check answers "no" for a file that is plainly there, the
 # comparison below never runs, and every run reports itself as having changed something.
+SSHD_STATE=same
 if sudo test -f "$DROPIN" && sudo cmp -s "$NEW" "$DROPIN"; then
   say sshd already-correct "$DROPIN matches policy"
 elif [ "$DRY" = "1" ]; then
+  SSHD_STATE=would-write
   say sshd would-apply "$DROPIN would be written"
 else
   # grep -q on the main file: if Include is missing the drop-in would be inert, and a
@@ -133,6 +143,7 @@ else
   sudo install -m 600 -o root -g root "$NEW" "$DROPIN"
   if sudo sshd -t 2>/dev/null; then
     sudo systemctl reload sshd 2>/dev/null || sudo systemctl reload ssh
+    SSHD_STATE=written
     say sshd applied "wrote $DROPIN and reloaded"
     [ -n "$PREV" ] && rm -f "$PREV"
   else
@@ -148,7 +159,7 @@ else
   fi
 fi
 rm -f "$NEW"
-
+` + kexReport + `
 # --- 2. fail2ban ------------------------------------------------------------------
 if command -v fail2ban-client >/dev/null 2>&1; then
   F2B_PRESENT=1
@@ -240,7 +251,7 @@ if command -v fail2ban-client >/dev/null 2>&1; then
   fi
   rm -f "$JAIL"
 fi
-
+` + sshFilesAudit + firewallSection(o) + systemAudit + nginxAudit + `
 if systemctl is-active --quiet fail2ban 2>/dev/null; then echo "FACT|fail2ban|active"; else echo "FACT|fail2ban|inactive"; fi
 `
 }
@@ -248,6 +259,11 @@ if systemctl is-active --quiet fail2ban 2>/dev/null; then echo "FACT|fail2ban|ac
 // Apply runs the policy. It is safe to run repeatedly: every step reports
 // already-correct when the machine is already in the desired state.
 func Apply(c *sshx.Client, o Options) (Report, error) {
+	ssh, err := NormalizeCIDRs(o.SSHFrom)
+	if err != nil {
+		return Report{}, err
+	}
+	o.SSHFrom = ssh
 	out, err := c.Run(script(o))
 	r := parseApply(out)
 	r.DryRun = o.DryRun
@@ -280,6 +296,9 @@ func parseApply(out string) Report {
 			}
 		case len(parts) >= 4 && parts[0] == "CHANGE":
 			r.Changes = append(r.Changes, Change{Item: parts[1], Action: parts[2], Detail: strings.Join(parts[3:], "|")})
+			if parts[2] == StateReport {
+				r.Reported++
+			}
 		}
 	}
 	return r
