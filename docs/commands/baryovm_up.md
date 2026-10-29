@@ -5,7 +5,8 @@ Provision (if new) → install Docker → deploy, in one command
 ### Synopsis
 
 If <name> is already registered, up just installs Docker and deploys.
-If it is new, pass --provider/--key to provision it first.
+If it is new, pass --provider/--key to provision it first. Provisioning bills, so
+without --yes it prints the plan and creates nothing.
 
 ```
 baryovm up <name> [flags]
@@ -22,9 +23,10 @@ baryovm up <name> [flags]
 
 ```
       --container string      container name (required)
-      --dry-run               print the plan without creating anything
+      --dry-run               print the plan without creating anything (this is already the default without --yes)
   -e, --env stringArray       environment KEY=value (repeatable)
   -h, --help                  help for up
+      --host strings          hostname that will be served from this VM, checked against --http-from/--https-from before creating (repeatable)
       --http-from strings     limit port 80 to these CIDRs or the cloudflare preset (default: open)
       --https-from strings    limit port 443 to these CIDRs or the cloudflare preset (default: open)
       --image string          container image (required)
@@ -35,6 +37,7 @@ baryovm up <name> [flags]
       --region string         cloud region (default: from ~/.aws)
       --size string           instance size / bundle (default: provider's smallest)
       --ssh-from strings      limit port 22 to these CIDRs (default: open to 0.0.0.0/0)
+      --yes                   really create the VM (billable); without it the plan is printed and nothing is created
 ```
 
 ### Options inherited from parent commands
