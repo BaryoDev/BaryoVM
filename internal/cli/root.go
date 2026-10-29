@@ -8,6 +8,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -46,7 +47,39 @@ func newRoot() *cobra.Command {
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
 		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newScanCmd())
+	rejectUnknownSubcommands(root)
 	return root
+}
+
+// rejectUnknownSubcommands makes every group (a command with subcommands and nothing to run itself)
+// fail on a word it does not know. Cobra only does that for the root; below it, a group with no
+// RunE treats the typo as an argument, prints help and exits 0, so a script running `vm health`
+// reads success. A group given no argument still prints its help.
+func rejectUnknownSubcommands(cmd *cobra.Command) {
+	for _, sub := range cmd.Commands() {
+		rejectUnknownSubcommands(sub)
+	}
+	if cmd.HasParent() && cmd.HasSubCommands() && !cmd.Runnable() {
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("unknown command %q for %q", args[0], c.CommandPath())
+			}
+			return nil
+		}
+		cmd.RunE = func(c *cobra.Command, args []string) error { return c.Help() }
+	}
+}
+
+// reportError prints a failed run in the format asked for and returns the exit code. The output
+// format is set here as well as in PersistentPreRun, because cobra rejects bad arguments before
+// that hook runs and the error would otherwise come out as text under -o json.
+func reportError(err error) int {
+	code, silent := exitCodeOf(err)
+	if !silent {
+		ui.SetJSON(outputFormat == "json")
+		ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
+	}
+	return code
 }
 
 // Execute runs the root command.
@@ -71,10 +104,6 @@ func Execute() {
 	}()
 
 	if err := runRoot(newRoot()); err != nil {
-		code, silent := exitCodeOf(err)
-		if !silent {
-			ui.Emit(ui.Result{OK: false, Action: "baryovm", Error: err.Error()})
-		}
-		os.Exit(code)
+		os.Exit(reportError(err))
 	}
 }

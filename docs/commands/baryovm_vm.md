@@ -2,6 +2,10 @@
 
 Manage the VMs in your fleet
 
+```
+baryovm vm [flags]
+```
+
 ### Options
 
 ```

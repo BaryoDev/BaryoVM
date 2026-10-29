@@ -2,6 +2,10 @@
 
 Manage docker compose stacks on your VMs
 
+```
+baryovm stack [flags]
+```
+
 ### Options
 
 ```
