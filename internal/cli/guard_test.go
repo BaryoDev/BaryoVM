@@ -42,10 +42,16 @@ func (f *fakeGuardRunner) Git(globals []string, args ...string) (string, error) 
 			return "", e
 		}
 	}
-	for k, v := range f.answers {
-		if strings.HasPrefix(key, k) {
-			return v, nil
+	// The longest matching prefix wins, so a test can answer "get-url --push --all" differently
+	// from a plain "get-url --push".
+	best, found := "", false
+	for k := range f.answers {
+		if strings.HasPrefix(key, k) && (!found || len(k) > len(best)) {
+			best, found = k, true
 		}
+	}
+	if found {
+		return f.answers[best], nil
 	}
 	return "", nil
 }
@@ -285,8 +291,119 @@ func TestGitCommitMessageFileIsScanned(t *testing.T) {
 		}
 	}
 	ran := withGuardSeams(t, &fakeGuardRunner{}, 0)
-	if err := runGroup(t, "git", "commit", "-F", "-"); err == nil || len(*ran) != 0 {
-		t.Fatalf("-F - was not refused: err=%v ran=%v", err, *ran)
+	err := runGroup(t, "git", "commit", "-F", "-")
+	if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "stdin") {
+		t.Fatalf("-F - was not refused for stdin: err=%v ran=%v", err, *ran)
+	}
+}
+
+func TestGitCommitAbbreviatedLongOptionsAreResolved(t *testing.T) {
+	files := map[string]string{"m.txt": "subject\n" + cliFakeKey + "\n"}
+	for _, args := range [][]string{
+		{"git", "commit", "--fi", "m.txt"},
+		{"git", "commit", "--fil=m.txt"},
+		{"git", "commit", "--mess", cliFakeKey},
+		{"git", "commit", "--messa=" + cliFakeKey},
+		{"git", "commit", "--tem", "m.txt"},
+		{"git", "commit", "--trail", "Co: " + cliFakeKey},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+}
+
+func TestGitCommitRelativeFileIsRefusedWhenGitIsRedirected(t *testing.T) {
+	files := map[string]string{"m.txt": "clean\n"}
+	for _, args := range [][]string{
+		{"git", "--work-tree=/x", "commit", "-F", "m.txt"},
+		{"git", "--git-dir", "/x/.git", "commit", "-F", "m.txt"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		err := runGroup(t, args...)
+		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute") {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+	t.Setenv("GIT_DIR", "/x/.git")
+	ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+	if err := runGroup(t, "git", "commit", "-F", "m.txt"); err == nil || len(*ran) != 0 {
+		t.Fatalf("GIT_DIR: err=%v ran=%v", err, *ran)
+	}
+	// An absolute path is read as given.
+	ran = withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/abs/m.txt": "clean\n"}}, 0)
+	if err := runGroup(t, "git", "commit", "-F", "/abs/m.txt"); err != nil || len(*ran) != 1 {
+		t.Fatalf("absolute: err=%v ran=%v", err, *ran)
+	}
+}
+
+func TestGitPushShortClusterDoesNotHideAScan(t *testing.T) {
+	for _, args := range [][]string{
+		{"git", "push", "-qod", "origin", "main"},
+		{"git", "push", "-o", "d", "origin", "main"},
+		{"git", "push", "-od", "origin", "main"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{answers: map[string]string{
+			"remote get-url": "https://github.com/o/r\n", "log -p": plantedCLIDiff(),
+		}}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+	// Real deletes still pass, including an abbreviated long option.
+	for _, args := range [][]string{
+		{"git", "push", "-fd", "origin", "feat"},
+		{"git", "push", "--del", "origin", "feat"},
+	} {
+		ran := withGuardSeams(t, &fakeGuardRunner{answers: map[string]string{
+			"remote get-url": "https://github.com/o/r\n", "log -p": plantedCLIDiff(),
+		}}, 0)
+		if err := runGroup(t, args...); err != nil || len(*ran) != 1 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+}
+
+func TestGhGroupedShortFlagsAreWalked(t *testing.T) {
+	refused := [][]string{
+		{"gh", "pr", "create", "-wb", cliFakeKey},
+		{"gh", "pr", "create", "-dbtext" + cliFakeKey},
+		{"gh", "pr", "create", "-wF", "f"},
+		{"gh", "pr", "-wR", "o/r", "create", "-b", cliFakeKey},
+		{"gh", "pr", "review", "1", "-ab", cliFakeKey},
+		{"gh", "release", "create", "v1", "-pn", cliFakeKey},
+		{"gh", "release", "create", "v1", "-dpt", cliFakeKey},
+	}
+	for _, args := range refused {
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"f": cliFakeKey}}, 0)
+		err := runGroup(t, args...)
+		if code, _ := exitCodeOf(err); err == nil || code != 1 || len(*ran) != 0 {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
+	// A group with a letter we do not know is refused, not skipped.
+	ran := withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runGroup(t, "gh", "pr", "create", "-zb", cliFakeKey); err == nil || len(*ran) != 0 {
+		t.Fatalf("unknown letter: err=%v ran=%v", err, *ran)
+	}
+	// The same letter differs by command: -p is a bool on release create but takes a value on
+	// pr create, so "-pn" there makes n the project title and the key is not text.
+	ran = withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runGroup(t, "gh", "pr", "create", "-pn", cliFakeKey); err != nil || len(*ran) != 1 {
+		t.Fatalf("pr create -p takes a value: err=%v ran=%v", err, *ran)
+	}
+	// A letter that the subcommand does not list, in a cluster, is refused.
+	ran = withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runGroup(t, "gh", "release", "create", "v1", "-wb", cliFakeKey); err == nil || len(*ran) != 0 {
+		t.Fatalf("w is not a release create flag: err=%v ran=%v", err, *ran)
+	}
+	// A clean group passes.
+	ran = withGuardSeams(t, &fakeGuardRunner{}, 0)
+	if err := runGroup(t, "gh", "pr", "create", "-wb", "fine"); err != nil || len(*ran) != 1 {
+		t.Fatalf("clean group: err=%v ran=%v", err, *ran)
 	}
 }
 
@@ -303,7 +420,11 @@ func TestGuardCheckCommitMsg(t *testing.T) {
 
 func TestGitPushChecksEveryPushURL(t *testing.T) {
 	t.Setenv("BARYOVM_ALLOWED_HOSTS", "github.com")
-	r := &fakeGuardRunner{answers: map[string]string{"remote get-url": "https://github.com/o/r\nhttps://evil.example/o/r\n"}}
+	// Without --all git prints only the first push URL, as the fake does for the plain form.
+	r := &fakeGuardRunner{answers: map[string]string{
+		"remote get-url --push":       "https://github.com/o/r\n",
+		"remote get-url --push --all": "https://github.com/o/r\nhttps://evil.example/o/r\n",
+	}}
 	ran := withGuardSeams(t, r, 0)
 	if err := runGroup(t, "git", "push", "origin", "main"); err == nil || len(*ran) != 0 {
 		t.Fatalf("second push url outside the policy: err=%v ran=%v", err, *ran)
@@ -401,9 +522,10 @@ func TestInstallHooks(t *testing.T) {
 	if err := runGroup(t, "guard", "install-hooks"); err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range guard.HookNames {
+	// The set is spelled out here so dropping a hook from HookNames fails this test.
+	for _, n := range []string{"pre-commit", "commit-msg", "pre-push"} {
 		b, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", n))
-		if err != nil || !guard.IsOurHook(string(b)) {
+		if err != nil || !guard.IsOurHook(string(b)) || !strings.Contains(string(b), "guard check "+n) {
 			t.Fatalf("%s: %v %q", n, err, b)
 		}
 		if fi, _ := os.Stat(filepath.Join(dir, ".git", "hooks", n)); fi.Mode()&0o100 == 0 {

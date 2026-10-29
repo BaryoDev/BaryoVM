@@ -6,6 +6,7 @@ package guard
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -72,9 +73,38 @@ func CheckGit(r Runner, args []string, pol Policy) Verdict {
 }
 
 var (
-	commitValueLong  = map[string]bool{"--message": true, "--file": true, "--reuse-message": true, "--reedit-message": true, "--author": true, "--date": true, "--template": true, "--cleanup": true, "--fixup": true, "--squash": true, "--trailer": true}
+	commitValueLong = map[string]bool{"--message": true, "--file": true, "--reuse-message": true, "--reedit-message": true, "--author": true, "--date": true, "--template": true, "--cleanup": true, "--fixup": true, "--squash": true, "--trailer": true, "--pathspec-from-file": true}
+	// commitLongs is every long option of git commit, for resolving abbreviations.
+	commitLongs = []string{"--all", "--interactive", "--patch", "--only", "--include", "--no-verify", "--message", "--file", "--author", "--date",
+		"--template", "--signoff", "--no-signoff", "--verbose", "--quiet", "--edit", "--no-edit", "--amend", "--reset-author", "--allow-empty",
+		"--allow-empty-message", "--cleanup", "--status", "--no-status", "--gpg-sign", "--no-gpg-sign", "--reuse-message", "--reedit-message",
+		"--fixup", "--squash", "--trailer", "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--untracked-files",
+		"--pathspec-from-file", "--pathspec-file-nul", "--no-post-rewrite", "--verify", "--no-verify", "--help"}
 	commitValueShort = "mFCct"
 )
+
+// resolveLong expands an abbreviated long option to the one option of known it is a prefix of, the
+// way git's option parser does. An exact name wins. A name that matches none is returned unchanged
+// (it cannot be an abbreviation of an option we read). A name that matches several is reported as
+// ambiguous: git rejects it, and the caller refuses rather than guess.
+func resolveLong(name string, known []string) (resolved string, ambiguous bool) {
+	var hit string
+	for _, k := range known {
+		if k == name {
+			return name, false
+		}
+		if strings.HasPrefix(k, name) && k != hit {
+			if hit != "" {
+				return name, true
+			}
+			hit = k
+		}
+	}
+	if hit != "" {
+		return hit, false
+	}
+	return name, false
+}
 
 // --text and --no-textconv stop .gitattributes (binary, a textconv filter) from replacing a file's
 // content with "Binary files differ" or a converted form, which would hide a key from the scan.
@@ -105,18 +135,24 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 		case a == "--":
 			paths = append(paths, rest[i+1:]...)
 			i = len(rest)
-		case a == "--all":
-			all = true
 		case strings.HasPrefix(a, "--"):
 			name, val, hasVal := strings.Cut(a, "=")
+			// git accepts any unambiguous prefix (--fi, --mess), so resolve it first.
+			name, amb := resolveLong(name, commitLongs)
+			if amb {
+				return refuse(action, fmt.Sprintf("%s refused: the option %s is ambiguous. Spell the option out in full", action, a), nil)
+			}
+			if name == "--all" {
+				all = true
+			}
 			if !hasVal && commitValueLong[name] && i+1 < len(rest) {
 				i++
 				val = rest[i]
 			}
-			if name == "--message" {
+			switch name {
+			case "--message", "--trailer":
 				msgs = append(msgs, val)
-			}
-			if name == "--file" {
+			case "--file", "--template":
 				msgFiles = append(msgFiles, val)
 			}
 		case strings.HasPrefix(a, "-") && len(a) > 1:
@@ -134,7 +170,7 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 					if c == 'm' {
 						msgs = append(msgs, val)
 					}
-					if c == 'F' {
+					if c == 'F' || c == 't' {
 						msgFiles = append(msgFiles, val)
 					}
 					break
@@ -171,7 +207,11 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 		if mf == "-" {
 			return refuse(action, action+" refused: -F - reads the message from stdin, which cannot be checked. Write it to a file and pass that file", nil)
 		}
-		b, err := r.ReadFile(commitFilePath(globals, mf))
+		path, perr := commitFilePath(globals, mf)
+		if perr != nil {
+			return refuse(action, fmt.Sprintf("%s refused: %v", action, perr), nil)
+		}
+		b, err := r.ReadFile(path)
 		if err != nil {
 			return refuse(action, fmt.Sprintf("%s refused: cannot read the message file %s (%v). Check the path", action, mf, err), nil)
 		}
@@ -185,9 +225,20 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 
 // commitFilePath resolves a relative -F path against the -C directories git changes into before
 // it reads the file.
-func commitFilePath(globals []string, p string) string {
+func commitFilePath(globals []string, p string) (string, error) {
 	if filepath.IsAbs(p) {
-		return p
+		return p, nil
+	}
+	// With --git-dir, --work-tree, GIT_DIR or GIT_WORK_TREE set, git decides where a relative path
+	// starts from the work tree layout. That is not guessed here: the path is refused.
+	redirected := os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != ""
+	for _, g := range globals {
+		if g == "--git-dir" || g == "--work-tree" || strings.HasPrefix(g, "--git-dir=") || strings.HasPrefix(g, "--work-tree=") {
+			redirected = true
+		}
+	}
+	if redirected {
+		return "", fmt.Errorf("the message file %s is relative and git is pointed elsewhere by --git-dir, --work-tree, GIT_DIR or GIT_WORK_TREE. Pass an absolute path to -F", p)
 	}
 	dir := ""
 	for i := 0; i+1 < len(globals); i++ {
@@ -199,7 +250,7 @@ func commitFilePath(globals []string, p string) string {
 			}
 		}
 	}
-	return filepath.Join(dir, p)
+	return filepath.Join(dir, p), nil
 }
 
 // CheckCommitMsg is what the commit-msg hook runs on the message file git passes in.
@@ -215,7 +266,12 @@ func CheckCommitMsg(r Runner, file string) Verdict {
 }
 
 var (
-	pushValueLong = map[string]bool{"--repo": true, "--receive-pack": true, "--exec": true, "--push-option": true}
+	pushValueLong = map[string]bool{"--repo": true, "--receive-pack": true, "--exec": true, "--push-option": true, "--recurse-submodules": true}
+	// pushLongs is every long option of git push, for resolving abbreviations.
+	pushLongs = []string{"--all", "--branches", "--mirror", "--tags", "--delete", "--repo", "--receive-pack", "--exec", "--push-option",
+		"--force", "--force-with-lease", "--force-if-includes", "--no-verify", "--verify", "--dry-run", "--porcelain", "--follow-tags",
+		"--no-follow-tags", "--atomic", "--signed", "--set-upstream", "--thin", "--no-thin", "--quiet", "--verbose", "--progress",
+		"--prune", "--recurse-submodules", "--ipv4", "--ipv6", "--help"}
 )
 
 func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
@@ -234,29 +290,42 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 		case a == "--":
 			positional = append(positional, rest[i+1:]...)
 			i = len(rest)
-		case a == "--all" || a == "--branches":
-			all = true
-		case a == "--mirror":
-			mirror = true
-		case a == "--tags":
-			tags = true
-		case a == "--delete" || a == "-d":
-			del = true
 		case strings.HasPrefix(a, "--"):
 			name, val, hasVal := strings.Cut(a, "=")
+			// git accepts any unambiguous prefix (--del), so resolve it first.
+			name, amb := resolveLong(name, pushLongs)
+			if amb {
+				return refuse(action, fmt.Sprintf("%s refused: the option %s is ambiguous. Spell the option out in full", action, a), nil)
+			}
 			if !hasVal && pushValueLong[name] && i+1 < len(rest) {
 				i++
 				val = rest[i]
 			}
-			if name == "--repo" {
+			switch name {
+			case "--all", "--branches":
+				all = true
+			case "--mirror":
+				mirror = true
+			case "--tags":
+				tags = true
+			case "--delete":
+				del = true
+			case "--repo":
 				repo = val
 			}
-		case a == "-o" && i+1 < len(rest):
-			i++
 		case strings.HasPrefix(a, "-") && len(a) > 1:
-			// a cluster such as -fd; -o carries a value, so its letters are not flags
-			if !strings.HasPrefix(a, "-o") && strings.Contains(a, "d") {
-				del = true
+			// A cluster such as -fd is read letter by letter and stops at -o, which takes the rest
+			// of the cluster (or the next word) as its value, so "-od" is not a delete.
+			for j := 1; j < len(a); j++ {
+				if a[j] == 'o' {
+					if j == len(a)-1 && i+1 < len(rest) {
+						i++
+					}
+					break
+				}
+				if a[j] == 'd' {
+					del = true
+				}
 			}
 		default:
 			positional = append(positional, a)
