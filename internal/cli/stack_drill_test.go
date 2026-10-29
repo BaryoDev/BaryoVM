@@ -11,9 +11,11 @@ import (
 // with nothing. fakeRunner cannot do this: its answers match by substring and the drill script
 // contains every other pattern.
 type drillRunner struct {
-	seen      []string
-	scriptOut string
-	scriptErr error
+	seen       []string
+	scriptOut  string
+	scriptErr  error
+	rmErr      error
+	stillThere bool
 }
 
 func (d *drillRunner) Run(cmd string) (string, error) {
@@ -21,7 +23,13 @@ func (d *drillRunner) Run(cmd string) (string, error) {
 	if strings.Contains(cmd, "set -e") {
 		return d.scriptOut, d.scriptErr
 	}
-	return "", nil
+	if strings.Contains(cmd, "inspect") {
+		if d.stillThere {
+			return "present\n", nil
+		}
+		return "gone\n", nil
+	}
+	return "", d.rmErr
 }
 
 type drillEnvelope struct {
@@ -62,8 +70,8 @@ func TestStackRestoreDrillFailureStillCleansUpAndReportsIt(t *testing.T) {
 		t.Errorf("failure data = %v", env.Data)
 	}
 	last := r.seen[len(r.seen)-1]
-	if len(r.seen) != 2 || !strings.HasPrefix(last, "docker rm -f -v '"+name+"'") {
-		t.Errorf("cleanup did not run after the failure: %q", r.seen)
+	if len(r.seen) != 3 || !strings.HasPrefix(r.seen[1], "docker rm -f -v '"+name+"'") || !strings.Contains(last, "inspect") {
+		t.Errorf("cleanup and the gone check did not run after the failure: %q", r.seen)
 	}
 }
 
@@ -76,5 +84,22 @@ func TestStackRestoreDrillRefusesYesBeforeAnyRemoteCommand(t *testing.T) {
 	}
 	if len(r.seen) != 0 {
 		t.Errorf("ran remote commands: %q", r.seen)
+	}
+}
+
+func TestStackRestoreDrillSaysWhenTheContainerIsStillThere(t *testing.T) {
+	stackFixture(t)
+	r := &drillRunner{scriptOut: "drill: tables=3\n", rmErr: errors.New("permission denied"), stillThere: true}
+	stdout, _, err := runCmdE(t, newStackRestoreCmd(), r, true, "app", "--drill")
+	if err == nil {
+		t.Fatal("a container left behind must fail the drill")
+	}
+	var env drillEnvelope
+	if e := json.Unmarshal([]byte(stdout), &env); e != nil {
+		t.Fatalf("no envelope: %v (%q)", e, stdout)
+	}
+	name, _ := env.Data["container"].(string)
+	if env.OK || env.Data["removed"] != false || name == "" || !strings.Contains(env.Error, name) {
+		t.Errorf("envelope = %+v", env)
 	}
 }
