@@ -354,6 +354,13 @@ func newStackReleaseCmd() *cobra.Command {
 					rr = nil
 					return fail(fmt.Errorf("nothing to resume: no release record at %s", loc.File))
 				}
+				// Resuming while the first release is still running would start a second one over the
+				// same build and containers. The record's last write is the only sign of life we have.
+				if prev.Active(time.Now()) {
+					rr = nil
+					return fail(fmt.Errorf("the earlier release of %s wrote its record at %s and may still be running: wait about %d minutes with no new write, or drop the record with `baryovm stack release %s --clear` if you know it is dead",
+						args[0], prev.Updated, int(releasestate.ActiveWindow/time.Minute), args[0]))
+				}
 				if _, bad := prev.Unsafe(); bad {
 					rr = nil
 					return refuseState(loc, prev, args[0])

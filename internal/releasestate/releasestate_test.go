@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type stubRunner struct {
@@ -163,5 +164,32 @@ func TestBeginRefusesOverAnExistingRecordAndReportsBusy(t *testing.T) {
 	}}
 	if _, _, err := Begin(busy, l, New("demo", "new")); !errors.Is(err, ErrBusy) {
 		t.Errorf("want ErrBusy, got %v", err)
+	}
+}
+
+func TestWriteStampsUpdatedAndActiveReadsIt(t *testing.T) {
+	l := For("/srv/site", "d", false)
+	s := New("d", "abc")
+	s.Mark("sync", StatusStarted, nil)
+	if err := Write(&stubRunner{}, l, s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Updated == "" {
+		t.Fatal("Write should stamp the heartbeat")
+	}
+	at, _ := time.Parse(time.RFC3339, s.Updated)
+	if !s.Active(at.Add(time.Minute)) {
+		t.Error("a write a minute ago, no failed step: the release may still be running")
+	}
+	if s.Active(at.Add(ActiveWindow + time.Minute)) {
+		t.Error("a write older than the window is a dead release")
+	}
+	s.Mark("sync", StatusFailed, errors.New("boom"))
+	if s.Active(at.Add(time.Minute)) {
+		t.Error("a failed step means the release stopped, whatever the clock says")
+	}
+	old := &State{Stack: "d"}
+	if old.Active(at) {
+		t.Error("a record with no heartbeat predates the field and counts as stopped")
 	}
 }

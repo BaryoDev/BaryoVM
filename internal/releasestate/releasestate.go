@@ -43,6 +43,7 @@ type State struct {
 	Stack      string `json:"stack"`
 	Commit     string `json:"commit,omitempty"`
 	Started    string `json:"started"`
+	Updated    string `json:"updated,omitempty"`
 	Backup     string `json:"backup,omitempty"`
 	BackupFile string `json:"backupFile,omitempty"`
 	Steps      []Step `json:"steps"`
@@ -236,8 +237,31 @@ func Read(r sshx.Runner, l Loc) (*State, error) {
 	return &s, nil
 }
 
-// Write stores the state.
+// ActiveWindow is how long after its last write a release with no failed step still counts as
+// running. Every step writes before and after it runs, so a live release leaves a fresh stamp unless
+// one step runs longer than this (a very slow image build); that release can look idle and be
+// resumed over, which is why the refusal text names --clear as the way past it.
+const ActiveWindow = 10 * time.Minute
+
+var clock = time.Now
+
+// Active reports whether the record looks like a release still running: stamped inside the window
+// and no step failed. A failed step means the release stopped itself. A record with no stamp
+// predates the field and counts as stopped.
+func (s *State) Active(now time.Time) bool {
+	if s.Failed != "" {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, s.Updated)
+	if err != nil {
+		return false
+	}
+	return now.Sub(at) < ActiveWindow
+}
+
+// Write stores the state, stamping the heartbeat that lets --resume tell a live release from a dead one.
 func Write(r sshx.Runner, l Loc, s *State) error {
+	s.Updated = clock().UTC().Format(time.RFC3339)
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err

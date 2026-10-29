@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
@@ -589,3 +590,20 @@ func (o orderRunner) Backup() (string, error)              { return "", nil }
 func (o orderRunner) CheckNames() error                    { return nil }
 
 var _ update.Runner = orderRunner{}
+
+func TestResumeRefusesWhileTheEarlierReleaseIsStillWriting(t *testing.T) {
+	releaseFixture(t)
+	host := newStateHost(nil)
+	inner := &fakeRunner{answers: stateAnswers(ownedDemo)}
+	host.mu.Lock()
+	host.files[stateFilePath] = `{"stack":"demo","started":"x","updated":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","steps":[{"name":"sync","status":"started"}]}`
+	host.mu.Unlock()
+	_, err := stateRelease(t, host, inner, nil, "--resume")
+	if err == nil || !strings.Contains(err.Error(), "may still be running") || !strings.Contains(err.Error(), "10 minutes") {
+		t.Fatalf("resume over a live release should be refused with the reason, got %v", err)
+	}
+	if didRun(inner.seen, "docker build") || didRun(inner.seen, "pg_dump") {
+		t.Errorf("nothing should have run:\n%s", strings.Join(inner.seen, "\n"))
+	}
+}
