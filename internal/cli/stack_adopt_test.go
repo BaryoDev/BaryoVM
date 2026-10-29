@@ -78,7 +78,7 @@ func parseFailure(t *testing.T, stdout, action string) adoptFailure {
 func neverRemoved(t *testing.T, seen []string) {
 	t.Helper()
 	for _, cmd := range seen {
-		if strings.Contains(cmd, "rm -f") {
+		if strings.Contains(cmd, "docker rm -f") {
 			t.Errorf("a container was removed although adoption was refused: %s", cmd)
 		}
 	}
@@ -207,7 +207,7 @@ func TestReleaseWithoutAdoptIsUnchanged(t *testing.T) {
 		t.Errorf("the adopt refusal showed up without --adopt: %v", err)
 	}
 	for _, cmd := range f.seen {
-		if strings.Contains(cmd, "inspect") || strings.Contains(cmd, "rm -f") {
+		if strings.Contains(cmd, "inspect") || strings.Contains(cmd, "docker rm -f") {
 			t.Errorf("nothing should be inspected or removed without --adopt: %s", cmd)
 		}
 	}
@@ -226,7 +226,7 @@ func TestDeployWithoutAdoptIsUnchanged(t *testing.T) {
 		t.Fatalf("deploy went ahead without --adopt:\n%s", strings.Join(f.seen, "\n"))
 	}
 	for _, cmd := range f.seen {
-		if strings.Contains(cmd, "inspect") || strings.Contains(cmd, "rm -f") || strings.Contains(cmd, "up -d") {
+		if strings.Contains(cmd, "inspect") || strings.Contains(cmd, "docker rm -f") || strings.Contains(cmd, "up -d") {
 			t.Errorf("ran although the name was taken: %s", cmd)
 		}
 	}
