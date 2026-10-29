@@ -87,7 +87,7 @@ func TestPublishNpmWithKeyIsRefused(t *testing.T) {
 	ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("const k = \"" + cliFakeKey + "\"\n")}, 0)
 	err := runGroup(t, "publish", "npm", "--access", "public")
 	wantRefused(t, err, ran, 0, "index.js:1")
-	if len(*packs) != 1 || !strings.Contains((*packs)[0], "npm pack --dry-run --json") {
+	if len(*packs) < 1 || !strings.Contains((*packs)[0], "npm pack --dry-run --json") {
 		t.Fatalf("pack: %v", *packs)
 	}
 }

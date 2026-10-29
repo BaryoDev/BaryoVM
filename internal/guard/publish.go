@@ -207,7 +207,7 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy) Verdict {
 	raw := resolveRegistry(pkg.Name, layers)
 	host, err := registryHost(raw)
 	if err != nil {
-		return refuse(action, fmt.Sprintf("%s refused: %s. Fix the registry setting in publishConfig, .npmrc or --registry", action, err), nil)
+		return refuse(action, fmt.Sprintf("%s refused: %s. Fix the registry setting npm reports", action, err), nil)
 	}
 	if pkg.Private && publicRegistries[host] {
 		return refuse(action, fmt.Sprintf("%s refused: package.json is private but the registry resolves to the public registry %s. Point publishConfig.registry or .npmrc at your private registry", action, host), nil)
