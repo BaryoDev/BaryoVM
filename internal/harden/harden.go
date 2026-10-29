@@ -298,6 +298,17 @@ func clean(s string) string {
 	return b.String()
 }
 
+// knownAction passes only the words the script itself emits. The field is also compared and
+// counted, so anything else (a line forged from remote text) becomes a fixed placeholder
+// rather than being printed.
+func knownAction(a string) string {
+	switch a {
+	case "applied", "would-apply", "already-correct", "skipped", StateReport:
+		return a
+	}
+	return "unknown"
+}
+
 // parseApply turns the script's line protocol into a Report. Separated from the SSH
 // call so the parsing has tests that do not need a machine.
 func parseApply(out string) Report {
@@ -317,7 +328,7 @@ func parseApply(out string) Report {
 				r.Fail2ban = clean(parts[2])
 			}
 		case len(parts) >= 4 && parts[0] == "CHANGE":
-			r.Changes = append(r.Changes, Change{Item: clean(parts[1]), Action: parts[2], Detail: clean(strings.Join(parts[3:], "|"))})
+			r.Changes = append(r.Changes, Change{Item: clean(parts[1]), Action: knownAction(parts[2]), Detail: clean(strings.Join(parts[3:], "|"))})
 			if parts[2] == StateReport {
 				r.Reported++
 			}
@@ -329,7 +340,7 @@ func parseApply(out string) Report {
 func firstError(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "ERROR|") {
-			return strings.TrimPrefix(strings.TrimRight(line, "\r"), "ERROR|")
+			return clean(strings.TrimPrefix(strings.TrimRight(line, "\r"), "ERROR|"))
 		}
 	}
 	return ""
