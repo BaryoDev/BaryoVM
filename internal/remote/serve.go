@@ -145,17 +145,18 @@ func ParseResponse(out string, req Request) (Response, error) {
 // passed through sshx.Quote. No byte of the client's request is part of any of them.
 type LocalRunner struct{}
 
-// Run executes cmd and returns stdout, or an error carrying stderr, as sshx.Client.Run does.
+// Run executes cmd and returns stdout, or an error carrying the exit status and stderr but not cmd.
 func (LocalRunner) Run(cmd string) (string, error) {
 	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- built by the engine packages from the allowlist, every value quoted
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
 	if err := c.Run(); err != nil {
+		// The script stays out of the error: it travels back to the restricted key in the reply.
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
-			msg = err.Error()
+			return out.String(), fmt.Errorf("local command failed: %w", err)
 		}
-		return out.String(), fmt.Errorf("local `%s`: %w: %s", cmd, err, msg)
+		return out.String(), fmt.Errorf("local command failed: %w: %s", err, msg)
 	}
 	return out.String(), nil
 }

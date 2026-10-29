@@ -183,3 +183,17 @@ func TestRunnerExecutorBackupUsesTheConfiguredDatabase(t *testing.T) {
 		t.Errorf("backup did not use dbContainer and dbName from the file: %s", joined)
 	}
 }
+
+func TestLocalRunnerErrorDoesNotCarryTheScript(t *testing.T) {
+	script := "echo oops-from-docker >&2; exit 3 # secret-path-/srv/app"
+	_, err := LocalRunner{}.Run(script)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if strings.Contains(err.Error(), "secret-path") || strings.Contains(err.Error(), "exit 3 #") {
+		t.Errorf("the error carries the script: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 3") || !strings.Contains(err.Error(), "oops-from-docker") {
+		t.Errorf("the error lost the exit status or stderr: %v", err)
+	}
+}
