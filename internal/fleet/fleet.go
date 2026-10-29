@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
@@ -68,6 +69,12 @@ type Stack struct {
 	BackupDir   string `json:"backupDir,omitempty"`   // remote dir for backups
 	Keep        int    `json:"keep,omitempty"`        // retention count (default 14)
 
+	// Backup is the stack's list of backup strategies, each with its dump and its restore. nil (the
+	// field absent) means none declared: the legacy fields above are read instead, and with none
+	// of them `stack update --auto` refuses. A pointer so an explicit empty list, "backup": [],
+	// survives a save: it says there is genuinely nothing to back up. See BackupStrategies.
+	Backup *[]backup.Strategy `json:"backup,omitempty"`
+
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
@@ -109,6 +116,27 @@ type Stack struct {
 	// rest holds fields a newer BaryoVM wrote that this one does not know, so a downgrade does not
 	// delete them. Unexported, so it is invisible to every caller: see unknown.go.
 	rest unknownFields
+}
+
+// BackupStrategies is what this stack backs up, and whether it said so at all.
+//
+// A declared Backup list wins. Otherwise the legacy fields load as the first strategy
+// (postgres-container) when dbContainer and dbName are both set, and noDatabase loads as an empty
+// list. declared is false only for a stack that has said nothing, which is the case `stack update
+// --auto` refuses. An empty list with declared true means nothing to back up, on purpose.
+func (s Stack) BackupStrategies() (list []backup.Strategy, declared bool) {
+	if s.Backup != nil {
+		return *s.Backup, true
+	}
+	if s.DBContainer != "" && s.DBName != "" {
+		return []backup.Strategy{{
+			Kind: backup.KindPostgresContainer, Container: s.DBContainer, Database: s.DBName, User: s.DBUser,
+		}}, true
+	}
+	if s.NoDatabase {
+		return nil, true
+	}
+	return nil, false
 }
 
 // Site is a static site `baryovm site add` set up on one of the fleet's VMs. It is recorded here,

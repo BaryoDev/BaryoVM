@@ -1023,6 +1023,48 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
+### Backup strategies
+
+A stack's backup is a list of strategies, each declaring how it is dumped and how it is restored.
+`stack add --db-container ... --db-name ...` writes a list with one `postgres-container` strategy.
+A `fleet.json` written before this (with `dbContainer`, `dbName`, `dbUser`, `noDatabase`) still loads:
+those fields read as the first strategy, or as an empty list for `noDatabase`, and run the same
+scripts as before. For anything else, store a JSON array with `baryovm stack set-backup <name> --file
+backup.json` (`--clear` removes it). Unknown keys and unknown kinds are refused when it is stored.
+
+```json
+[
+  { "kind": "postgres-container", "container": "db", "database": "app" },
+  { "kind": "postgres-remote", "host": "mydb.postgres.database.azure.com", "database": "app",
+    "user": "admin", "envFile": ".env", "passwordVar": "DB_PASSWORD" },
+  { "kind": "command", "dump": "redis-cli --rdb -", "restore": "cat > /data/dump.rdb" },
+  { "kind": "files", "paths": ["/srv/app/uploads"] }
+]
+```
+
+- `postgres-container`: `container`, `database`, `user` (default postgres). `pg_dump` inside the container.
+- `postgres-remote`: a database that is not on the VM, such as RDS, Azure Database for PostgreSQL or
+  Cloud SQL. `host`, `database`, `port` (5432), `user` (postgres), `image` (`postgres:17`, pin it to
+  the server's major version). `pg_dump` runs in a throwaway client container on the VM. The password
+  comes from the stack's env file on the VM (`envFile`, relative to the project dir, `passwordVar`
+  names the key, default `PGPASSWORD`) or from a libpq password file on the VM (`passFile`, absolute).
+  It is handed to the container with `--env-file` or a read-only mount, never on a command line. The
+  env file must be plain `KEY=value` lines; add `PGSSLMODE=require` there if the provider needs it.
+  Restore uses `pg_restore --clean --if-exists --no-owner`.
+- `command`: `dump` writes the backup to stdout, `restore` reads it from stdin. Run through
+  `sudo -n` as a whole line when the stack has `--sudo`, like release hooks.
+- `files`: `paths`, absolute. A tar, restored under `/`.
+
+`restore` brings back the whole set that shares the timestamp of the file named by `--file` (the
+newest set by default) and checks every file exists before it replaces anything. A release and `stack
+backup` run every strategy under one timestamp and stop at the first failure. On a first release a
+`postgres-container` strategy whose container is not there yet is skipped, as before. The
+`--drill` needs a `postgres-container` strategy.
+
+`"backup": []` says the stack has nothing to back up. `stack update --auto` accepts that (it replaces
+`noDatabase`, which still works) and refuses a stack that declared nothing at all. Not built yet:
+`provider-snapshot` and `volume` kinds, and where backups are kept (#39).
+
 `stack backup --dry-run` prints the backup script and `stack restore --dry-run` prints the restore
 script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
 which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
@@ -1052,6 +1094,7 @@ result is not healthy:
 baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
 baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
 baryovm stack set-verify barako --file verify.json   # store a verify spec, or --clear
+baryovm stack set-backup barako --file backup.json   # store backup strategies, or --clear
 
 baryovm stack update barako --dry-run   # report what is pending, change nothing
 baryovm stack update barako             # apply, verify, roll back if it does not come up

@@ -86,7 +86,11 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 	if len(svcs) == 0 {
 		svcs = st.UpdateServices
 	}
-	hasBackup := st.DBContainer != "" && st.DBName != ""
+	strategies, declared := st.BackupStrategies()
+	hasBackup := len(strategies) > 0
+	// An explicit empty list (or the legacy noDatabase flag) is a stack that said there is nothing
+	// to back up. A stack that said nothing is refused by --auto below.
+	noDatabase := declared && !hasBackup
 
 	// Refuse an unattended run before opening a connection, so a misconfigured cron entry is a clean
 	// no-op rather than a partially applied change.
@@ -123,8 +127,8 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		return err
 	}
 	// A dry run is exempt: it recreates nothing, so it has nothing to go back from.
-	if auto && !dryRun && !hasBackup && !st.NoDatabase {
-		err := fmt.Errorf("%w: %s has no dbContainer or dbName: register them, or record that it has no database with `baryovm stack set-update %s --no-database`", update.ErrNoBackup, name, name)
+	if auto && !dryRun && !hasBackup && !noDatabase {
+		err := fmt.Errorf("%w: %s declares no backup: register a database with `baryovm stack add`, declare strategies with `baryovm stack set-backup %s --file backup.json`, or record that it has nothing to back up with `baryovm stack set-update %s --no-database`", update.ErrNoBackup, name, name, name)
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
@@ -169,7 +173,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 			AutoUpdate:     st.AutoUpdate,
 			HasHealthCheck: !vplan.Empty(),
 			HasBackup:      hasBackup,
-			NoDatabase:     st.NoDatabase,
+			NoDatabase:     noDatabase,
 			SkipBackup:     noBackup,
 			DryRun:         dryRun,
 			HealthAttempts: pick(attempts, vplan.Budget.Attempts),
@@ -285,7 +289,16 @@ func newStackSetUpdateCmd() *cobra.Command {
 				st.UpdateServices = svcs
 			}
 			if cmd.Flags().Changed("no-database") {
-				st.NoDatabase = noDB
+				switch {
+				case st.Backup == nil:
+					st.NoDatabase = noDB
+				case noDB:
+					// A declared list becomes the explicit empty one.
+					empty := []backup.Strategy{}
+					st.Backup, st.NoDatabase = &empty, false
+				case len(*st.Backup) == 0:
+					st.Backup, st.NoDatabase = nil, false
+				}
 			}
 			if auto {
 				if st.HealthURL == "" && !st.Verify.HasChecks() {
@@ -303,11 +316,11 @@ func newStackSetUpdateCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: true, Action: "stack set-update", Message: st.Name, Data: map[string]string{
 					"autoUpdate": fmt.Sprint(st.AutoUpdate),
 					"healthUrl":  st.HealthURL,
-					"noDatabase": fmt.Sprint(st.NoDatabase),
+					"noDatabase": fmt.Sprint(noDatabaseOf(st)),
 				}})
 				return nil
 			}
-			ui.Successf("%s: autoUpdate=%v healthUrl=%s noDatabase=%v", st.Name, st.AutoUpdate, st.HealthURL, st.NoDatabase)
+			ui.Successf("%s: autoUpdate=%v healthUrl=%s noDatabase=%v", st.Name, st.AutoUpdate, st.HealthURL, noDatabaseOf(st))
 			return nil
 		},
 	}
@@ -332,4 +345,10 @@ func updateData(res update.Result) map[string]any {
 		"health":     res.Health,
 		"skipped":    res.Skipped,
 	}
+}
+
+// noDatabaseOf reports whether the stack says it has nothing to back up.
+func noDatabaseOf(st *fleet.Stack) bool {
+	list, declared := st.BackupStrategies()
+	return declared && len(list) == 0
 }
