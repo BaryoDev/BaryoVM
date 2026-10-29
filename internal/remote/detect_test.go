@@ -67,3 +67,28 @@ func TestDetectReportsAProbeError(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestDetectAcceptsTheNonceOnItsOwnLineAfterABanner(t *testing.T) {
+	r := fnRunner(func(cmd string) (string, error) {
+		return "Welcome to the box\r\nlast login: today\r\n  " + strings.TrimPrefix(cmd, "echo ") + "  \r\n", nil
+	})
+	if err := DetectSwallowed(r, "abc123"); err != nil {
+		t.Errorf("a banner before the nonce line must pass: %v", err)
+	}
+}
+
+func TestDetectRefusesTheNonceInsideOtherText(t *testing.T) {
+	r := fnRunner(func(cmd string) (string, error) {
+		return "you ran: " + strings.TrimPrefix(cmd, "echo ") + " ok\n", nil
+	})
+	if err := DetectSwallowed(r, "abc123"); err == nil {
+		t.Error("the nonce inside other text on one line is not an answer")
+	}
+}
+
+func TestDetectRefusesOutputWithoutTheNonce(t *testing.T) {
+	r := fnRunner(func(string) (string, error) { return "banner\nmore\n", nil })
+	if err := DetectSwallowed(r, "abc123"); err == nil {
+		t.Error("output with no nonce must fail")
+	}
+}

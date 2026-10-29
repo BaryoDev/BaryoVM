@@ -25,7 +25,7 @@ func NewNonce() string {
 }
 
 // DetectSwallowed proves the VM runs the command it is sent. It asks the VM to echo nonce, and
-// refuses unless that exact token comes back.
+// refuses unless a line holding exactly that token comes back.
 //
 // This is the failure #98 was filed for: a key pinned with command="..." discards whatever the
 // client sends and runs its own script, so every BaryoVM command would "succeed" with BaryoVM not
@@ -34,8 +34,14 @@ func NewNonce() string {
 // so it needs no quoting on any host.
 func DetectSwallowed(r sshx.Runner, nonce string) error {
 	out, err := r.Run("echo " + nonce)
-	if err == nil && strings.TrimSpace(out) == nonce {
-		return nil
+	if err == nil {
+		// Any whole line will do: a login banner or shell noise on stdout must not read as a
+		// swallowed command. The token inside other text on one line still does not match.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) == nonce {
+				return nil
+			}
+		}
 	}
 	if strings.Contains(out, Protocol) {
 		return fmt.Errorf("this VM's SSH key is pinned to `baryovm remote serve`, which answers only update, backup, status and logs: " +
