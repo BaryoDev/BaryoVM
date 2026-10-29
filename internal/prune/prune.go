@@ -41,6 +41,10 @@ type Options struct {
 	StoppedAgeDays int
 	// KeepImages is how many of the newest images per repository are kept.
 	KeepImages int
+	// RollbackIDs maps an image ID to the stack whose rollback record names it. `stack rollback`
+	// retags these IDs, so an image still listed here is the way back from the last release and
+	// must survive even when nothing runs it and it has lost its tag.
+	RollbackIDs map[string]string
 	// Now is the clock, replaceable in tests.
 	Now func() time.Time
 }
@@ -181,7 +185,9 @@ func BuildPlan(f Facts, o Options) Plan {
 	o = o.withDefaults()
 	var p Plan
 	if f.HasDocker {
-		p.Items = append(p.Items, dockerItems(f, o)...)
+		items, notes := dockerItems(f, o)
+		p.Items = append(p.Items, items...)
+		p.Notes = append(p.Notes, notes...)
 	} else {
 		p.Notes = append(p.Notes, "docker not available: skipped build cache, images, containers and volumes")
 	}
@@ -205,8 +211,9 @@ func BuildPlan(f Facts, o Options) Plan {
 	return p
 }
 
-func dockerItems(f Facts, o Options) []Item {
+func dockerItems(f Facts, o Options) ([]Item, []string) {
 	var items []Item
+	var notes []string
 	if f.BuildCache > 0 {
 		items = append(items, Item{Kind: "docker-build-cache", Target: "build cache", Bytes: f.BuildCache,
 			Reason: "rebuilt on demand", Cmd: "sudo -n docker builder prune -f"})
@@ -234,12 +241,27 @@ func dockerItems(f Facts, o Options) []Item {
 			Cmd:    "sudo -n docker rm " + sshx.Quote(name)})
 	}
 
+	keep := map[string]string{}
+	for id, stack := range o.RollbackIDs {
+		keep[shortID(id)] = stack
+	}
+	kept := map[string]bool{}
+	// protected reports whether im is a stack's rollback target, and says so once in the notes.
+	protected := func(im Image) bool {
+		stack, ok := keep[shortID(im.ID)]
+		if ok && !kept[im.ID] {
+			kept[im.ID] = true
+			notes = append(notes, fmt.Sprintf("kept image %s (%s): rollback target for stack %s, `stack rollback %s` needs it", im.ID, im.Ref(), stack, stack))
+		}
+		return ok
+	}
+
 	// Dangling images, then rollback images beyond the newest N per repository.
 	planned := map[string]bool{}
 	byRepo := map[string][]Image{}
 	for _, im := range f.Images {
 		if im.Repo == "<none>" {
-			if used(im) || planned[im.ID] {
+			if used(im) || planned[im.ID] || protected(im) {
 				continue
 			}
 			planned[im.ID] = true
@@ -258,7 +280,7 @@ func dockerItems(f Facts, o Options) []Item {
 		ims := byRepo[repo]
 		sort.SliceStable(ims, func(a, b int) bool { return ims[a].Created.After(ims[b].Created) })
 		for i, im := range ims {
-			if i < o.KeepImages || used(im) {
+			if i < o.KeepImages || used(im) || protected(im) {
 				continue
 			}
 			items = append(items, Item{Kind: "docker-image", Target: im.Ref(), Bytes: im.Bytes,
@@ -276,7 +298,7 @@ func dockerItems(f Facts, o Options) []Item {
 		items = append(items, Item{Kind: "docker-volume", Target: v.Name, Bytes: v.Bytes,
 			Reason: "anonymous volume not used by any container", Cmd: "sudo -n docker volume rm " + sshx.Quote(v.Name)})
 	}
-	return items
+	return items, notes
 }
 
 func buildDirItems(f Facts, o Options) []Item {

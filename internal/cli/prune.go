@@ -7,7 +7,10 @@ package cli
 import (
 	"fmt"
 
+	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/prune"
+	"github.com/BaryoDev/BaryoVM/internal/rollback"
+	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -49,6 +52,17 @@ func newVMPruneCmd() *cobra.Command {
 			}
 
 			opt := prune.Options{FloorGB: floor, WorkDirs: workDirs, WorktreeDirs: worktreeDirs, StoppedAgeDays: stoppedDays, KeepImages: keepImages}
+			// A release leaves the old image dangling, and that image is what `stack rollback`
+			// retags, so prune reads each registered stack's record and keeps those IDs.
+			store, serr := fleet.Load()
+			if serr != nil {
+				return fail(serr)
+			}
+			ids, rerr := rollbackIDs(c, store.Stacks, vm.Name)
+			if rerr != nil {
+				return fail(rerr)
+			}
+			opt.RollbackIDs = ids
 			var plan prune.Plan
 			if err := ui.Step("planning the prune on "+vm.Name, func() error {
 				var perr error
@@ -133,4 +147,27 @@ func humanBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// rollbackIDs maps every image ID named by a rollback record of a stack on vmName to that stack.
+// A record that cannot be read stops the prune: guessing would risk deleting the way back.
+func rollbackIDs(c sshx.Runner, stacks []fleet.Stack, vmName string) (map[string]string, error) {
+	ids := map[string]string{}
+	for i := range stacks {
+		st := &stacks[i]
+		if st.VM != vmName {
+			continue
+		}
+		rec, err := rollback.Load(c, backupConfig(st))
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the rollback record of stack %s, so prune cannot tell which images to keep: %w; fix or remove the record, then run vm prune again", st.Name, err)
+		}
+		if rec == nil {
+			continue
+		}
+		for _, im := range rec.Images {
+			ids[im.ID] = st.Name
+		}
+	}
+	return ids, nil
 }

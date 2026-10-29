@@ -366,3 +366,22 @@ func TestDiscoverQuotesDirs(t *testing.T) {
 		t.Fatal("work dir not quoted")
 	}
 }
+
+func TestRollbackTargetImageIsKept(t *testing.T) {
+	o := opts()
+	o.RollbackIDs = map[string]string{"sha256:abc123def4567890": "app"}
+	f := Facts{HasDocker: true, Images: []Image{
+		{ID: "abc123def456", Repo: "<none>", Tag: "<none>", Bytes: 5},
+		{ID: "fff000fff000", Repo: "<none>", Tag: "<none>", Bytes: 5},
+	}}
+	p := BuildPlan(f, o)
+	if has(p, "docker-image", "abc123def456") {
+		t.Fatalf("rollback target planned for removal: %+v", p.Items)
+	}
+	if !has(p, "docker-image", "fff000fff000") {
+		t.Fatalf("unrelated dangling image should still be planned: %+v", p.Items)
+	}
+	if len(p.Notes) == 0 || !strings.Contains(strings.Join(p.Notes, "\n"), "rollback target") {
+		t.Fatalf("plan should say why the image was kept: %+v", p.Notes)
+	}
+}
