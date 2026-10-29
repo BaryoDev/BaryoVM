@@ -43,7 +43,7 @@ func preparePullDir(dir string) error {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return err
 		}
-		return os.Chmod(dir, 0o700)
+		return os.Chmod(dir, 0o700) // #nosec G302 -- a directory, owner-only; the files in it are 0600
 	}
 	if err != nil {
 		return err
