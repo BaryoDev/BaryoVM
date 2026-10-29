@@ -38,15 +38,11 @@ func loadRecipeFile(path string) (*recipe.Recipe, string, error) {
 	return r, abs, nil
 }
 
-// recipeResolver resolves the references a recipe's inputs are bound to. Recipe inputs belong to a
-// file in the app repository, so cmd: is refused, the same as for release manifests.
-//
-// TODO: confine this to dir once secretref.Resolver has Confine(root): env: names must start with
-// BARYOVM_, and file: paths must be relative and stay inside dir after symlinks are resolved.
-func recipeResolver(dir string) secretref.Resolver {
-	_ = dir
-	return fileResolver()
-}
+// recipeResolver resolves the references a recipe's inputs are bound to. The references come only
+// from --input, which the operator typed; a recipe's defaults are literals and are never resolved,
+// so a committed recipe cannot name a local secret and no confinement is needed. cmd: stays refused
+// for inputs, as the docs say.
+func recipeResolver() secretref.Resolver { return secretref.Default() }
 
 // parseInputBindings turns repeated NAME=value flags into a map.
 func parseInputBindings(in []string) (map[string]string, error) {
@@ -85,7 +81,7 @@ func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Re
 	if path == "" {
 		path = st.RecipeFile
 	}
-	r, abs, err := loadRecipeFile(path)
+	r, _, err := loadRecipeFile(path)
 	if err != nil {
 		return fail(err, nil)
 	}
@@ -93,7 +89,7 @@ func releaseRecipe(st *fleet.Stack, vm *fleet.VM, o stackReleaseOpts, out *ui.Re
 	if err != nil {
 		return fail(err, nil)
 	}
-	env, err := r.ResolveInputs(bind, recipeResolver(filepath.Dir(abs)))
+	env, err := r.ResolveInputs(bind, recipeResolver())
 	if err != nil {
 		return fail(err, nil)
 	}
