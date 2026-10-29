@@ -172,3 +172,16 @@ func TestInspectSkipsControlCharacterInPostgresGuess(t *testing.T) {
 		t.Errorf("%+v", p)
 	}
 }
+
+func TestParseLsSkipsFormatAndSeparatorCharacters(t *testing.T) {
+	for name, r := range map[string]string{"rlo": `‮`, "zwsp": `​`, "ls": ` `, "nbsp": ` `} {
+		ps, err := ParseLs(`[{"Name":"a","ConfigFiles":"/opt/x` + r + `y/compose.yaml"}]`)
+		if err != nil || len(ps) != 1 || ps[0].State != "skipped" {
+			t.Errorf("%s: %+v %v", name, ps, err)
+		}
+	}
+	ps, _ := ParseLs(`[{"Name":"a","ConfigFiles":"/opt/café 日本/compose.yaml"}]`)
+	if len(ps) != 1 || ps[0].State == "skipped" {
+		t.Errorf("ordinary non-ASCII text was refused: %+v", ps)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
@@ -135,14 +136,15 @@ func Inspect(p *Project, configJSON string) error {
 	return nil
 }
 
-// hasControl reports a control character (below 0x20, 0x7f, the C1 range 0x80-0x9f) or invalid UTF-8.
+// hasControl reports a control, format or separator character (anything that is not printable, so
+// also U+202E, U+200B and U+2028) or invalid UTF-8.
 // encoding/json turns invalid bytes into U+FFFD, so that rune counts as invalid too.
 func hasControl(s string) bool {
 	if !utf8.ValidString(s) {
 		return true
 	}
 	for _, r := range s {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == utf8.RuneError {
+		if r == utf8.RuneError || !unicode.IsPrint(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return true
 		}
 	}

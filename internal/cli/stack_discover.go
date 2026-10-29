@@ -19,6 +19,9 @@ import (
 	"golang.org/x/term"
 )
 
+// registerStackFn is registerStack, replaceable so a test can fail one registration.
+var registerStackFn = registerStack
+
 // stdinIsTerminal says whether --adopt may ask a question. A variable so tests can answer either way.
 var stdinIsTerminal = func(cmd *cobra.Command) bool {
 	f, ok := cmd.InOrStdin().(*os.File)
@@ -144,11 +147,19 @@ func joinNotes(a, b string) string {
 // planProjects sets each project's state and `stack add` line against what is already registered.
 // A stack counts as already registered when it points at the same directory on the same VM.
 func planProjects(projects []discover.Project, store *fleet.Store, vm string, sudo bool) {
+	names, dirs := map[string]bool{}, map[string]bool{}
 	for i := range projects {
 		p := &projects[i]
 		if p.State == "skipped" {
 			continue
 		}
+		dir := strings.TrimRight(p.Dir, "/")
+		if names[p.Name] || dirs[dir] {
+			p.State = "skipped"
+			p.Note = joinNotes(p.Note, "another project in this batch has the same name or directory")
+			continue
+		}
+		names[p.Name], dirs[dir] = true, dir != ""
 		p.State = "found"
 		if existing := registeredAt(store, vm, p.Dir); existing != "" {
 			p.State = "already-registered"
@@ -184,7 +195,17 @@ func registeredAt(store *fleet.Store, vm, dir string) string {
 
 // adoptProjects registers every project still in state found, through the same code `stack add`
 // runs. Nothing is saved until the end, so a refusal part way leaves the fleet as it was.
-func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.Project, vm string, sudo, yes bool) error {
+func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.Project, vm string, sudo, yes bool) (err error) {
+	// Nothing is saved on an error, so no project may claim to be registered.
+	defer func() {
+		if err != nil {
+			for i := range projects {
+				if projects[i].State == "registered" {
+					projects[i].State = "found"
+				}
+			}
+		}
+	}()
 	in := bufio.NewReader(cmd.InOrStdin())
 	changed := 0
 	for i := range projects {
@@ -198,7 +219,7 @@ func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.P
 			continue
 		}
 		named := map[string]bool{"sudo": sudo, "file": p.File != "", "db-container": p.PostgresGuess != ""}
-		_, _, err := registerStack(store, stackAddInput{
+		_, _, err := registerStackFn(store, stackAddInput{
 			Name: p.Name, VM: vm, Path: p.Dir, File: p.File, DBContainer: p.PostgresGuess, Sudo: sudo,
 			Changed: func(n string) bool { return named[n] },
 		})
@@ -212,11 +233,6 @@ func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.P
 		return nil
 	}
 	if err := store.Save(); err != nil {
-		for i := range projects {
-			if projects[i].State == "registered" {
-				projects[i].State = "found"
-			}
-		}
 		return err
 	}
 	return nil
