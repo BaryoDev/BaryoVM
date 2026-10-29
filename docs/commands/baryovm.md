@@ -24,6 +24,7 @@ CLI-first: the MAUI app and MCP server drive this same CLI (with -o json).
 * [baryovm git](baryovm_git.md)	 - Run git, refusing a commit or push that carries a key or goes to the wrong host
 * [baryovm guard](baryovm_guard.md)	 - Key and remote checks that run before git and gh
 * [baryovm project](baryovm_project.md)	 - Release from a committed project file, or write one from your fleet
+* [baryovm prove](baryovm_prove.md)	 - Print the release record of a project as one page: what shipped, what was published, what was deployed
 * [baryovm publish](baryovm_publish.md)	 - Publish an npm or NuGet package, refusing one that holds a key or aims at the wrong registry
 * [baryovm repo](baryovm_repo.md)	 - Move a repository, scaffold its release CI, and verify trusted publishing
 * [baryovm scan](baryovm_scan.md)	 - Run an OWASP ZAP baseline (passive) scan against a URL
