@@ -7,6 +7,7 @@ package cli
 import (
 	"testing"
 
+	"github.com/BaryoDev/BaryoVM/internal/backup"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 )
 
@@ -54,8 +55,13 @@ func TestReAddingAStackToAddItsDatabaseKeepsEverythingElse(t *testing.T) {
 		"app", "--vm", "vm1", "--path", "/opt/app", "--db-container", "app-postgres-1", "--db-name", "appdb")
 
 	got := reloadStack(t, "app")
-	if got.DBContainer != "app-postgres-1" || got.DBName != "appdb" {
-		t.Errorf("the flags that were passed did not land: dbContainer %q, dbName %q", got.DBContainer, got.DBName)
+	list, declared := got.BackupStrategies()
+	if !declared || len(list) != 1 || list[0].Kind != backup.KindPostgresContainer ||
+		list[0].Container != "app-postgres-1" || list[0].Database != "appdb" {
+		t.Errorf("the flags that were passed did not land as a postgres-container strategy: %+v", list)
+	}
+	if got.Backup == nil || got.DBContainer != "" || got.DBName != "" {
+		t.Errorf("stack add must write the list form and clear the legacy fields: backup %v, dbContainer %q, dbName %q", got.Backup, got.DBContainer, got.DBName)
 	}
 	if !got.AutoUpdate {
 		t.Error("AutoUpdate was cleared: `stack update --auto` now refuses this stack")

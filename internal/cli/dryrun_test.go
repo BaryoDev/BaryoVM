@@ -231,7 +231,7 @@ func TestVMBootstrapDryRun(t *testing.T) {
 func TestDeployDryRunMasksEnv(t *testing.T) {
 	releaseFixture(t)
 	p := dryData(t, newDeployCmd(), "--vm", "vm1", "--image", "nginx:alpine", "--name", "site", "-p", "80:80", "-e", "TOKEN=hunter2", "--pull", "--dry-run")
-	all := joinCommands(p)
+	all := joinCommands(p) + "\n" + strings.Join(p.Notes, "\n")
 	if strings.Contains(all, "hunter2") {
 		t.Errorf("env value leaked into the plan:\n%s", all)
 	}

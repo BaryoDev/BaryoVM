@@ -36,7 +36,7 @@ func TestLoadDefaultsAndValidation(t *testing.T) {
 
 func TestBuildCmd(t *testing.T) {
 	m := &Manifest{RemoteRoot: "/srv/app"}
-	got := m.BuildCmd(Build{
+	got := m.buildScript(Build{
 		Image: "app:1", Dockerfile: "deploy/Dockerfile.api", Context: "api",
 		Args: map[string]string{"NEXT_PUBLIC_API_URL": "", "MODE": "prod"},
 	})
@@ -45,15 +45,15 @@ func TestBuildCmd(t *testing.T) {
 		"-f '/srv/app/deploy/Dockerfile.api'",
 		"-t 'app:1'",
 		"'/srv/app/api'",
-		"--build-arg 'MODE=prod'",
-		"--build-arg 'NEXT_PUBLIC_API_URL='",
+		"--build-arg 'MODE'",
+		"--build-arg 'NEXT_PUBLIC_API_URL'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("BuildCmd missing %q in:\n%s", want, got)
 		}
 	}
 	// Deterministic arg order (sorted): MODE before NEXT_PUBLIC…
-	if strings.Index(got, "MODE=") > strings.Index(got, "NEXT_PUBLIC") {
+	if strings.Index(got, "'MODE'") > strings.Index(got, "NEXT_PUBLIC") {
 		t.Errorf("build args not in deterministic order:\n%s", got)
 	}
 	if strings.Contains(got, "--no-cache") {

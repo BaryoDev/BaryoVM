@@ -22,12 +22,12 @@ import (
 
 func newVMCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "vm", Short: "Manage the VMs in your fleet"}
-	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRunnerCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd(), newVMForgetKeyCmd(), newVMPatchCmd(), newVMPruneCmd(), newVMHealthCmd())
+	cmd.AddCommand(newVMAddCmd(), newVMListCmd(), newVMPingCmd(), newVMExecCmd(), newVMBootstrapCmd(), newVMRunnerCmd(), newVMRemoveCmd(), newVMProvisionCmd(), newVMHardenCmd(), newVMThreatsCmd(), newVMForgetKeyCmd(), newVMPatchCmd(), newVMPruneCmd(), newVMHealthCmd(), newVMRemoteCmd())
 	return cmd
 }
 
 func newVMAddCmd() *cobra.Command {
-	var host, user, key, osName, shellName string
+	var host, user, key, osName, shellName, remoteMode string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -50,6 +50,18 @@ host's default shell is powershell.exe.
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
 			var unreached bool
 			var detectErr error
+			switch remoteMode {
+			case "":
+			case fleet.RemoteForced:
+				// A forced key discards the commands OS detection would send, so there is nothing to
+				// detect: the VM is Linux, the only OS the wrapper runs on.
+				vm.Remote = fleet.RemoteForced
+				if osName == "" {
+					osName = "linux"
+				}
+			default:
+				return fmt.Errorf("--remote must be %q, got %q", fleet.RemoteForced, remoteMode)
+			}
 			manualOS, manualShell, err := resolveManualHost(osName, shellName)
 			if err != nil {
 				return err
@@ -108,6 +120,7 @@ host's default shell is powershell.exe.
 	cmd.Flags().IntVar(&port, "port", 22, "SSH port")
 	cmd.Flags().StringVar(&osName, "os", "", "host OS, linux or windows (default: detect over SSH)")
 	cmd.Flags().StringVar(&shellName, "shell", "", "SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)")
+	cmd.Flags().StringVar(&remoteMode, "remote", "", "\"forced\" when the key is pinned to `baryovm remote serve` (see `vm remote install`)")
 	_ = cmd.MarkFlagRequired("host")
 	_ = cmd.MarkFlagRequired("key")
 	return cmd
@@ -182,7 +195,7 @@ func newVMPingCmd() *cobra.Command {
 			}
 			var uname, docker string
 			err = ui.Step(fmt.Sprintf("connecting to %s@%s", vm.User, vm.Host), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
@@ -225,7 +238,7 @@ func newVMBootstrapCmd() *cobra.Command {
 			}
 			var rep bootstrap.Report
 			err = ui.Step(fmt.Sprintf("installing Docker on %s", vm.Name), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}

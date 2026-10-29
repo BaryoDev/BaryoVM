@@ -9,20 +9,20 @@ import (
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 func newDeployCmd() *cobra.Command {
 	var vmName, image, name string
-	var ports, envs []string
+	var ports, envs, envRefs []string
 	var pull, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy a container image to a VM",
 		Example: "  baryovm deploy --vm web1 --image nginx:alpine --name site -p 80:80\n" +
-			"  baryovm deploy --vm web1 --image app:latest --name app -p 127.0.0.1:8080:8080 -e KEY=val --pull",
+			"  baryovm deploy --vm web1 --image app:latest --name app -p 127.0.0.1:8080:8080 -e KEY=val --pull\n" +
+			"  baryovm deploy --vm web1 --image app:latest --name app --env-ref API_KEY=env:APP_API_KEY --env-ref DB=cmd:op read op://vault/db/password",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, err := requireVM(vmName)
 			if err != nil {
@@ -31,8 +31,9 @@ func newDeployCmd() *cobra.Command {
 			if err := requireLinux(&vm, "deploy"); err != nil {
 				return err
 			}
-			env, err := parseEnv(envs)
+			env, err := buildEnv(envs, envRefs, !dryRun)
 			if err != nil {
+				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error()})
 				return err
 			}
 			spec := deploy.Spec{Name: name, Image: image, Ports: ports, Env: env, Pull: pull}
@@ -42,7 +43,7 @@ func newDeployCmd() *cobra.Command {
 
 			var rep deploy.Report
 			err = ui.Step(fmt.Sprintf("deploying %s to %s", image, vm.Name), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
@@ -68,6 +69,7 @@ func newDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "container name (required)")
 	cmd.Flags().StringArrayVarP(&ports, "publish", "p", nil, "port mapping host:container (repeatable)")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", nil, "environment KEY=value (repeatable)")
+	cmd.Flags().StringArrayVar(&envRefs, "env-ref", nil, "environment KEY=<reference> (repeatable): env:NAME, file:PATH or cmd:<command>, resolved here, never stored")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull the image before running")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the docker commands without connecting (env values are masked)")
 	_ = cmd.MarkFlagRequired("vm")

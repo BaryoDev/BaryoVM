@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/BaryoDev/BaryoVM/internal/secretref"
 )
 
 // DefaultProjectFile is the name `project release` and `project export` use when given none.
@@ -178,13 +180,22 @@ func (p *Project) Validate() error {
 	return nil
 }
 
-var envRefRe = regexp.MustCompile(`^env:[A-Za-z_][A-Za-z0-9_]*$`)
-
 // IsEnvRef reports whether v is an `env:NAME` reference.
-func IsEnvRef(v string) bool { return envRefRe.MatchString(v) }
+func IsEnvRef(v string) bool {
+	r, err := secretref.Parse(v)
+	return err == nil && r.Kind == secretref.Env
+}
 
-// ValidateKeyPath refuses a keyPath that is not a reference. A reference is `env:NAME` (the
-// variable holds a path to the key) or a path. Anything else, and anything that carries key
+// IsRef reports whether v is a well-formed secret reference a committed file may hold: env: or
+// file:, the shared type in internal/secretref. cmd: runs a program, and a file that is committed
+// must not be able to make the machine reading it run one, so it is not accepted here.
+func IsRef(v string) bool {
+	r, err := secretref.Parse(v)
+	return err == nil && r.Kind != secretref.Cmd
+}
+
+// ValidateKeyPath refuses a keyPath that is not a reference. A reference is `env:NAME` or
+// `file:PATH` (the variable or file holds a path to the key) or a path. Anything else, and anything that carries key
 // material, is a literal that would be committed.
 func ValidateKeyPath(vms []VM) error {
 	for i, v := range vms {
@@ -199,11 +210,15 @@ func checkKeyRef(field, v string) error {
 	if v == "" {
 		return fmt.Errorf("%s: required, as env:NAME or a path to the key", field)
 	}
-	if IsEnvRef(v) {
+	if secretref.IsRef(v) {
+		r, err := secretref.Parse(v)
+		switch {
+		case err != nil:
+			return fmt.Errorf("%s: %w", field, err)
+		case r.Kind == secretref.Cmd:
+			return fmt.Errorf("%s: cmd: is not accepted in a project file: use env:NAME or file:PATH", field)
+		}
 		return nil
-	}
-	if strings.HasPrefix(v, "env:") {
-		return fmt.Errorf("%s: %q is not a valid env:NAME reference", field, v)
 	}
 	if strings.ContainsAny(v, "\r\n") || strings.Contains(v, "PRIVATE KEY") || strings.HasPrefix(v, "ssh-") {
 		return fmt.Errorf("%s: holds key material, not a reference: use env:NAME or a path to the key", field)
@@ -255,17 +270,17 @@ func walkSecrets(path string, v any, secret bool) error {
 			return fmt.Errorf("%s: holds a private key: keep the key out of the file and reference it as env:NAME or a path", path)
 		}
 		if secret && !emptyOrRef(t) {
-			return fmt.Errorf("%s: a field named like a secret holds a literal value: write env:NAME instead", path)
+			return fmt.Errorf("%s: a field named like a secret holds a literal value: write a reference (env:NAME or file:PATH) instead", path)
 		}
 		if hostKeyPathRe.MatchString(path) {
 			t = strings.Join(strings.Fields(t)[min(2, len(strings.Fields(t))):], " ") // only the comment
 		}
 		if tokenRe.MatchString(t) {
-			return fmt.Errorf("%s: holds what looks like an access token: write env:NAME instead", path)
+			return fmt.Errorf("%s: holds what looks like an access token: write a reference (env:NAME or file:PATH) instead", path)
 		}
 	default:
 		if secret && !emptyOrRef(v) {
-			return fmt.Errorf("%s: a field named like a secret holds a literal value: write env:NAME instead", path)
+			return fmt.Errorf("%s: a field named like a secret holds a literal value: write a reference (env:NAME or file:PATH) instead", path)
 		}
 	}
 	return nil
@@ -276,7 +291,7 @@ func emptyOrRef(v any) bool {
 	case nil:
 		return true
 	case string:
-		return t == "" || IsEnvRef(t)
+		return t == "" || IsRef(t)
 	case bool:
 		return !t
 	case map[string]any, []any:
@@ -312,11 +327,12 @@ func (p *Project) Store(dir string, getenv func(string) string) (*Store, error) 
 }
 
 func resolveKey(field, ref, dir string, getenv func(string) string) (string, error) {
-	if IsEnvRef(ref) {
-		name := strings.TrimPrefix(ref, "env:")
-		v := getenv(name)
-		if v == "" {
-			return "", fmt.Errorf("%s: %s is not set: export it as the path to the SSH key", field, name)
+	if secretref.IsRef(ref) {
+		res := secretref.Default()
+		res.Getenv = getenv
+		v, err := res.Resolve(ref)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w: it must hold the path to the SSH key", field, err)
 		}
 		return v, nil
 	}

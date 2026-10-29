@@ -176,6 +176,55 @@ runner is not touched.
   page by hand. If that local removal fails too, the command fails and leaves the directory in place
   for another try.
 
+### Behind an SSH forced command (a restricted CI key)
+
+An owner can pin a CI key in `authorized_keys` with `command="..."`. sshd then throws away whatever the client sends and runs the pinned script. baryovm sends shell, so on such a key every command appears to succeed while baryovm runs nothing.
+
+baryovm now checks for this. Before it sends shell to a VM it echoes a random token and refuses unless the token comes back. A swallowed command is an error that names the cause, not a silent success.
+
+To run baryovm over a restricted key, the forced command is baryovm itself:
+
+```sh
+baryovm vm remote install <vm>          # run this with an unrestricted key
+baryovm vm remote install <vm> --public-key "ssh-ed25519 AAAA... ci"
+baryovm vm remote set <vm> forced       # on the machine that holds the restricted key
+```
+
+`vm remote install` uploads a linux binary to `/usr/local/bin/baryovm-remote` (root-owned), writes a template `/etc/baryovm/remote.json` if there is none (an existing file is kept), and prints the `authorized_keys` line to add:
+
+```text
+command="/usr/local/bin/baryovm-remote remote serve",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... ci
+```
+
+It never edits `authorized_keys`. Without `--binary` it uses the running binary when that is a linux build for the VM's architecture, otherwise pass `--binary <path>`. The binary is not downloaded for you.
+
+`/etc/baryovm/remote.json` is the VM's allowlist. The client sends only a stack name; everything else comes from this file:
+
+```json
+{
+  "stacks": {
+    "playground": {
+      "dir": "/opt/playground",
+      "sudo": true,
+      "services": ["api"],
+      "healthUrl": "http://127.0.0.1:8080/health",
+      "dbContainer": "pg",
+      "dbName": "app",
+      "envFile": ".env",
+      "backupDir": "/var/backups/app",
+      "keep": 7,
+      "ops": ["update", "backup", "status", "logs"]
+    }
+  }
+}
+```
+
+A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
+
+The request is `baryovm-remote v1 <op> <stack>`, parsed without a shell. `<op>` is `update`, `backup`, `status` or `logs`, and `<stack>` matches `^[a-z0-9][a-z0-9-]{0,62}$` and must be a key in the file. `logs` returns the last 200 lines per service. `exec` and `release` are not available: exec is arbitrary shell and release uploads files.
+
+On a VM marked `forced` (`vm add --remote forced` or `vm remote set <vm> forced`) only `stack update`, `stack backup`, `stack ps` (the status op) and `stack logs` work, and they take no `--service`, `--tail`, `--dry-run` or `--no-backup`. `stack update --auto` is accepted so a scheduled run can use `--notify`, and still needs the stack marked `autoUpdate` on this machine; the backup and health settings come from the VM's allowlist. Every other command on that VM is refused before anything is sent. Replies come back as the usual `-o json` envelope.
+
 ## Hardening, and seeing what hits the box
 
 A VM with a public SSH port is found within minutes and guessed at continuously.
@@ -483,6 +532,14 @@ the sync list, so secrets can't be wiped by `--delete`.
   ]
 }
 ```
+
+A build `args` value is a literal or a reference (`env:NAME`, `file:PATH`; `cmd:` is not accepted in a
+manifest, since a committed file must not run a program). Either way the value is sent on stdin and
+exported in the build's own shell, and the command carries only `--build-arg NAME`, so it is not in
+`ps` on the VM. A build arg is still baked into image history if the Dockerfile uses it in a `RUN`.
+For a value that must stay out of the image, add `"secrets": { "npmrc": "env:NPM_TOKEN" }` to the
+build and read it with `RUN --mount=type=secret,id=npmrc` (BuildKit). Existing manifests keep working.
+A literal value that starts with `env:`, `file:` or `cmd:` is read as a reference, not as text.
 
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
@@ -1023,6 +1080,51 @@ Backup config flags on `stack add`: `--db-container`, `--db-name`, `--db-user`
 (default postgres), `--env-file` (relative to the project dir), `--backup-dir`
 (default `~/<name>-backups`), `--keep` (default 14). Restore refuses without `--yes`.
 
+### Backup strategies
+
+A stack's backup is a list of strategies, each declaring how it is dumped and how it is restored.
+`stack add --db-container ... --db-name ...` writes a list with one `postgres-container` strategy.
+A `fleet.json` written before this (with `dbContainer`, `dbName`, `dbUser`, `noDatabase`) still loads:
+those fields read as the first strategy, or as an empty list for `noDatabase`, and run the same
+scripts as before. For anything else, store a JSON array with `baryovm stack set-backup <name> --file
+backup.json` (`--clear` removes it). Unknown keys and unknown kinds are refused when it is stored.
+
+```json
+[
+  { "kind": "postgres-container", "container": "db", "database": "app" },
+  { "kind": "postgres-remote", "host": "mydb.postgres.database.azure.com", "database": "app",
+    "user": "admin", "envFile": ".env", "passwordVar": "DB_PASSWORD" },
+  { "kind": "command", "dump": "redis-cli --rdb -", "restore": "cat > /data/dump.rdb" },
+  { "kind": "files", "paths": ["/srv/app/uploads"] }
+]
+```
+
+- `postgres-container`: `container`, `database`, `user` (default postgres). `pg_dump` inside the container.
+- `postgres-remote`: a database that is not on the VM, such as RDS, Azure Database for PostgreSQL or
+  Cloud SQL. `host`, `database`, `port` (5432), `user` (postgres), `image` (`postgres:17`, pin it to
+  the server's major version). `pg_dump` runs in a throwaway client container on the VM. The password
+  comes from the stack's env file on the VM (`envFile`, relative to the project dir, `passwordVar`
+  names the key, default `PGPASSWORD`) or from a libpq password file on the VM (`passFile`, absolute, no `:`).
+  It is handed to the container with `--env-file` or a read-only mount, never on a command line. The
+  env file must be plain `KEY=value` lines and the password value must not be quoted (docker keeps
+  the quotes as part of the value); add `PGSSLMODE=require` there if the provider needs it.
+  Restore uses `pg_restore --clean --if-exists --no-owner`.
+- `command`: `dump` writes the backup to stdout, `restore` reads it from stdin. Run through
+  `sudo -n` as a whole line when the stack has `--sudo`, like release hooks.
+- `files`: `paths`, absolute. A tar, restored under `/`.
+
+`restore` brings back the whole set that shares the timestamp of the file named by `--file` (the
+newest set by default) and checks every file exists before it replaces anything. A release and `stack
+backup` run every strategy under one timestamp and stop at the first failure. Each file is written as
+`<name>.partial` and renamed once its command succeeds, so a failed backup leaves no file under the
+real name and the default restore picks the newest set that is complete. On a first release a
+`postgres-container` strategy whose container is not there yet is skipped, as before. The
+`--drill` needs a `postgres-container` strategy.
+
+`"backup": []` says the stack has nothing to back up. `stack update --auto` accepts that (it replaces
+`noDatabase`, which still works) and refuses a stack that declared nothing at all. Not built yet:
+`provider-snapshot` and `volume` kinds, and where backups are kept (#39).
+
 `stack backup --dry-run` prints the backup script and `stack restore --dry-run` prints the restore
 script, both without connecting. `restore --dry-run` needs no `--yes` (nothing is replaced) and says
 which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
@@ -1052,6 +1154,7 @@ result is not healthy:
 baryovm stack set-update barako --health-url http://127.0.0.1:5005/health --auto
 baryovm stack set-update baryoclub --health-url http://127.0.0.1:8091/health --no-auto
 baryovm stack set-verify barako --file verify.json   # store a verify spec, or --clear
+baryovm stack set-backup barako --file backup.json   # store backup strategies, or --clear
 
 baryovm stack update barako --dry-run   # report what is pending, change nothing
 baryovm stack update barako             # apply, verify, roll back if it does not come up
@@ -1087,6 +1190,31 @@ Run it from cron on the VM, or from anywhere with SSH access:
 0 4 * * * /usr/local/bin/baryovm stack update barako --auto -o json >> ~/baryovm-update.log 2>&1
 ```
 
+#### Unattended updates
+
+A schedule that depends on a laptop being open is not maintenance. Run it from CI: a scheduled
+GitHub Actions workflow has an always-on runner, and the agentless model needs nothing on the VM.
+Copy [docs/examples/scheduled-update.yml](docs/examples/scheduled-update.yml) into
+`.github/workflows/`. It installs baryovm, pins the VM's host key, and runs
+`stack update <name> --auto --notify "$NOTIFY_URL" -o json` on a cron.
+
+A failed unattended run has to reach a person. `--notify <url>` (or the environment variable
+`BARYOVM_NOTIFY_URL`, which keeps a token out of the process list) posts the JSON result envelope to a
+webhook when an `--auto` run fails or rolls back. `--notify-on always` posts every run, `failure` is
+the default. Rules:
+
+- https only. Plain http is accepted for `localhost`, `127.0.0.1` and `::1`, for tests.
+- 10 second timeout, one retry at most (on a network error or a 5xx), redirects are not followed, and
+  the body is capped at 64 KiB (an oversized envelope loses its `data`, not its verdict).
+- `--notify` needs `--auto`. The environment variable is ignored without it.
+- The URL usually holds a token, so it is never printed. Output shows scheme and host only.
+- If the notification fails, the exit code is non-zero and the envelope carries `data.notify` with
+  `ok: false` and the reason. It never replaces the update's own result or error.
+
+The posted body is the same envelope `-o json` prints, so it carries whatever stable error code the
+envelope has. The workflow file was written to match the commands above but has not been run on a live
+runner.
+
 Verified against a stack whose image was swapped for one that exits on start: the update was applied,
 the health check failed, the previous image was restored and the site was serving again, and
 separately, that a genuine new image is kept when it comes up healthy.
@@ -1098,10 +1226,30 @@ baryovm deploy --vm oracle --image nginx:alpine --name site -p 80:80
 baryovm deploy --vm oracle --image app:latest --name app \
   -p 127.0.0.1:8080:8080 -e KEY=value --pull
 baryovm deploy --vm oracle --image app:latest --name app -e KEY=value --dry-run
+
+# secrets by reference: resolved on this machine, never stored
+baryovm deploy --vm oracle --image app:latest --name app \
+  --env-ref API_KEY=env:APP_API_KEY \
+  --env-ref DB_PASSWORD=file:~/.secrets/db \
+  --env-ref GH_TOKEN="cmd:gh auth token"
 ```
 
+Secret references (`--env-ref KEY=<reference>`, also on `up`) come in three kinds and nothing else:
+`env:NAME` (a local environment variable), `file:PATH` (a local file, trailing newline trimmed) and
+`cmd:<command>` (the stdout of a signed-in CLI such as `op read op://vault/item/field` or
+`gh auth token`). A `cmd:` reference is split into arguments and run directly, with no shell, and a
+30 second timeout; its stderr is never shown. A reference that does not resolve stops the command
+before anything is provisioned or contacted, and the error names the reference, never a value.
+
+Whether the value comes from `-e` or from a reference, it does not go on the remote command line.
+It is sent over the SSH session's stdin into a private file the VM creates with `mktemp` (mode 0600),
+`docker run --env-file` reads it, and the file is removed when the command ends, however it ends.
+Nothing secret shows in `ps` on the VM. A value cannot contain a line break. The container's
+environment is still visible to `docker inspect` on the VM, as it always was.
+
 `--dry-run` prints the docker commands to stderr and in the result's `data`, and opens no
-connection. Env values are masked as `***` in that output.
+connection. Env values are masked as `***` in that output, and references are checked for syntax but
+never resolved, so a dry run reads no secret.
 
 ## Provision + deploy in one (untested, billable)
 

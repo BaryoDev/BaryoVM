@@ -21,6 +21,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/remote"
 	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -34,7 +35,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackTLSCmd(), newStackEnvCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackSetBackupCmd(), newStackTLSCmd(), newStackEnvCmd(),
 		newStackRollbackCmd(), newStackDiscoverCmd(),
 	)
 	return cmd
@@ -84,11 +85,33 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
 		return fleet.Stack{}, "", err
 	}
+	dbFlag := func(legacy func(), strategy func(*backup.Strategy)) func() {
+		return func() {
+			if st.Backup == nil {
+				legacy()
+				return
+			}
+			// Already in the list form: edit the first postgres-container strategy, adding one
+			// when the list has none.
+			list := *st.Backup
+			i := 0
+			for ; i < len(list); i++ {
+				if list[i].Kind == backup.KindPostgresContainer {
+					break
+				}
+			}
+			if i == len(list) {
+				list = append(list, backup.Strategy{Kind: backup.KindPostgresContainer})
+			}
+			strategy(&list[i])
+			st.Backup = &list
+		}
+	}
 	for name, apply := range map[string]func(){
 		"file":         func() { st.File = in.File },
-		"db-container": func() { st.DBContainer = in.DBContainer },
-		"db-name":      func() { st.DBName = in.DBName },
-		"db-user":      func() { st.DBUser = in.DBUser },
+		"db-container": dbFlag(func() { st.DBContainer = in.DBContainer }, func(s *backup.Strategy) { s.Container = in.DBContainer }),
+		"db-name":      dbFlag(func() { st.DBName = in.DBName }, func(s *backup.Strategy) { s.Database = in.DBName }),
+		"db-user":      dbFlag(func() { st.DBUser = in.DBUser }, func(s *backup.Strategy) { s.User = in.DBUser }),
 		"env-file":     func() { st.EnvFile = in.EnvFile },
 		"backup-dir":   func() { st.BackupDir = in.BackupDir },
 		"keep":         func() { st.Keep = in.Keep },
@@ -97,6 +120,18 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 	} {
 		if in.Changed(name) {
 			apply()
+		}
+	}
+	// A complete legacy database config is written in the list form. A half-registered one (only
+	// a name, say) stays as typed until the other half arrives.
+	if st.Backup == nil && st.DBContainer != "" && st.DBName != "" {
+		list, _ := st.BackupStrategies()
+		st.Backup = &list
+		st.DBContainer, st.DBName, st.DBUser, st.NoDatabase = "", "", "", false
+	}
+	if st.Backup != nil {
+		if err := backup.ValidateStrategies(*st.Backup); err != nil {
+			return fleet.Stack{}, "", err
 		}
 	}
 	store.UpsertStack(st)
@@ -305,7 +340,7 @@ type remoteSession interface {
 // dialRelease connects to a VM for a release. A variable for the same reason as runOnVM: so the whole
 // command, in its real order, can run against a fake VM.
 var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
-	c, err := sshx.Dial(vm.Target())
+	c, err := dialChecked(vm)
 	if err != nil {
 		return nil, err
 	}
@@ -402,6 +437,17 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 		return nil
 	}
 
+	// Build args and secrets that are references are resolved now, before the first connection,
+	// so one that does not resolve stops the release with nothing sent (#93). A manifest is a
+	// committed file, so cmd: is not accepted here.
+	var buildInputs []string
+	if !noBuild {
+		buildInputs, err = m.BuildInputs(fileResolver())
+		if err != nil {
+			return fail(err)
+		}
+	}
+
 	// The progress record. It is written under the host lock before the first step that
 	// changes anything, so two releases cannot both read "nothing in progress" (#136).
 	sc, err := dialRelease(vm)
@@ -453,10 +499,11 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 
 	// Safety first: back up before releasing (unless opted out / no DB configured).
-	if !noBackup && st.DBContainer != "" && st.DBName != "" {
+	if !noBackup && hasBackupStrategies(st) {
 		// A first release has no database container yet, so there is nothing to dump. That is
 		// skipped with one line. A container that exists and fails to dump still stops the
 		// release, and so does a probe that cannot tell (it falls through to the backup).
+		// Every strategy runs before anything changes and the first failure stops the release.
 		bcfg := releaseBackupConfig(st, m)
 		if err := rr.step("backup", func() error {
 			skip := false
@@ -466,15 +513,13 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 					return err
 				}
 				defer c.Close()
-				if ok, e := backup.ContainerExists(c, bcfg); e == nil && !ok {
-					skip = true
-				}
+				skip = backup.SkipMissingContainers(c, &bcfg)
 				return nil
 			}); err != nil {
 				return fmt.Errorf("pre-release backup failed: %w", err)
 			}
 			if skip {
-				ui.Notef("no database container named %s yet, skipping the pre-release backup", st.DBContainer)
+				ui.Notef("no database container named %s yet, skipping the pre-release backup", bcfg.DBContainer)
 				return nil
 			}
 			if err := ui.Step("backup", func() error {
@@ -491,7 +536,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 				}
 				return err
 			}); err != nil {
-				return fmt.Errorf("pre-release backup failed: %s", backupCause(err, st.DBContainer))
+				return fmt.Errorf("pre-release backup failed: %s", backupCause(err, bcfg.DBContainer))
 			}
 			return nil
 		}); err != nil {
@@ -539,11 +584,11 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 
 	if !noBuild {
-		for _, b := range m.Builds {
-			b := b
+		for i, b := range m.Builds {
+			b, input := b, buildInputs[i]
 			if err := rr.step("build:"+b.Image, func() error {
 				return ui.Step("build "+b.Image, func() error {
-					out, e := c.Run(m.BuildCmd(b))
+					out, e := runBuild(c, m.BuildCmd(b), input, b.HasInput())
 					if e != nil {
 						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
 					}
@@ -740,6 +785,27 @@ func verifyLabel(source string) string {
 	return source
 }
 
+// runBuild runs one build command. A build with args or secrets sends their values on stdin, which
+// needs a session that can take input; the real one can. Anything that comes back is stripped of
+// those values before it can reach an error.
+func runBuild(c sshx.Runner, cmd, input string, hasInput bool) (string, error) {
+	if !hasInput {
+		return c.Run(cmd)
+	}
+	ri, ok := c.(interface {
+		RunInput(cmd string, stdin string) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("this session cannot send build args on stdin")
+	}
+	out, err := ri.RunInput(cmd, input)
+	out = release.Redact(input, out)
+	if err != nil {
+		err = fmt.Errorf("%s", release.Redact(input, err.Error()))
+	}
+	return out, err
+}
+
 func lastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) > n {
@@ -776,12 +842,45 @@ func releaseBackupConfig(st *fleet.Stack, m *release.Manifest) backup.Config {
 }
 
 func backupConfig(st *fleet.Stack) backup.Config {
-	return backup.Config{
+	cfg := backup.Config{
 		Sudo: st.Sudo,
 		Name: st.Name, Dir: st.Dir, EnvFile: st.EnvFile,
 		DBContainer: st.DBContainer, DBName: st.DBName, DBUser: st.DBUser,
 		BackupDir: st.BackupDir, Keep: st.Keep,
 	}
+	list, _ := st.BackupStrategies()
+	// The first postgres-container strategy fills the single-database fields, which the drill and
+	// the container probe read. A list that is exactly that one strategy stays in the original
+	// form, so a legacy stack and its migrated twin run the same script.
+	for _, s := range list {
+		if s.Kind == backup.KindPostgresContainer {
+			cfg.DBContainer, cfg.DBName, cfg.DBUser = s.Container, s.Database, s.User
+			break
+		}
+	}
+	if len(list) == 1 && list[0].Kind == backup.KindPostgresContainer {
+		return cfg
+	}
+	cfg.Strategies = list
+	return cfg
+}
+
+// noBackupConfigError says why a stack cannot be backed up or restored.
+func noBackupConfigError(st *fleet.Stack) error {
+	if list, declared := st.BackupStrategies(); declared && len(list) == 0 {
+		return fmt.Errorf("stack %q declares no backup (backup is an empty list): there is nothing to back up or restore", st.Name)
+	}
+	return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`, or declare strategies with `baryovm stack set-backup %s --file backup.json`", st.Name, st.Name, st.Name)
+}
+
+func errDrillNeedsContainer(name string) error {
+	return fmt.Errorf("stack %q has no postgres-container strategy: the restore drill loads a dump into a throwaway postgres container and needs one", name)
+}
+
+// hasBackupStrategies reports whether the stack declares at least one strategy.
+func hasBackupStrategies(st *fleet.Stack) bool {
+	list, _ := st.BackupStrategies()
+	return len(list) > 0
 }
 
 // runStackBackup resolves a stack (which must have backup config), dials its VM,
@@ -795,15 +894,23 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 	if st == nil {
 		return fmt.Errorf("no stack named %q", name)
 	}
-	if st.DBContainer == "" || st.DBName == "" {
-		return fmt.Errorf("stack %q has no backup config: set --db-container and --db-name via `baryovm stack add %s ...`", name, name)
-	}
 	vm := store.Find(st.VM)
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
 	}
 	if err := requireLinux(vm, action); err != nil {
 		return err
+	}
+	// On a forced VM the database settings live in the VM's allowlist, not in this fleet, so the
+	// local check below does not apply and only `stack backup` is a request the VM understands.
+	if vm.Forced() {
+		if action != "stack backup" {
+			return forcedOnly(vm, action)
+		}
+		return forcedOp(vm, name, action, remote.OpBackup)
+	}
+	if !hasBackupStrategies(st) {
+		return noBackupConfigError(st)
 	}
 	var o opOutput
 	err = ui.Step(step, func() error {
@@ -907,6 +1014,9 @@ func runStackDrill(name, file string) error {
 	drill := backup.DrillContainerName(name, time.Now().UTC().Format("20060102-150405"))
 	return runStackBackup(name, action, fmt.Sprintf("restore drill for %s", name),
 		func(c sshx.Runner, st *fleet.Stack) (opOutput, error) {
+			if backupConfig(st).DBContainer == "" {
+				return opOutput{}, errDrillNeedsContainer(name)
+			}
 			r, err := backup.Drill(c, backupConfig(st), file, drill)
 			if err != nil {
 				return opOutput{errData: r}, fmt.Errorf("restore drill failed (the live database was not touched, throwaway container removed: %t): %w", r.Removed, err)
@@ -1043,6 +1153,11 @@ func newStackLogsCmd() *cobra.Command {
 		Short: "Show recent logs for the stack",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("service") || cmd.Flags().Changed("tail") {
+				if err := refuseForcedFlags(args[0], "stack logs", "--service and --tail"); err != nil {
+					return err
+				}
+			}
 			return runStackOpDescribed(args[0], "stack logs", fmt.Sprintf("fetching logs for %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (opOutput, error) {
 					r, err := compose.ReadLogs(c, cs, svcs, tail)
@@ -1082,7 +1197,7 @@ func bareOutput(out string, err error) (opOutput, error) {
 // app and the MCP server read, and pinning that in a test means running the command with no host to
 // dial. Tests replace this; nothing else should.
 var runOnVM = func(vm *fleet.VM, fn func(c sshx.Runner) (opOutput, error)) (opOutput, error) {
-	c, err := sshx.Dial(vm.Target())
+	c, err := dialChecked(vm)
 	if err != nil {
 		return opOutput{}, err
 	}
@@ -1115,6 +1230,15 @@ func runStackOpDescribed(name, action, step string, fn func(c sshx.Runner, cs co
 	}
 	if err := requireLinux(vm, action); err != nil {
 		return err
+	}
+	if vm.Forced() {
+		switch action {
+		case "stack ps":
+			return forcedOp(vm, name, action, remote.OpStatus)
+		case "stack logs":
+			return forcedOp(vm, name, action, remote.OpLogs)
+		}
+		return forcedOnly(vm, action)
 	}
 
 	var o opOutput

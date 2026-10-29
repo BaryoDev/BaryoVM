@@ -33,6 +33,7 @@ baryovm vm [flags]
 * [baryovm vm ping](baryovm_vm_ping.md)	 - SSH in and report host + Docker status
 * [baryovm vm provision](baryovm_vm_provision.md)	 - Provision a new cloud VM and register it in the fleet (plan only without --yes)
 * [baryovm vm prune](baryovm_vm_prune.md)	 - Free disk space on a VM, planning first
+* [baryovm vm remote](baryovm_vm_remote.md)	 - Run baryovm behind an SSH forced command (a restricted CI key)
 * [baryovm vm remove](baryovm_vm_remove.md)	 - Remove a VM from the fleet (does not destroy the machine)
 * [baryovm vm runner](baryovm_vm_runner.md)	 - Install a GitHub Actions self-hosted runner on a VM
 * [baryovm vm threats](baryovm_vm_threats.md)	 - Show what a VM is being attacked with

@@ -13,20 +13,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/BaryoDev/BaryoVM/internal/secretref"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
 // Build describes one image to build on the VM.
 type Build struct {
-	Image      string            `json:"image"`             // tag, e.g. app:latest
-	Dockerfile string            `json:"dockerfile"`        // relative to remoteRoot
-	Context    string            `json:"context"`           // build context, relative to remoteRoot
-	Args       map[string]string `json:"args,omitempty"`    // --build-arg values
-	NoCache    bool              `json:"noCache,omitempty"` // pass --no-cache
+	Image      string `json:"image"`      // tag, e.g. app:latest
+	Dockerfile string `json:"dockerfile"` // relative to remoteRoot
+	Context    string `json:"context"`    // build context, relative to remoteRoot
+	// Args are --build-arg values: a literal, or a secret reference (env:NAME, file:PATH). Either
+	// way the value reaches the VM on stdin and is exported in the build's own shell, and the
+	// command line carries only `--build-arg KEY`, so it is not in `ps` (#93).
+	Args map[string]string `json:"args,omitempty"`
+	// Secrets are BuildKit secrets, id to reference. The Dockerfile reads one with
+	// `RUN --mount=type=secret,id=ID`, so the value is never an ARG and never in image history.
+	Secrets map[string]string `json:"secrets,omitempty"`
+	NoCache bool              `json:"noCache,omitempty"` // pass --no-cache
 }
 
 // Manifest is the whole release recipe. Kept in the project (e.g. baryovm.release.json).
@@ -150,6 +158,11 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 			return nil, fmt.Errorf("%s: requireLocal entries must not be empty", path)
 		}
 	}
+	for _, b := range m.Builds {
+		if err := b.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
 	if m.TLS != nil {
 		if err := m.TLS.Validate(m.RemoteRoot); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -229,20 +242,143 @@ func (m *Manifest) RsyncCmdKnownHosts(sub, user, host string, port int, key, kno
 	return exec.Command("rsync", args...) // #nosec G204 -- fixed rsync binary, arguments built from the manifest
 }
 
-// BuildCmd is the remote `docker build` command for one image.
+// Validate checks what can be checked without touching the machine: arg names, secret ids, and
+// that every reference parses. A reference that does not parse is an error and not a literal.
+func (b Build) Validate() error {
+	for k, v := range b.Args {
+		if !secretref.ValidName(k) {
+			return fmt.Errorf("build %s: arg %q is not a valid name", b.Image, k)
+		}
+		if secretref.IsRef(v) {
+			if _, err := secretref.Parse(v); err != nil {
+				return fmt.Errorf("build %s: arg %s: %w", b.Image, k, err)
+			}
+		}
+	}
+	for id, ref := range b.Secrets {
+		if id == "" || strings.ContainsAny(id, ", =\t") {
+			return fmt.Errorf("build %s: secret id %q must be a plain word", b.Image, id)
+		}
+		if _, err := secretref.Parse(ref); err != nil {
+			return fmt.Errorf("build %s: secret %s: %w", b.Image, id, err)
+		}
+	}
+	return nil
+}
+
+// secretVar is the environment variable that carries the i-th secret (in id order) to docker.
+func secretVar(i int) string { return fmt.Sprintf("BARYOVM_SECRET_%d", i) }
+
+// BuildCmd is the remote `docker build` command for one image. It never holds a value: with args or
+// secrets it is a script that reads `export` lines from stdin (see BuildInput) and names the args
+// without values, so docker takes them from the environment.
 func (m *Manifest) BuildCmd(b Build) string {
+	cmd := m.buildScript(b)
+	if !b.HasInput() {
+		return cmd
+	}
+	// The whole script runs under one shell so that, with sudo, the variables are set inside the
+	// root process: sudo drops the caller's environment.
+	script := `eval "$(cat)" && ` + cmd
+	if m.Sudo {
+		return sshx.SudoShell(true, script)
+	}
+	return "sh -c " + sshx.Quote(script)
+}
+
+// buildScript is the docker build line itself, before any stdin wrapper.
+func (m *Manifest) buildScript(b Build) string {
 	q := sshx.Quote
-	cmd := sshx.Sudo(m.Sudo, "docker build")
+	plain := len(b.Args) == 0 && len(b.Secrets) == 0
+	cmd := "docker build"
+	if plain {
+		cmd = sshx.Sudo(m.Sudo, cmd)
+	} else if len(b.Secrets) > 0 {
+		cmd = "DOCKER_BUILDKIT=1 " + cmd
+	}
 	if b.NoCache {
 		cmd += " --no-cache"
 	}
 	cmd += " -f " + q(m.RemoteRoot+"/"+b.Dockerfile)
 	// Deterministic arg order.
 	for _, k := range sortedKeys(b.Args) {
-		cmd += " --build-arg " + q(k+"="+b.Args[k])
+		cmd += " --build-arg " + q(k)
+	}
+	for i, id := range sortedKeys(b.Secrets) {
+		cmd += " --secret " + q("id="+id+",env="+secretVar(i))
 	}
 	cmd += " -t " + q(b.Image) + " " + q(m.RemoteRoot+"/"+b.Context)
 	return cmd
+}
+
+// HasInput reports whether the build needs BuildInput on stdin.
+func (b Build) HasInput() bool { return len(b.Args) > 0 || len(b.Secrets) > 0 }
+
+// BuildInput resolves the build's references and returns the stdin BuildCmd reads: one
+// `export NAME='value'` line per arg and secret. An error names the arg or secret, never a value.
+func BuildInput(b Build, res secretref.Resolver) (string, error) {
+	var sb strings.Builder
+	for _, k := range sortedKeys(b.Args) {
+		// The name lands unquoted in an export line the VM evaluates, so it must be a plain name.
+		if !argName.MatchString(k) {
+			return "", fmt.Errorf("build %s: arg name %q is not a shell variable name (letters, digits and _)", b.Image, k)
+		}
+		v := b.Args[k]
+		if secretref.IsRef(v) {
+			r, err := res.Resolve(v)
+			if err != nil {
+				return "", fmt.Errorf("build %s: arg %s: %w", b.Image, k, err)
+			}
+			v = r
+		}
+		if strings.ContainsAny(v, "\r\n") {
+			return "", fmt.Errorf("build %s: arg %s has a line break, which cannot be redacted from remote output", b.Image, k)
+		}
+		sb.WriteString("export " + k + "=" + sshx.Quote(v) + "\n")
+	}
+	for i, id := range sortedKeys(b.Secrets) {
+		v, err := res.Resolve(b.Secrets[id])
+		if err != nil {
+			return "", fmt.Errorf("build %s: secret %s: %w", b.Image, id, err)
+		}
+		if strings.ContainsAny(v, "\r\n") {
+			return "", fmt.Errorf("build %s: secret %s has a line break, which cannot be redacted from remote output", b.Image, id)
+		}
+		sb.WriteString("export " + secretVar(i) + "=" + sshx.Quote(v) + "\n")
+	}
+	return sb.String(), nil
+}
+
+var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Redact removes every value held in a BuildInput from msg. Remote output (docker's stderr) is the
+// one place a value could come back, so it passes through here before it becomes an error.
+func Redact(input, msg string) string {
+	for _, line := range strings.Split(input, "\n") {
+		_, q, ok := strings.Cut(line, "=")
+		if !ok || len(q) < 2 {
+			continue
+		}
+		v := strings.ReplaceAll(q[1:len(q)-1], `'\''`, "'")
+		if v != "" {
+			msg = strings.ReplaceAll(msg, v, "***")
+		}
+	}
+	return msg
+}
+
+// BuildInputs resolves every build's references up front, indexed like m.Builds, so a reference
+// that does not resolve fails before the first remote call.
+func (m *Manifest) BuildInputs(res secretref.Resolver) ([]string, error) {
+	out := make([]string, len(m.Builds))
+	for i, b := range m.Builds {
+		in, err := BuildInput(b, res)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = in
+	}
+	return out, nil
 }
 
 // quoteRsync single-quotes one argument of the -e remote-shell string, using rsync's convention

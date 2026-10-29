@@ -32,6 +32,13 @@ down.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.
+- **Secret references**. A secret reaches a deploy as a reference (`env:NAME`, `file:PATH`, or
+  `cmd:<command>` on the command line), resolved on your machine at use time and never stored. The
+  value is sent over the SSH session's stdin, into an owner-only (`0600`) file for `docker run
+  --env-file` or into the build's own shell, and is never on a local or remote command line. It is
+  absent from errors, `-o json` output, the audit log and `--dry-run` output. A `cmd:` reference is
+  run without a shell, with a timeout and with stderr discarded, and is refused when it comes from a
+  committed file (a project file or release manifest).
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.
@@ -45,6 +52,15 @@ down.
   the `github-runner` user's shell and exported there for `config.sh`. It is never on a command
   line, never written to `fleet.json` or anywhere else by BaryoVM, and is scrubbed from any error
   or JSON output before it leaves the process.
+
+- **Forced-command wrapper**. `baryovm remote serve`, when pinned as an SSH forced command, parses
+  `SSH_ORIGINAL_COMMAND` with no shell and accepts only `baryovm-remote v1 <op> <stack>` for
+  `update`, `backup`, `status` and `logs`. No byte of the request reaches a command line: the
+  stack's directory, services, health URL and database settings come from `/etc/baryovm/remote.json`,
+  and each is quoted with `sshx.Quote`. The wrapper refuses to run if that file or its directory is
+  not owned by root, is writable by group or others, or is a symlink. `exec` and `release` are not
+  offered. On other VMs baryovm echoes a random token first and refuses if a forced command
+  swallowed it.
 
 ## Your responsibilities
 

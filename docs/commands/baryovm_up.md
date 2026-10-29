@@ -25,6 +25,7 @@ baryovm up <name> [flags]
       --container string      container name (required)
       --dry-run               print the plan without creating anything (this is already the default without --yes)
   -e, --env stringArray       environment KEY=value (repeatable)
+      --env-ref stringArray   environment KEY=<reference> (repeatable): env:NAME, file:PATH or cmd:<command>, resolved here, never stored
   -h, --help                  help for up
       --host strings          hostname that will be served from this VM, checked against --http-from/--https-from before creating (repeatable)
       --http-from strings     limit port 80 to these CIDRs or the cloudflare preset (default: open)

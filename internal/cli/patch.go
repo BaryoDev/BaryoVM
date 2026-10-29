@@ -49,7 +49,7 @@ func newVMPatchCmd() *cobra.Command {
 				DryRun: dryRun,
 				Reboot: reboot,
 				Reconnect: func() (sshx.Runner, error) {
-					return sshx.Dial(vm.Target())
+					return dialChecked(&vm)
 				},
 			}
 			if !reboot && !ui.JSON() && term.IsTerminal(int(os.Stdin.Fd())) {

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,55 @@ func TestRunCmdGolden(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			golden(t, c.name, runCmd(c.spec)+"\n")
 		})
+	}
+}
+
+// #93: the value of `deploy -e TOKEN=x` must not be in anything sent as a command. This failed on
+// the code that wrote `-e 'TOKEN=...'` into the docker run line.
+func TestNoEnvValueInAnyRemoteCommand(t *testing.T) {
+	const val = "x9-sekret-value"
+	spec := Spec{Name: "web", Image: "app:1", Pull: true, Env: map[string]string{"TOKEN": val, "Q": "it's"}}
+	for _, c := range append(Commands(spec), runCmd(spec)) {
+		if strings.Contains(c, val) || strings.Contains(c, "it's") || strings.Contains(c, "-e ") {
+			t.Errorf("a command carries an env value or -e: %s", c)
+		}
+	}
+	golden(t, "run_env_file", runCmd(spec)+"\n")
+	if got := EnvInput(spec); got != "Q=it's\nTOKEN="+val+"\n" {
+		t.Errorf("stdin env file: %q", got)
+	}
+}
+
+func TestEnvFileIsOwnerOnlyAndRemoved(t *testing.T) {
+	c := runCmd(Spec{Name: "w", Image: "i", Env: map[string]string{"A": "1"}})
+	// mktemp creates 0600; the trap removes it on success and failure.
+	for _, want := range []string{"mktemp", "trap", "rm -f", "--env-file"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("missing %q in %s", want, c)
+		}
+	}
+}
+
+func TestNoEnvKeepsThePlainCommand(t *testing.T) {
+	if got := runCmd(Spec{Name: "w", Image: "i"}); strings.Contains(got, "env-file") || strings.HasPrefix(got, "sh -c") {
+		t.Errorf("no env needs no file: %s", got)
+	}
+}
+
+func TestValidateRefusesBadEnvWithoutTheValue(t *testing.T) {
+	if err := Validate(Spec{Env: map[string]string{"1BAD": "v"}}); err == nil {
+		t.Error("bad key")
+	}
+	err := Validate(Spec{Env: map[string]string{"OK": "line1\nsekret-line2"}})
+	if err == nil || strings.Contains(err.Error(), "sekret") {
+		t.Errorf("want an error naming the key only: %v", err)
+	}
+}
+
+func TestRedactRemovesValues(t *testing.T) {
+	got := redact("docker: bad TOKEN=abc123 here", map[string]string{"TOKEN": "abc123"})
+	if strings.Contains(got, "abc123") {
+		t.Errorf("not redacted: %s", got)
 	}
 }
 
