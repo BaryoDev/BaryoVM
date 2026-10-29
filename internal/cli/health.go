@@ -10,7 +10,6 @@ import (
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/health"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -87,7 +86,7 @@ func healthAll() error {
 func checkVM(vm fleet.VM) health.Report {
 	var rep health.Report
 	_ = ui.Step("checking "+vm.Name, func() error {
-		c, err := sshx.Dial(vm.Target())
+		c, err := dialRelease(&vm)
 		if err != nil {
 			rep = health.Unreachable(vm.Name, err)
 			return nil
