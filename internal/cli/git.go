@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/guard"
@@ -57,6 +58,9 @@ BARYOVM_OUTPUT=json.
 				return cmd.Help()
 			}
 			args, confirm := guard.ExtractConfirm(args)
+			if name := guard.ConfigEnvSet(os.Environ()); name != "" {
+				return finishGuard(guard.Verdict{Action: "git", Reason: "git refused: " + name + " is set, and it can define an alias or a baryovm.* policy key the guard did not read. Unset it, or set the value with git config"}, "git", args)
+			}
 			globals, _, _ := guard.SplitGit(args)
 			pol, err := loadPolicy(globals)
 			if err != nil {

@@ -1289,7 +1289,7 @@ baryovm cloud gcloud iam service-accounts keys create ~/.config/gcloud/key.json 
   message points at `wrangler secret put NAME`. If the dry run fails, the deploy is refused.
   The `--assets` directory and the `directory` under `[assets]` in the config are scanned too (assets
   are not in the dry-run bundle), and so are `--site` and the `[site] bucket`; assets or a site in the config with no readable directory are refused. A `--dry-run` you give is dropped and never skips the
-  checks. If no config is in the current directory but one is in a parent (up to the git root),
+  checks. If no config is in the current directory but one is in a parent (the search goes to the file system root, past the git root),
   the deploy is refused: run from that directory. A failed
   dry run shows only the last 4 lines of its output. `pages deploy <dir>` and `pages publish <dir>` scan
   the directory. Other commands pass through.

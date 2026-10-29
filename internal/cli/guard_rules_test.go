@@ -680,3 +680,56 @@ func TestQuotedAliasRunsWithTheOriginalWords(t *testing.T) {
 	ran, err = runRule(t, rulesRunner("", a), "git", "c")
 	ruleRefused(t, ran, err, "")
 }
+
+// globalsRecorder remembers the globals each git read was given.
+type globalsRecorder struct {
+	*fakeGuardRunner
+	globals [][]string
+}
+
+func (r *globalsRecorder) Git(globals []string, args ...string) (string, error) {
+	r.globals = append(r.globals, globals)
+	return r.fakeGuardRunner.Git(globals, args...)
+}
+
+func TestRulesAndPolicyAreReadWithoutDashC(t *testing.T) {
+	rr := &globalsRecorder{fakeGuardRunner: rulesRunner("", nil)}
+	old := guardRunner
+	guardRunner = rr
+	t.Cleanup(func() { guardRunner = old })
+	for _, load := range []func() error{
+		func() error { _, err := loadRules([]string{"-C", "/r", "-c", "user.name=x"}); return err },
+		func() error { _, err := loadPolicy([]string{"-C", "/r", "-c", "user.name=x"}); return err },
+		func() error { _, err := loadRegistryPolicy([]string{"-C", "/r", "-cuser.name=x"}); return err },
+	} {
+		rr.globals = nil
+		if err := load(); err != nil {
+			t.Fatal(err)
+		}
+		if len(rr.globals) == 0 {
+			t.Fatal("no git read happened")
+		}
+		for _, g := range rr.globals {
+			if strings.Join(g, " ") != "-C /r" {
+				t.Errorf("the read was given %q", g)
+			}
+		}
+	}
+}
+
+func TestCleanGitEnvDropsInjectedConfig(t *testing.T) {
+	got := cleanGitEnv([]string{"PATH=/bin", "GIT_CONFIG_PARAMETERS='x'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=a", "GIT_CONFIG_VALUE_0=b", "GIT_CONFIG_GLOBAL=/dev/null"})
+	if strings.Join(got, " ") != "PATH=/bin GIT_CONFIG_GLOBAL=/dev/null" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestInjectedConfigEnvIsRefused(t *testing.T) {
+	for _, env := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"} {
+		t.Setenv(env, "x")
+		ran, err := runRule(t, rulesRunner("", nil), "git", "push", "origin", "feature")
+		ruleRefused(t, ran, err, env)
+		t.Setenv(env, "")
+		os.Unsetenv(env)
+	}
+}

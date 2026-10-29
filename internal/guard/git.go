@@ -127,6 +127,52 @@ func checkGit(r Runner, args []string, pol Policy, depth int) Verdict {
 	return checkGit(r, next, pol, depth+1)
 }
 
+// configKeyRefused reports whether a lowercase -c key could change what the guard reads: an alias,
+// a policy key, or an include that loads a file with either.
+func configKeyRefused(k string) bool {
+	for _, p := range []string{"alias.", "baryovm.", "include.", "includeif."} {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// StripConfigGlobals drops the -c settings from the global options, so the guard reads policy,
+// rules and aliases from the config files only. Other globals (-C, --git-dir) stay.
+func StripConfigGlobals(globals []string) []string {
+	var out []string
+	for i := 0; i < len(globals); i++ {
+		g := globals[i]
+		switch {
+		case g == "-c":
+			i++
+		case strings.HasPrefix(g, "-c") && len(g) > 2:
+		default:
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// ConfigEnvSet returns the name of an environment variable that sets git config for a command
+// without a -c flag (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, GIT_CONFIG_VALUE_n), or "".
+func ConfigEnvSet(environ []string) string {
+	for _, e := range environ {
+		name, _, _ := strings.Cut(e, "=")
+		if IsConfigEnv(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// IsConfigEnv reports whether an environment variable name injects git config.
+func IsConfigEnv(name string) bool {
+	return name == "GIT_CONFIG_PARAMETERS" || name == "GIT_CONFIG_COUNT" ||
+		strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_")
+}
+
 // refuseConfigGlobals refuses the global options that can define an alias or change config for
 // one run, because the guard cannot see what they do to the command that follows.
 func refuseConfigGlobals(globals []string) (Verdict, bool) {
@@ -138,15 +184,15 @@ func refuseConfigGlobals(globals []string) (Verdict, bool) {
 			bad = g
 		case g == "-c" && i+1 < len(globals):
 			i++
-			if k := strings.ToLower(globals[i]); strings.HasPrefix(k, "alias.") || strings.HasPrefix(k, "baryovm.") {
+			if k := strings.ToLower(globals[i]); configKeyRefused(k) {
 				bad = "-c " + globals[i]
 			}
-		case strings.HasPrefix(g, "-c") && len(g) > 2 && (strings.HasPrefix(strings.ToLower(g[2:]), "alias.") || strings.HasPrefix(strings.ToLower(g[2:]), "baryovm.")):
+		case strings.HasPrefix(g, "-c") && len(g) > 2 && configKeyRefused(strings.ToLower(g[2:])):
 			bad = g
 		}
 		if bad != "" {
 			name, _, _ := strings.Cut(bad, "=")
-			return refuse("git", fmt.Sprintf("git refused: %s can define an alias or set a baryovm.* policy key for one command, which the guard cannot check. Set it with git config instead", name), nil), true
+			return refuse("git", fmt.Sprintf("git refused: %s can define an alias, set a baryovm.* policy key or load a config file for one command, which the guard cannot check. Set it with git config instead", name), nil), true
 		}
 	}
 	return Verdict{}, false

@@ -181,7 +181,7 @@ func CheckWrangler(env CloudEnv, args []string) Verdict {
 		if p, err := parentWranglerConfig(env); err != nil {
 			return refuse(action, action+" refused: "+err.Error(), nil)
 		} else if p != "" {
-			return refuse(action, fmt.Sprintf("%s refused: wrangler would find its config at %s, a parent of this directory, and that cannot be scanned from here. Run baryovm from that directory", action, p), nil)
+			return refuse(action, fmt.Sprintf("%s refused: wrangler would find its config at %s, a parent of this directory (the search goes up to the file system root), and that cannot be scanned from here. Run baryovm from that directory", action, p), nil)
 		}
 	}
 
@@ -267,65 +267,80 @@ func scanDirVerdict(env CloudEnv, action, dir, what string) (Verdict, bool) {
 	return Verdict{}, true
 }
 
-var assetsMention = regexp.MustCompile(`(?m)^\s*\[(?:env\.[^\].]+\.)?assets\]|\bassets\s*=|"assets"\s*:`)
-var assetsDirectory = regexp.MustCompile(`"?\bdirectory"?\s*[=:]\s*["']([^"']+)["']`)
+// A section header or a key named assets, in any spelling: [assets], [env.x.assets], assets = ,
+// assets.directory =, "assets": . A name that merely contains the word (my-assets) does not match.
+var assetsMention = regexp.MustCompile(`(?m)^\s*\[(?:[^\]]*\.)?assets\]|(?:^|[\s,{."'])assets["']?\s*[=:.]`)
+var assetsDirectory = regexp.MustCompile(`["']?\bdirectory["']?\s*[=:]\s*["']([^"']+)["']`)
+var assetsDirectoryKey = regexp.MustCompile(`["']?\bdirectory["']?\s*[=:]`)
 
 // wranglerAssetDirs lists the static asset directories a deploy uploads outside the bundle: the
 // --assets flag and the assets directory in the config. Assets named in the config that cannot be
 // read out of it are a refusal, not a skip.
 func wranglerAssetDirs(args []string, cfg wranglerCfg) ([]string, string) {
-	vals, err := flagValues(args, "--assets")
+	dirs, err := flagValues(args, "--assets")
 	if err != nil {
 		return nil, err.Error()
 	}
-	dirs := vals
-	if cfg.path != "" && assetsMention.MatchString(cfg.text) {
-		base := filepath.Dir(cfg.path)
+	site, err := flagValues(args, "--site")
+	if err != nil {
+		return nil, err.Error()
+	}
+	dirs = append(dirs, site...)
+	if cfg.path == "" {
+		return dirs, ""
+	}
+	base := filepath.Dir(cfg.path)
+	// Every directory or bucket key must resolve to a quoted string. One that does not (a variable,
+	// a number, a spelling the pattern misses) is a refusal, not a skip.
+	if assetsMention.MatchString(cfg.text) {
 		m := assetsDirectory.FindAllStringSubmatch(cfg.text, -1)
-		if len(m) == 0 {
-			return nil, "the config sets assets but its directory cannot be read, so the assets cannot be scanned"
+		if len(m) == 0 || len(m) != len(assetsDirectoryKey.FindAllString(cfg.text, -1)) {
+			return nil, "the config sets assets but a directory cannot be read, so the assets cannot be scanned"
 		}
 		for _, x := range m {
-			dirs = append(dirs, filepath.Join(base, x[1]))
+			dirs = append(dirs, resolveDir(base, x[1]))
 		}
 	}
-	vals, err = flagValues(args, "--site")
-	if err != nil {
-		return nil, err.Error()
-	}
-	dirs = append(dirs, vals...)
-	if cfg.path != "" && siteMention.MatchString(cfg.text) {
-		base := filepath.Dir(cfg.path)
+	if siteMention.MatchString(cfg.text) || siteBucketKey.MatchString(cfg.text) {
 		m := siteBucket.FindAllStringSubmatch(cfg.text, -1)
-		if len(m) == 0 {
-			return nil, "the config sets site but its bucket cannot be read, so the site files cannot be scanned"
+		if len(m) == 0 || len(m) != len(siteBucketKey.FindAllString(cfg.text, -1)) {
+			return nil, "the config sets site but a bucket cannot be read, so the site files cannot be scanned"
 		}
 		for _, x := range m {
-			dirs = append(dirs, filepath.Join(base, x[1]))
+			dirs = append(dirs, resolveDir(base, x[1]))
 		}
 	}
 	return dirs, ""
 }
 
-var siteMention = regexp.MustCompile(`(?m)^\s*\[(?:env\.[^\].]+\.)?site\]|\bsite\s*=|"site"\s*:`)
-var siteBucket = regexp.MustCompile(`"?\bbucket"?\s*[=:]\s*["']([^"']+)["']`)
+// resolveDir reads a directory from a config: relative to the config file, or as given if absolute.
+func resolveDir(base, p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(base, p)
+}
+
+var siteMention = regexp.MustCompile(`(?m)^\s*\[(?:[^\]]*\.)?site\]|(?:^|[\s,{."'])site["']?\s*[=:.]`)
+var siteBucket = regexp.MustCompile(`["']?\bbucket["']?\s*[=:]\s*["']([^"']+)["']`)
+var siteBucketKey = regexp.MustCompile(`["']?\bbucket["']?\s*[=:]`)
 
 func hasConfigFlag(args []string) bool {
 	v, _ := flagValues(args, "--config", "-c")
 	return len(v) > 0
 }
 
-// parentWranglerConfig looks for a wrangler config above the current directory, up to the git root
-// or the file system root, because wrangler searches upward and would deploy from it.
+// parentWranglerConfig looks for a wrangler config above the current directory, all the way to the
+// file system root: wrangler does not stop at the git root, so neither does this.
 func parentWranglerConfig(env CloudEnv) (string, error) {
 	wd, err := env.FS.Getwd()
 	if err != nil {
 		return "", errors.New("cannot read the current directory, so a parent wrangler config cannot be ruled out")
 	}
-	for dir := wd; !env.FS.Exists(filepath.Join(dir, ".git")); {
+	for dir := wd; ; {
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			return "", nil
 		}
 		dir = parent
 		for _, name := range wranglerConfigs {
@@ -338,7 +353,6 @@ func parentWranglerConfig(env CloudEnv) (string, error) {
 			}
 		}
 	}
-	return "", nil
 }
 
 // tailLines keeps the last n non-empty lines of a tool's error output and withholds any line that

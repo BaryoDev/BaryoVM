@@ -105,6 +105,10 @@ func TestPolicyKeysCannotBeSetWithDashC(t *testing.T) {
 		{"-c", "BaryoVM.Rules.Off=files", "commit", "-m", "x"},
 		{"-cbaryovm.rules.off=text", "commit", "-m", "x"},
 		{"-c", "user.name=x", "-c", "baryovm.protectedBranches=none", "status"},
+		{"-c", "include.path=/tmp/x.cfg", "push", "origin", "feature"},
+		{"-c", "includeIf.gitdir:/.path=/tmp/x.cfg", "push", "origin", "feature"},
+		{"-cinclude.path=/tmp/x.cfg", "commit", "-m", "x"},
+		{"-cincludeif.onbranch:main.path=/tmp/x.cfg", "commit", "-m", "x"},
 	} {
 		v := CheckGit(&fake{answers: map[string]string{"remote get-url": "https://github.com/o/r.git\n"}}, args, Policy{})
 		if v.Allowed {
@@ -227,5 +231,20 @@ func TestAliasWordsFollowGitQuoting(t *testing.T) {
 		if strings.Join(got, "\x00") != strings.Join(want, "\x00") || len(got) != len(want) {
 			t.Errorf("aliasWords(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestStripConfigGlobalsAndConfigEnv(t *testing.T) {
+	got := StripConfigGlobals([]string{"-C", "/repo", "-c", "user.name=x", "-cfoo.bar=1", "--no-pager"})
+	if strings.Join(got, " ") != "-C /repo --no-pager" {
+		t.Fatalf("got %q", got)
+	}
+	for _, e := range []string{"GIT_CONFIG_PARAMETERS='a'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=alias.x", "GIT_CONFIG_VALUE_0=y"} {
+		if ConfigEnvSet([]string{"PATH=/bin", e}) == "" {
+			t.Errorf("%s not reported", e)
+		}
+	}
+	if n := ConfigEnvSet([]string{"PATH=/bin", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_DIR=x"}); n != "" {
+		t.Errorf("reported %s", n)
 	}
 }

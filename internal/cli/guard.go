@@ -32,6 +32,7 @@ type osRunner struct{}
 
 func (osRunner) Git(globals []string, args ...string) (string, error) {
 	cmd := exec.Command("git", append(append([]string{}, globals...), args...)...) // #nosec G204 -- fixed git binary; arguments come from the command line the user typed
+	cmd.Env = cleanGitEnv(os.Environ())
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -42,6 +43,18 @@ func (osRunner) Git(globals []string, args ...string) (string, error) {
 		return string(out), err
 	}
 	return string(out), nil
+}
+
+// cleanGitEnv removes the variables that inject git config, so the guard's own reads (policy,
+// rules, aliases) see the config files and nothing a caller put in the environment.
+func cleanGitEnv(environ []string) []string {
+	var out []string
+	for _, e := range environ {
+		if name, _, _ := strings.Cut(e, "="); !guard.IsConfigEnv(name) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // gitFailure carries git's stderr as the message and keeps the underlying error, so the exit code
@@ -77,6 +90,7 @@ func runReal(name string, args []string) (int, error) {
 // broken config file, git missing) is returned: reading the policy wrong must not turn into
 // "everything is allowed".
 func loadPolicy(globals []string) (guard.Policy, error) {
+	globals = guard.StripConfigGlobals(globals)
 	values, err := gitConfigValues(globals, guard.PolicyKey, "BARYOVM_ALLOWED_HOSTS")
 	if err != nil {
 		return guard.Policy{}, err
@@ -95,6 +109,7 @@ func loadPolicy(globals []string) (guard.Policy, error) {
 // loadRegistryPolicy reads the allowed registries from git config and BARYOVM_ALLOWED_REGISTRIES,
 // with the same rule: unset means no restriction, an unreadable config refuses.
 func loadRegistryPolicy(globals []string) (guard.Policy, error) {
+	globals = guard.StripConfigGlobals(globals)
 	values, err := gitConfigValues(globals, guard.RegistryPolicyKey, "BARYOVM_ALLOWED_REGISTRIES")
 	if err != nil {
 		return guard.Policy{}, err
@@ -210,6 +225,7 @@ var guardEnv = func(confirm string) guard.Env {
 // exits 1 when no key is set, which means every rule on with its defaults; any other failure is
 // returned so an unreadable config never turns into "no rules".
 func loadRules(globals []string) (guard.Rules, error) {
+	globals = guard.StripConfigGlobals(globals)
 	var lines []string
 	out, err := guardRunner.Git(globals, "config", "--get-regexp", `^baryovm\.`)
 	if err == nil {

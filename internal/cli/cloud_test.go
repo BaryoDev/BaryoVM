@@ -385,11 +385,71 @@ func TestCloudWranglerSiteAndParentConfig(t *testing.T) {
 		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/work/wrangler.toml": "name = \"w\"\n"}}, 0)
 		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "/work/wrangler.toml", "Run baryovm from that directory")
 	})
-	t.Run("the search stops at the git root", func(t *testing.T) {
-		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"/out": {"index.js"}}, exists: map[string]bool{"/work/app/.git": true}}, nil)
-		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/work/wrangler.toml": "name = \"w\"\n", "/out/index.js": "x\n"}}, 0)
+	t.Run("the search goes past the git root", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{exists: map[string]bool{"/work/app/.git": true}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"/work/wrangler.toml": "name = \"w\"\n"}}, 0)
+		wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "/work/wrangler.toml")
+	})
+}
+
+func TestCloudWranglerConfigSpellings(t *testing.T) {
+	key := "var k = \"" + cliFakeKey + "\";\n"
+	scanned := map[string]string{
+		"dotted site key":     "site.bucket = \"./pub\"\n",
+		"inline site table":   "site = { bucket = \"./pub\" }\n",
+		"quoted keys":         "\"site\" = { \"bucket\" = \"./pub\" }\n",
+		"env site table":      "[env.prod.site]\nbucket = \"./pub\"\n",
+		"dotted assets key":   "assets.directory = \"./pub\"\n",
+		"inline assets table": "assets = { directory = \"./pub\" }\n",
+		"json site":           "{\"site\": {\"bucket\": \"./pub\"}}\n",
+	}
+	for name, cfg := range scanned {
+		t.Run(name, func(t *testing.T) {
+			withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"pub": {"a.js"}, "/out": {"index.js"}}}, nil)
+			ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": cfg, "pub/a.js": key, "/out/index.js": "x\n"}}, 0)
+			wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "pub/a.js:1")
+		})
+	}
+	unreadable := map[string]string{
+		"bucket that is not a string":    "site.bucket = bucketVar\n",
+		"one bucket of two unreadable":   "[site]\nbucket = \"./pub\"\n[env.x.site]\nbucket = 5\n",
+		"assets directory not a string":  "assets = { directory = 5 }\n",
+		"dotted assets without a string": "assets.directory = dir\n",
+	}
+	for name, cfg := range unreadable {
+		t.Run(name, func(t *testing.T) {
+			withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"pub": {"a.js"}, "/out": {"index.js"}}}, nil)
+			ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": cfg, "pub/a.js": "x\n", "/out/index.js": "x\n"}}, 0)
+			wantRefused(t, runGroup(t, "cloud", "wrangler", "deploy"), ran, 0, "cannot be read")
+		})
+	}
+	t.Run("a name that contains site is not a site", func(t *testing.T) {
+		withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"/out": {"index.js"}}}, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"wrangler.toml": "name = \"my-site\"\n", "/out/index.js": "x\n"}}, 0)
 		if err := runGroup(t, "cloud", "wrangler", "deploy"); err != nil || len(*ran) != 1 {
 			t.Fatalf("err %v ran %v", err, *ran)
 		}
 	})
+}
+
+func TestCloudWranglerAbsoluteDirectoriesAreUsedAsGiven(t *testing.T) {
+	key := "var k = \"" + cliFakeKey + "\";\n"
+	cases := map[string][]string{
+		"config bucket": nil,
+		"config assets": nil,
+		"--assets":      {"--assets", "/abs/pub"},
+		"--site":        {"--site", "/abs/pub"},
+	}
+	cfgs := map[string]string{"config bucket": "[site]\nbucket = \"/abs/pub\"\n", "config assets": "[assets]\ndirectory = \"/abs/pub\"\n"}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			withCloudSeams(t, fakeCloudFS{lists: map[string][]string{"/abs/pub": {"a.js"}, "/out": {"index.js"}}}, nil)
+			files := map[string]string{"/abs/pub/a.js": key, "/out/index.js": "x\n"}
+			if c, ok := cfgs[name]; ok {
+				files["wrangler.toml"] = c
+			}
+			ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+			wantRefused(t, runGroup(t, append([]string{"cloud", "wrangler", "deploy"}, extra...)...), ran, 0, "/abs/pub/a.js:1")
+		})
+	}
 }
