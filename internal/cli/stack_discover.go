@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/discover"
@@ -111,12 +112,15 @@ func discoverProjects(c sshx.Runner, sudo bool) ([]discover.Project, error) {
 	}
 	for i := range projects {
 		p := &projects[i]
+		if p.State == "skipped" {
+			continue // unsafe strings from the VM: do not hand them back to it
+		}
 		cfg, err := c.Run(discover.ConfigCmd(p.ConfigFiles, sudo))
 		if err == nil {
 			err = discover.Inspect(p, cfg)
 		}
 		if err != nil {
-			p.Note = joinNotes(p.Note, "config not read: "+firstLine(err.Error()))
+			p.Note = joinNotes(p.Note, "config not read: "+strconv.Quote(firstLine(err.Error())))
 		}
 	}
 	return projects, nil
@@ -142,6 +146,9 @@ func joinNotes(a, b string) string {
 func planProjects(projects []discover.Project, store *fleet.Store, vm string, sudo bool) {
 	for i := range projects {
 		p := &projects[i]
+		if p.State == "skipped" {
+			continue
+		}
 		p.State = "found"
 		if existing := registeredAt(store, vm, p.Dir); existing != "" {
 			p.State = "already-registered"
@@ -185,7 +192,7 @@ func adoptProjects(cmd *cobra.Command, store *fleet.Store, projects []discover.P
 		if p.State != "found" {
 			continue
 		}
-		if !yes && !askYesNo(in, fmt.Sprintf("register %s (%s on %s)? [y/N] ", p.Name, p.Dir, vm)) {
+		if !yes && !askYesNo(in, fmt.Sprintf("register %s (%s on %s)? [y/N] ", strconv.Quote(p.Name), strconv.Quote(p.Dir), strconv.Quote(vm))) {
 			p.State = "skipped"
 			p.Note = joinNotes(p.Note, "declined")
 			continue
@@ -251,11 +258,15 @@ func printDiscovery(projects []discover.Project) {
 		return
 	}
 	for _, p := range projects {
+		if p.State == "skipped" && p.AddCommand == "" && strings.Contains(p.Note, "control character") {
+			fmt.Printf("  %s  [%s]\n      note: %s\n", strconv.Quote(p.Dir), p.State, p.Note)
+			continue
+		}
 		db := "no postgres found"
 		if p.PostgresGuess != "" {
-			db = "postgres guess: " + p.PostgresGuess + " (image name contains postgres, check it)"
+			db = "postgres guess: " + strconv.Quote(p.PostgresGuess) + " (image name contains postgres, check it)"
 		}
-		fmt.Printf("  %s  (%s, %s)  [%s]\n", p.Dir, plural(p.Services, "service", "services"), db, p.State)
+		fmt.Printf("  %s  (%s, %s)  [%s]\n", strconv.Quote(p.Dir), plural(p.Services, "service", "services"), db, p.State)
 		if p.Note != "" {
 			fmt.Printf("      note: %s\n", p.Note)
 		}

@@ -144,3 +144,31 @@ func TestAddCommandIsExactAndQuoted(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestParseLsSkipsControlCharacters(t *testing.T) {
+	cases := map[string]string{
+		"dir esc":  `[{"Name":"a","ConfigFiles":"/opt/\u001b[2J/compose.yaml"}]`,
+		"name nl":  `[{"Name":"a\nb","ConfigFiles":"/opt/a/compose.yaml"}]`,
+		"del":      `[{"Name":"a","ConfigFiles":"/opt/\u007f/compose.yaml"}]`,
+		"c1":       `[{"Name":"a","ConfigFiles":"/opt/\u009b/compose.yaml"}]`,
+		"file":     `[{"Name":"a","ConfigFiles":"/opt/a/x\u0007.yml"}]`,
+		"bad utf8": "[{\"Name\":\"a\",\"ConfigFiles\":\"/opt/\xff/compose.yaml\"}]",
+	}
+	for name, in := range cases {
+		ps, err := ParseLs(in)
+		if err != nil || len(ps) != 1 {
+			t.Fatalf("%s: %v %v", name, ps, err)
+		}
+		if ps[0].State != "skipped" || ps[0].AddCommand != "" || strings.ContainsAny(ps[0].Note, "\x1b\x07\n\x7f") {
+			t.Errorf("%s: %+v", name, ps[0])
+		}
+	}
+}
+
+func TestInspectSkipsControlCharacterInPostgresGuess(t *testing.T) {
+	p := Project{Name: "a"}
+	_ = Inspect(&p, `{"services":{"pg":{"image":"postgres","container_name":"x\u001by"}}}`)
+	if p.State != "skipped" || !strings.Contains(p.Note, "postgres container") {
+		t.Errorf("%+v", p)
+	}
+}

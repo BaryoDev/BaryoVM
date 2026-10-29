@@ -297,3 +297,43 @@ func TestYesWithoutAdoptIsRefused(t *testing.T) {
 		t.Fatal("--yes alone accepted")
 	}
 }
+
+func TestDiscoverSkipsAndNeverPrintsControlCharacters(t *testing.T) {
+	discoverFixture(t)
+	f := &fakeRunner{answers: map[string]string{
+		"compose ls": `[{"Name":"evil","Status":"running(1)","ConfigFiles":"/opt/\u001b[2J/compose.yaml"}]`,
+	}}
+	stdout, stderr, err := runDiscover(t, f, false, false, "", "oracle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(stdout+stderr, 0x1b) {
+		t.Errorf("raw ESC reached the terminal: %q %q", stdout, stderr)
+	}
+	if !strings.Contains(stdout, "skipped") || !strings.Contains(stdout, "directory") {
+		t.Errorf("the skip and the field should be shown: %q", stdout)
+	}
+	for _, c := range f.seen {
+		if strings.Contains(c, "config --format json") {
+			t.Errorf("a skipped project was sent back to the VM: %s", c)
+		}
+	}
+}
+
+func TestAdoptNeverRegistersAControlCharacterName(t *testing.T) {
+	discoverFixture(t)
+	f := &fakeRunner{answers: map[string]string{
+		"compose ls": `[{"Name":"bad\nname","ConfigFiles":"/opt/bad/compose.yaml"}]`,
+	}}
+	stdout, _, err := runDiscover(t, f, true, false, "", "oracle", "--adopt", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ps := parseDiscover(t, stdout)
+	if len(ps) != 1 || ps[0].State != "skipped" {
+		t.Errorf("%+v", ps)
+	}
+	if store, _ := fleet.Load(); len(store.Stacks) != 0 {
+		t.Errorf("registered: %+v", store.Stacks)
+	}
+}

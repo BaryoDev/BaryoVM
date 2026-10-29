@@ -13,6 +13,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 )
@@ -88,6 +89,7 @@ func ParseLs(out string) ([]Project, error) {
 		if len(files) > 1 {
 			p.Note = "uses several compose files, and `stack add` takes one: register it by hand"
 		}
+		Check(&p)
 		projects = append(projects, p)
 	}
 	sort.SliceStable(projects, func(i, j int) bool { return projects[i].Dir < projects[j].Dir })
@@ -129,7 +131,55 @@ func Inspect(p *Project, configJSON string) error {
 		}
 		break
 	}
+	Check(p)
 	return nil
+}
+
+// hasControl reports a control character (below 0x20, 0x7f, the C1 range 0x80-0x9f) or invalid UTF-8.
+// encoding/json turns invalid bytes into U+FFFD, so that rune counts as invalid too.
+func hasControl(s string) bool {
+	if !utf8.ValidString(s) {
+		return true
+	}
+	for _, r := range s {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == utf8.RuneError {
+			return true
+		}
+	}
+	return false
+}
+
+// Check marks p skipped when a string that came from the VM holds a control character. Such a value
+// could rewrite the terminal or fake a prompt, so the project is never adopted and never printed
+// raw. The note names the field, not the value.
+func Check(p *Project) {
+	field := ""
+	switch {
+	case hasControl(p.Name):
+		field = "name"
+	case hasControl(p.Dir):
+		field = "directory"
+	case hasControl(p.File):
+		field = "config file name"
+	case hasControl(p.PostgresGuess):
+		field = "postgres container"
+	default:
+		for _, f := range p.ConfigFiles {
+			if hasControl(f) {
+				field = "config file path"
+				break
+			}
+		}
+	}
+	if field == "" {
+		return
+	}
+	p.State = "skipped"
+	p.AddCommand = ""
+	if p.Note != "" {
+		p.Note += "; "
+	}
+	p.Note += "the " + field + " holds a control character, so it is not shown raw and cannot be adopted"
 }
 
 // AddCommand is the `stack add` invocation for p on vm, every value quoted for a shell.
