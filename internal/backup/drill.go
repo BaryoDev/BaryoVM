@@ -89,21 +89,30 @@ func DrillScript(cfg Config, file, drill string) string {
 	return b.String()
 }
 
-// Drill runs the drill and, whatever happened, runs the cleanup once more from the client side so a
-// dropped connection cannot leave the container behind. The result is filled in as far as it got.
+// DrillGoneCmd prints "gone" when the throwaway container no longer exists and "present" when it
+// does. It asks docker rather than trusting the removal, which can fail quietly (sudo denied).
+func (c Config) DrillGoneCmd(drill string) string {
+	return "if " + c.dockerCmd() + " inspect " + sshx.Quote(drill) + " >/dev/null 2>&1; then echo present; else echo gone; fi"
+}
+
+// Drill runs the drill and, whatever happened, removes the container again from the client side so
+// a dropped connection cannot leave it behind, then checks it is gone. Removed comes from that
+// check, not from the removal's exit status. The result is filled in as far as it got.
 func Drill(c sshx.Runner, cfg Config, file, drill string) (DrillResult, error) {
 	r := DrillResult{Drill: true, Container: drill}
 	out, err := c.Run(DrillScript(cfg, file, drill))
 	r = ParseDrill(out, r)
-	_, cerr := c.Run(cfg.DrillCleanupCmd(drill))
-	r.Removed = cerr == nil
-	if err != nil {
-		return r, err
+	_, _ = c.Run(cfg.DrillCleanupCmd(drill))
+	state, serr := c.Run(cfg.DrillGoneCmd(drill))
+	r.Removed = serr == nil && strings.TrimSpace(state) == "gone"
+	if !r.Removed {
+		left := fmt.Errorf("throwaway container %s is still on the VM: remove it by hand with `%s`", drill, cfg.dockerCmd()+" rm -f -v "+drill)
+		if err != nil {
+			return r, fmt.Errorf("%w; %v", err, left)
+		}
+		return r, left
 	}
-	if cerr != nil {
-		return r, fmt.Errorf("drill passed but the throwaway container %s may remain: %w", drill, cerr)
-	}
-	return r, nil
+	return r, err
 }
 
 // ParseDrill reads the `drill: key=value` lines out of a drill's output into r.

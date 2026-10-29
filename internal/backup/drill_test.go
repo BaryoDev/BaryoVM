@@ -75,12 +75,12 @@ func TestDrillCleanupRunsOnTheFailurePath(t *testing.T) {
 }
 
 func TestDrillRunsCleanupAgainWhenTheScriptFails(t *testing.T) {
-	r := &seqRunner{errs: []error{errors.New("pg_restore failed")}, outs: []string{"drill: file=/b/db-1.dump\n"}}
+	r := &seqRunner{errs: []error{errors.New("pg_restore failed")}, outs: []string{"drill: file=/b/db-1.dump\n", "", "gone\n"}}
 	res, err := Drill(r, baseCfg(), "", "d1")
 	if err == nil {
 		t.Fatal("expected the script error")
 	}
-	if len(r.cmds) != 2 || r.cmds[1] != baseCfg().DrillCleanupCmd("d1") {
+	if len(r.cmds) != 3 || r.cmds[1] != baseCfg().DrillCleanupCmd("d1") || r.cmds[2] != baseCfg().DrillGoneCmd("d1") {
 		t.Fatalf("cleanup must run after a failure: %q", r.cmds)
 	}
 	if !res.Removed || res.File != "/b/db-1.dump" || res.Touched {
@@ -89,7 +89,7 @@ func TestDrillRunsCleanupAgainWhenTheScriptFails(t *testing.T) {
 }
 
 func TestDrillSuccessParsesResult(t *testing.T) {
-	r := &seqRunner{outs: []string{"drill: file=/b/db-2.dump\ndrill: tables=7\ndrill ok\ndrill: removed d1\n"}}
+	r := &seqRunner{outs: []string{"drill: file=/b/db-2.dump\ndrill: tables=7\ndrill ok\ndrill: removed d1\n", "", "gone\n"}}
 	res, err := Drill(r, baseCfg(), "", "d1")
 	if err != nil {
 		t.Fatal(err)
@@ -99,11 +99,14 @@ func TestDrillSuccessParsesResult(t *testing.T) {
 	}
 }
 
-func TestDrillCleanupFailureIsReported(t *testing.T) {
-	r := &seqRunner{errs: []error{nil, errors.New("ssh gone")}}
+func TestDrillRemovalThatFailedIsNotReportedAsRemoved(t *testing.T) {
+	r := &seqRunner{errs: []error{nil, errors.New("sudo: a password is required")}, outs: []string{"", "", "present\n"}}
 	res, err := Drill(r, baseCfg(), "", "d1")
-	if err == nil || res.Removed {
-		t.Fatalf("a cleanup that failed must not read as removed: %+v %v", res, err)
+	if res.Removed {
+		t.Fatalf("a container still there must not read as removed: %+v", res)
+	}
+	if err == nil || !strings.Contains(err.Error(), "d1") || !strings.Contains(err.Error(), "by hand") {
+		t.Fatalf("the error must name the container: %v", err)
 	}
 }
 
