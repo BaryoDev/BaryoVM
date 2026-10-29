@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -283,4 +284,54 @@ func healthEnvelope(t *testing.T, stdout string) (envelope, string) {
 		}
 	}
 	return e, buf.String()
+}
+
+// documents counts the JSON documents in stdout.
+func documents(t *testing.T, stdout string) int {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(stdout))
+	n := 0
+	for {
+		var v json.RawMessage
+		err := dec.Decode(&v)
+		if err == io.EOF {
+			return n
+		}
+		if err != nil {
+			t.Fatalf("stdout is not JSON (%v): %s", err, stdout)
+		}
+		n++
+	}
+}
+
+// Every path that already emitted its envelope must return the silent exit error, or Execute's
+// reportError prints a second document ("baryovm") after it.
+func TestVMHealthFailureEmitsExactlyOneDocumentAndIsSilent(t *testing.T) {
+	cases := []struct {
+		name string
+		host healthHost
+		args []string
+	}{
+		{"bad threshold", healthyHost("0"), []string{"vm1", "--disk-warn", "95", "--disk-fail", "90"}},
+		{"failing check", healthyHost("12"), []string{"vm1"}},
+		{"unknown vm", healthyHost("0"), []string{"nope"}},
+		{"no name", healthyHost("0"), nil},
+		{"all and a name", healthyHost("0"), []string{"vm1", "--all"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			healthFleet(t, "vm1")
+			stubDial(t, map[string]sshx.Runner{"vm1": tc.host})
+			stdout, _, err := runCmdE(t, newVMHealthCmd(), nil, true, tc.args...)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if _, silent := exitCodeOf(err); !silent {
+				t.Errorf("error is not silent, so reportError would print a second document: %v", err)
+			}
+			if n := documents(t, stdout); n != 1 {
+				t.Errorf("stdout holds %d JSON documents, want 1: %s", n, stdout)
+			}
+		})
+	}
 }
