@@ -324,10 +324,22 @@ case "$FW" in
         RULE="rule family=\"$fam\" source address=\"$cidr\" port port=\"$P22\" protocol=\"tcp\" accept"
         sudo firewall-cmd --permanent --add-rich-rule="$RULE" >/dev/null
       done
-      sudo firewall-cmd --permanent --remove-service=ssh >/dev/null 2>&1
-      sudo firewall-cmd --permanent --remove-port="$P22/tcp" >/dev/null 2>&1
+      for z in $(sudo firewall-cmd --get-active-zones 2>/dev/null | awk '!/^[ \t]/{print $1}'); do
+        sudo firewall-cmd --permanent --zone="$z" --remove-service=ssh >/dev/null 2>&1
+        sudo firewall-cmd --permanent --zone="$z" --remove-port="$P22/tcp" >/dev/null 2>&1
+      done
       sudo firewall-cmd --reload >/dev/null
-      say ssh-firewall applied "firewalld accepts port $P22 only from: $SSHFROM"
+      LEFT=""
+      for z in $(sudo firewall-cmd --get-active-zones 2>/dev/null | awk '!/^[ \t]/{print $1}'); do
+        if sudo firewall-cmd --zone="$z" --query-service=ssh >/dev/null 2>&1 || sudo firewall-cmd --zone="$z" --query-port="$P22/tcp" >/dev/null 2>&1; then
+          LEFT="$LEFT $z"
+        fi
+      done
+      if [ -z "$LEFT" ]; then
+        say ssh-firewall applied "firewalld accepts port $P22 only from: $SSHFROM"
+      else
+        say ssh-firewall ` + StateReport + ` "firewalld zone(s)$LEFT still accept port $P22 from every source. Remove that service or port by hand"
+      fi
     fi ;;
   ufw)
     if [ "$DRY" = "1" ]; then
@@ -336,9 +348,14 @@ case "$FW" in
       for cidr in $SSHFROM; do
         sudo ufw allow from "$cidr" to any port "$P22" proto tcp >/dev/null
       done
+      sudo ufw delete allow "$P22" >/dev/null 2>&1
       sudo ufw delete allow "$P22/tcp" >/dev/null 2>&1
       sudo ufw delete allow OpenSSH >/dev/null 2>&1
-      say ssh-firewall applied "ufw allows port $P22 only from: $SSHFROM"
+      if sudo ufw status 2>/dev/null | grep -Eq "^($P22|$P22/tcp|OpenSSH)( \(v6\))? +ALLOW +Anywhere"; then
+        say ssh-firewall ` + StateReport + ` "ufw still has an allow rule for port $P22 open to Anywhere. Check sudo ufw status numbered and delete it"
+      else
+        say ssh-firewall applied "ufw allows port $P22 only from: $SSHFROM"
+      fi
     fi ;;
   *)
     say ssh-firewall skipped "neither firewalld nor an active ufw was found, so there is no host firewall to write the limit into"

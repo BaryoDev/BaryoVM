@@ -54,7 +54,8 @@ func portPlan(port int, spec provider.Spec) string {
 	if !spec.Limited(port) {
 		return fmt.Sprintf("%d from %s", port, provider.AnyIPv4)
 	}
-	return fmt.Sprintf("%d from %d range(s)", port, len(spec.CidrsFor(port)))
+	v4, v6 := provider.SplitFamilies(spec.CidrsFor(port))
+	return fmt.Sprintf("%d from %d IPv4 + %d IPv6 range(s)", port, len(v4), len(v6))
 }
 
 // provisionVM creates a cloud VM per flags and registers it in the fleet.
@@ -74,6 +75,10 @@ func provisionVM(ctx context.Context, name string, f *provisionFlags) (fleet.VM,
 		return fleet.VM{}, err
 	}
 	if spec.HTTPSFrom, err = sourcesFor(ctx, "https-from", f.httpsFrom); err != nil {
+		return fleet.VM{}, err
+	}
+
+	if err := spec.CheckFamilies(); err != nil {
 		return fleet.VM{}, err
 	}
 
