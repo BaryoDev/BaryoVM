@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
+	"github.com/BaryoDev/BaryoVM/internal/compose"
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/BaryoDev/BaryoVM/internal/update"
@@ -125,7 +127,16 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 			runner.DoBackup = func() (string, error) { return backup.Backup(c, backupConfig(st)) }
 		}
 
-		res, err = update.Run(runner, update.Options{
+		var rec update.Runner = runner
+		if !dryRun {
+			rec = &recordingRunner{Runner: runner, save: func(imgs []compose.Image) {
+				if e := rollback.Save(c, backupConfig(st), rollback.FromCompose(name, "update", imgs)); e != nil {
+					ui.Warnf("could not record the images to roll back to: %v", e)
+				}
+			}}
+		}
+
+		res, err = update.Run(rec, update.Options{
 			Services:       svcs,
 			Auto:           auto,
 			AutoUpdate:     st.AutoUpdate,
@@ -177,6 +188,32 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		ui.Successf("%s: nothing to do", name)
 	}
 	return nil
+}
+
+// recordingRunner remembers the images update.Run read first (they are what runs before any Up)
+// and hands them to save just before the first Up, so `stack rollback` has a target that outlives
+// the CLI. A failed save only warns: it must not stop an update.
+type recordingRunner struct {
+	update.Runner
+	imgs  []compose.Image
+	save  func([]compose.Image)
+	saved bool
+}
+
+func (r *recordingRunner) Images(svcs []string) ([]compose.Image, error) {
+	imgs, err := r.Runner.Images(svcs)
+	if err == nil && !r.saved && r.imgs == nil {
+		r.imgs = imgs
+	}
+	return imgs, err
+}
+
+func (r *recordingRunner) Up(svcs []string) (string, error) {
+	if !r.saved {
+		r.saved = true
+		r.save(r.imgs)
+	}
+	return r.Runner.Up(svcs)
 }
 
 // newStackSetUpdateCmd configures the update policy, so the risky bit (marking a stack as safe to
