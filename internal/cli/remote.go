@@ -62,7 +62,7 @@ func dialChecked(vm *fleet.VM) (*sshx.Client, error) {
 	}
 	t := vm.Target()
 	if err := verifyRuns(fmt.Sprintf("%s:%d:%s", t.Host, t.Port, t.User), c); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("%s: %w", vm.Name, err)
 	}
 	return c, nil
@@ -284,7 +284,7 @@ func runRemoteInstall(name, binary, pubKey string) error {
 		if err != nil {
 			return err
 		}
-		f, err := os.Open(src)
+		f, err := os.Open(src) // #nosec G304 -- the operator's own --binary path or this executable
 		if err != nil {
 			return err
 		}
@@ -359,7 +359,7 @@ func chooseBinary(flag, goarch string) (string, error) {
 // checkELF refuses a file that is not a linux executable, so a macOS binary is not installed as
 // the forced command.
 func checkELF(p string) error {
-	f, err := os.Open(p)
+	f, err := os.Open(p) // #nosec G304 -- the binary chosen above, a local path the operator named
 	if err != nil {
 		return err
 	}

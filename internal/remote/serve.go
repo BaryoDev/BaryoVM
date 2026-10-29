@@ -147,7 +147,7 @@ type LocalRunner struct{}
 
 // Run executes cmd and returns stdout, or an error carrying stderr, as sshx.Client.Run does.
 func (LocalRunner) Run(cmd string) (string, error) {
-	c := exec.Command("sh", "-c", cmd)
+	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- built by the engine packages from the allowlist, every value quoted
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
 	if err := c.Run(); err != nil {

@@ -122,7 +122,7 @@ func (s StackConfig) validate() error {
 		}
 	}
 	if s.HealthURL != "" {
-		if !plainText(s.HealthURL) || !(strings.HasPrefix(s.HealthURL, "http://") || strings.HasPrefix(s.HealthURL, "https://")) {
+		if !plainText(s.HealthURL) || !strings.HasPrefix(s.HealthURL, "http://") && !strings.HasPrefix(s.HealthURL, "https://") {
 			return errors.New("healthUrl must be an http or https URL")
 		}
 	}

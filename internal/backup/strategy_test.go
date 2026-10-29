@@ -43,7 +43,7 @@ func TestMultiBackupRunsEveryStrategyInOrderUnderSetE(t *testing.T) {
 	remote := indexOf(t, script, "db1-$ts.dump")
 	cmd := indexOf(t, script, "mongodump --archive && echo done")
 	files := indexOf(t, script, "tar -czf - -C / 'srv/app/uploads' 'srv/app/my files' > \"$BK/files3-$ts.tar.gz\"")
-	if !(pg < remote && remote < cmd && cmd < files) {
+	if pg >= remote || remote >= cmd || cmd >= files {
 		t.Errorf("strategies out of order: %d %d %d %d", pg, remote, cmd, files)
 	}
 	if strings.Count(script, "ts=$(date") != 1 {

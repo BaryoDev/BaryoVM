@@ -29,4 +29,6 @@ func (OSFS) Lstat(name string) (FileInfo, error) {
 }
 
 // ReadFile reads the file.
-func (OSFS) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
+func (OSFS) ReadFile(name string) ([]byte, error) {
+	return os.ReadFile(name) // #nosec G304 -- the allowlist path from the forced command line, read after its owner and mode checks
+}
