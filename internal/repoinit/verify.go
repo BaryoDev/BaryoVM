@@ -35,7 +35,11 @@ type VerifyOptions struct {
 type VerifyDeps struct {
 	GH    GitHub
 	Sleep func(ctx context.Context, d time.Duration) error
+	Now   func() time.Time // default time.Now
 }
+
+// dispatchSkew is how far a run's created_at may precede our clock and still be ours.
+const dispatchSkew = 10 * time.Second
 
 // StepResult is what one OIDC step did.
 type StepResult struct {
@@ -97,6 +101,11 @@ func Verify(ctx context.Context, o VerifyOptions, d VerifyDeps) (*VerifyReport, 
 	for _, r := range before {
 		known[r.ID] = true
 	}
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
+	dispatchedAt := now()
 	if err := d.GH.Dispatch(ctx, o.Repo, o.Workflow, ref, o.Inputs); err != nil {
 		var se *StatusError
 		if errors.As(err, &se) && (se.Status == 404 || se.Status == 422) {
@@ -120,11 +129,19 @@ func Verify(ctx context.Context, o VerifyOptions, d VerifyDeps) (*VerifyReport, 
 			return rep, fmt.Errorf("list runs of %s: %w", o.Workflow, err)
 		}
 		run = nil
+		matches := 0
 		for j := range runs {
-			if !known[runs[j].ID] {
-				run = &runs[j]
-				break
+			r := runs[j]
+			if known[r.ID] || r.Event != "workflow_dispatch" || r.Branch != ref || r.CreatedAt.Before(dispatchedAt.Add(-dispatchSkew)) {
+				continue
 			}
+			matches++
+			run = &runs[j]
+		}
+		if matches > 1 {
+			rep.Verdict = Inconclusive
+			rep.Reason = "more than one new dispatched run of " + o.Workflow + " on " + ref + " appeared (someone else started one?): not guessing which is ours, run verify again when it is quiet"
+			return rep, nil
 		}
 		if run != nil {
 			rep.RunID, rep.RunURL = run.ID, run.URL
@@ -145,6 +162,11 @@ func Verify(ctx context.Context, o VerifyOptions, d VerifyDeps) (*VerifyReport, 
 	jobs, err := d.GH.Jobs(ctx, o.Repo, run.ID)
 	if err != nil {
 		return rep, fmt.Errorf("read the jobs of run %d: %w", run.ID, err)
+	}
+	if len(o.Steps) == 0 {
+		rep.Verdict = Inconclusive
+		rep.Reason = "no OIDC step was named, so there is nothing to read a verdict from"
+		return rep, nil
 	}
 	all, anyFail := true, false
 	for _, want := range o.Steps {

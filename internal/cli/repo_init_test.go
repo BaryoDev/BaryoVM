@@ -28,6 +28,10 @@ func (g *initGH) DefaultBranch(context.Context, repoinit.Repo) (string, error) {
 	g.calls = append(g.calls, "default-branch")
 	return "main", nil
 }
+func (g *initGH) HasProtection(_ context.Context, _ repoinit.Repo, b string) (bool, error) {
+	g.calls = append(g.calls, "has-protection "+b)
+	return false, nil
+}
 func (g *initGH) ProtectBranch(_ context.Context, _ repoinit.Repo, b string, _ repoinit.Protection) error {
 	g.calls = append(g.calls, "protect "+b)
 	return nil
@@ -60,6 +64,12 @@ func repoInitWorld(t *testing.T, gh *initGH) *int {
 	repoSleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() { repoGitHub, repoToken, repoSleep = pg, pt, ps })
 	return &reads
+}
+
+// dispatched is a run verify accepts as its own: a dispatch on main created after the clock read.
+func dispatched(id int64, status, conclusion, url string) repoinit.WorkflowRun {
+	return repoinit.WorkflowRun{ID: id, Status: status, Conclusion: conclusion, URL: url,
+		Event: "workflow_dispatch", Branch: "main", CreatedAt: time.Now().Add(time.Minute)}
 }
 
 type repoEnvelope struct {
@@ -113,7 +123,7 @@ func TestRepoInitYesWritesAndProtects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *reads != 1 || strings.Join(gh.calls, ",") != "default-branch,protect main" {
+	if *reads != 1 || strings.Join(gh.calls, ",") != "default-branch,has-protection main,protect main" {
 		t.Errorf("reads %d calls %v", *reads, gh.calls)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".github", "workflows", "publish.yml")); err != nil {
@@ -178,7 +188,7 @@ func TestRepoInitTemplatesDirOverridesBuiltin(t *testing.T) {
 
 func verifyGH(ex, conf string) *initGH {
 	return &initGH{
-		runs: [][]repoinit.WorkflowRun{{}, {{ID: 3, Status: "completed", Conclusion: "success", URL: "https://run/3"}}},
+		runs: [][]repoinit.WorkflowRun{{}, {dispatched(3, "completed", "success", "https://run/3")}},
 		jobs: []repoinit.Job{{Name: "publish", Steps: []repoinit.Step{
 			{Name: "Exchange OIDC token for a short-lived NuGet key", Conclusion: ex},
 			{Name: "Confirm the key was issued", Conclusion: conf},
@@ -235,7 +245,7 @@ func TestRepoVerifyNeedsATemplateOrAWorkflowAndStep(t *testing.T) {
 		t.Errorf("reads %d calls %v", *reads, gh.calls)
 	}
 	gh2 := &initGH{
-		runs: [][]repoinit.WorkflowRun{{}, {{ID: 4, Status: "completed"}}},
+		runs: [][]repoinit.WorkflowRun{{}, {dispatched(4, "completed", "", "")}},
 		jobs: []repoinit.Job{{Steps: []repoinit.Step{{Name: "Get key", Conclusion: "success"}}}},
 	}
 	repoInitWorld(t, gh2)

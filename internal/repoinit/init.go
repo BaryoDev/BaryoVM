@@ -28,6 +28,10 @@ type Options struct {
 	Checks    []string
 	Approvals int
 	Force     bool
+	// ReplaceProtection overwrites protection that already exists on the branch. Without it an
+	// existing protection is left alone: the API call replaces the whole rule, so a rerun would
+	// otherwise reset what someone hardened by hand (admins, restrictions, signatures).
+	ReplaceProtection bool
 }
 
 // File statuses in a Report.
@@ -35,13 +39,15 @@ const (
 	FileCreate    = "create"
 	FileOverwrite = "overwrite"
 	FileExists    = "exists"
+	FileRefused   = "refused" // the path leaves the checkout, e.g. through a symlinked folder
 )
 
 // FileAction is one file init writes or leaves alone.
 type FileAction struct {
 	Path    string `json:"path"`
-	Action  string `json:"action"` // create, overwrite, or exists (left alone, pass --force to replace)
+	Action  string `json:"action"` // create, overwrite, exists (left alone, pass --force to replace), or refused
 	Written bool   `json:"written"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // ProtectionPlan is the branch protection init applies.
@@ -50,6 +56,8 @@ type ProtectionPlan struct {
 	Default bool   `json:"defaultBranch"`
 	Protection
 	Applied bool `json:"applied"`
+	// Note says why nothing was applied, e.g. protection that already exists.
+	Note string `json:"note,omitempty"`
 }
 
 // TrustedPublishing is what to enter on the registry. BaryoVM never enters it.
@@ -78,13 +86,24 @@ type Report struct {
 
 // Values is the registry entry for a template and a repository.
 func Values(t *Template, r Repo) TrustedPublishing {
-	return TrustedPublishing{
+	tp := TrustedPublishing{
 		Registry: t.Manifest.Registry, URL: t.Manifest.RegistryURL,
 		Owner: r.Owner, Repository: r.Name,
 		Workflow: t.Manifest.Workflow, Environment: t.Manifest.Environment,
 		Notes: append([]string{}, t.Manifest.Notes...),
 	}
+	for _, n := range tp.Notes {
+		if n == TagNote {
+			return tp
+		}
+	}
+	// Whoever can push a v* tag can publish, so a custom template that forgets to say so is told.
+	tp.Notes = append(tp.Notes, TagNote)
+	return tp
 }
+
+// TagNote is printed with every set of registry values.
+const TagNote = "Pushing a v* tag is the publish right: protect v* tags with a repository ruleset, or limit who can push tags."
 
 // NextSteps is the order that works. It is written into the output because the order is the one
 // thing that is easy to get wrong: a policy created before the workflow is on the default branch
@@ -116,6 +135,16 @@ func Plan(o Options) (*Report, map[string][]byte, error) {
 	if !strings.HasPrefix(owner, "@") {
 		return nil, nil, fmt.Errorf("--codeowner %q must start with @ (a user, or @org/team)", owner)
 	}
+	for _, c := range owner {
+		if c <= 0x20 || c == 0x7f {
+			return nil, nil, errors.New("--codeowner must be one handle with no spaces or control characters: a line break would add CODEOWNERS lines")
+		}
+	}
+	root, err := os.OpenRoot(o.Dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = root.Close() }()
 	files := o.Template.Render(Vars{Owner: o.Repo.Owner, Repo: o.Repo.Name, CodeOwner: owner})
 	paths := make([]string, 0, len(files))
 	for p := range files {
@@ -128,16 +157,18 @@ func Plan(o Options) (*Report, map[string][]byte, error) {
 	}
 	for _, p := range paths {
 		a := FileAction{Path: p, Action: FileCreate}
-		fi, err := os.Lstat(filepath.Join(o.Dir, filepath.FromSlash(p)))
+		// Through the root, so a symlinked parent that leaves the checkout is refused here, and a
+		// dry run shows it, instead of a file landing somewhere else.
+		fi, err := root.Lstat(filepath.FromSlash(p))
 		switch {
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			a.Action, a.Reason = FileRefused, "the path leaves the checkout (a symlinked folder?): "+err.Error()
 		case err == nil && fi.IsDir():
 			return nil, nil, fmt.Errorf("%s is a directory: move it away, init writes a file there", p)
 		case err == nil && o.Force:
 			a.Action = FileOverwrite
 		case err == nil:
 			a.Action = FileExists
-		case !errors.Is(err, fs.ErrNotExist):
-			return nil, nil, err
 		}
 		rep.Files = append(rep.Files, a)
 	}
@@ -165,13 +196,23 @@ func Run(ctx context.Context, o Options, gh GitHub, apply bool) (*Report, error)
 	if !apply {
 		return rep, nil
 	}
+	for _, f := range rep.Files {
+		if f.Action == FileRefused {
+			return rep, fmt.Errorf("%s: %s: nothing was written", f.Path, f.Reason)
+		}
+	}
 	rep.DryRun = false
+	root, err := os.OpenRoot(o.Dir)
+	if err != nil {
+		return rep, err
+	}
+	defer func() { _ = root.Close() }()
 	for i := range rep.Files {
 		f := &rep.Files[i]
 		if f.Action == FileExists {
 			continue
 		}
-		if err := writeFile(o.Dir, f.Path, files[f.Path], o.Force); err != nil {
+		if err := writeFile(root, f.Path, files[f.Path], o.Force); err != nil {
 			return rep, fmt.Errorf("write %s: %w", f.Path, err)
 		}
 		f.Written = true
@@ -184,6 +225,16 @@ func Run(ctx context.Context, o Options, gh GitHub, apply bool) (*Report, error)
 		}
 	}
 	rep.Protection.Branch = branch
+	if !o.ReplaceProtection {
+		exists, err := gh.HasProtection(ctx, o.Repo, branch)
+		if err != nil {
+			return rep, fmt.Errorf("read the protection of %s: %w (the files are written; rerun to retry, existing files are skipped)", branch, err)
+		}
+		if exists {
+			rep.Protection.Note = "protection exists, not changed: pass --replace-protection to replace it with the template's"
+			return rep, nil
+		}
+	}
 	if err := gh.ProtectBranch(ctx, o.Repo, branch, rep.Protection.Protection); err != nil {
 		return rep, fmt.Errorf("apply branch protection to %s: %w (the files are written; rerun to retry, existing files are skipped)", branch, err)
 	}
@@ -191,23 +242,26 @@ func Run(ctx context.Context, o Options, gh GitHub, apply bool) (*Report, error)
 	return rep, nil
 }
 
-// writeFile writes one file. Without force it opens with O_EXCL, so a file that appeared since
-// the plan is never replaced. A symlink at the path is refused either way.
-func writeFile(dir, rel string, data []byte, force bool) error {
-	full := filepath.Join(dir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil { // #nosec G301 -- a repository directory
-		return err
+// writeFile writes one file inside root, which refuses any path that leaves the checkout. Without
+// force it opens with O_EXCL, so a file that appeared since the plan is never replaced. A symlink
+// at the path is refused either way.
+func writeFile(root *os.Root, rel string, data []byte, force bool) error {
+	full := filepath.FromSlash(rel)
+	if d := filepath.Dir(full); d != "." {
+		if err := root.MkdirAll(d, 0o755); err != nil { // #nosec G301 -- a repository directory
+			return err
+		}
 	}
 	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
 	if force {
-		if fi, err := os.Lstat(full); err == nil {
+		if fi, err := root.Lstat(full); err == nil {
 			if fi.Mode()&os.ModeSymlink != 0 {
 				return errors.New("is a symlink: refusing to write through it")
 			}
 			flags = os.O_WRONLY | os.O_TRUNC
 		}
 	}
-	f, err := os.OpenFile(full, flags, 0o644) // #nosec G302,G304 -- a workflow file in the user's own checkout
+	f, err := root.OpenFile(full, flags, 0o644)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return errors.New("appeared since the plan: not overwritten")

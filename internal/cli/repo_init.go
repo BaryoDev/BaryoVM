@@ -43,7 +43,7 @@ func newRepoInitCmd() *cobra.Command {
 		templateName, templatesDir, path, codeowner, branch, tokenRef string
 		checks                                                        []string
 		approvals                                                     int
-		force, yes, dryRun                                            bool
+		force, yes, dryRun, replaceProt                               bool
 	)
 	cmd := &cobra.Command{
 		Use:   "init <owner/repo>",
@@ -65,7 +65,11 @@ alone, so a rerun after a half finished first run is safe.
 
 Branch protection requires the template's checks (--checks replaces them), an up to date branch,
 and a code owner review (--approvals sets the number of approving reviews, default 0). Admins can
-still push. It uses the token from --token-ref, else GITHUB_TOKEN, GH_TOKEN, or gh auth token.
+still push. A branch that already has protection is left alone and reported as "protection exists,
+not changed": the API call replaces the whole rule, so applying it again would reset what someone
+hardened by hand (admin enforcement, push restrictions, signatures). --replace-protection replaces
+it. A file path that leaves the checkout through a symlinked folder is refused, and a dry run shows
+it. It uses the token from --token-ref, else GITHUB_TOKEN, GH_TOKEN, or gh auth token.
 
 BaryoVM does not create the trusted publishing policy. nuget.org and npm create it through their
 web pages and have no API for it, so it is yours to do once, by hand. The order that works:
@@ -82,7 +86,7 @@ complains until the first publish.
 			"  baryovm repo init acme/widgets --template node-npm --path ~/src/widgets --yes",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := runRepoInit(args[0], templateName, templatesDir, path, codeowner, branch, tokenRef, checks, approvals, force, yes && !dryRun)
+			err := runRepoInit(args[0], templateName, templatesDir, path, codeowner, branch, tokenRef, checks, approvals, force, replaceProt, yes && !dryRun)
 			if err != nil {
 				ui.Emit(ui.Result{OK: false, Action: "repo init", Error: err.Error()})
 			}
@@ -97,6 +101,7 @@ complains until the first publish.
 	cmd.Flags().StringSliceVar(&checks, "checks", nil, "required status checks, replacing the template's (repeatable)")
 	cmd.Flags().IntVar(&approvals, "approvals", 0, "approving reviews required, besides the code owner review")
 	cmd.Flags().StringVar(&tokenRef, "token-ref", "", "GitHub token reference: env:NAME, file:PATH or cmd:<command> (default GITHUB_TOKEN, GH_TOKEN, gh auth token)")
+	cmd.Flags().BoolVar(&replaceProt, "replace-protection", false, "replace branch protection that already exists (default: leave it alone and say so)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite files that already exist")
 	cmd.Flags().BoolVar(&yes, "yes", false, "really write the files and call GitHub; without it the plan is printed and nothing is done")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan and do nothing (this is already the default without --yes)")
@@ -104,7 +109,7 @@ complains until the first publish.
 	return cmd
 }
 
-func runRepoInit(repoArg, templateName, templatesDir, path, codeowner, branch, tokenRef string, checks []string, approvals int, force, apply bool) error {
+func runRepoInit(repoArg, templateName, templatesDir, path, codeowner, branch, tokenRef string, checks []string, approvals int, force, replaceProt, apply bool) error {
 	repo, err := repoinit.ParseRepo(repoArg)
 	if err != nil {
 		return err
@@ -123,7 +128,7 @@ func runRepoInit(repoArg, templateName, templatesDir, path, codeowner, branch, t
 	}
 	o := repoinit.Options{
 		Repo: repo, Template: tpl, Dir: path, CodeOwner: codeowner, Branch: branch,
-		Checks: checks, Approvals: approvals, Force: force,
+		Checks: checks, Approvals: approvals, Force: force, ReplaceProtection: replaceProt,
 	}
 	var gh repoinit.GitHub
 	if apply {
@@ -176,6 +181,12 @@ func printRepoInit(r *repoinit.Report) {
 			verb = "would create"
 		case f.Action == repoinit.FileOverwrite:
 			verb = "would overwrite"
+		case f.Action == repoinit.FileRefused:
+			verb = "refused"
+		}
+		if f.Reason != "" {
+			ui.Detail(verb, f.Path+": "+f.Reason)
+			continue
 		}
 		ui.Detail(verb, f.Path)
 	}
@@ -187,7 +198,12 @@ func printRepoInit(r *repoinit.Report) {
 	if r.Protection.Applied {
 		state = "protected"
 	}
-	ui.Detail(state, fmt.Sprintf("%s: required checks %s, up to date branch, code owner review, %d approving reviews", b, strings.Join(r.Protection.Checks, ", "), r.Protection.Approvals))
+	if r.Protection.Note != "" {
+		state = "left alone"
+		ui.Detail(state, b+": "+r.Protection.Note)
+	} else {
+		ui.Detail(state, fmt.Sprintf("%s: required checks %s, up to date branch, code owner review, %d approving reviews", b, strings.Join(r.Protection.Checks, ", "), r.Protection.Approvals))
+	}
 	printTrustedValues(r.TrustedPublishing)
 	for i, s := range r.NextSteps {
 		ui.Detail(fmt.Sprintf("step %d", i+1), s)

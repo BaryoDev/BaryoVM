@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 // the real one is API. Every real call has its own timeout.
 type GitHub interface {
 	DefaultBranch(ctx context.Context, repo Repo) (string, error)
+	HasProtection(ctx context.Context, repo Repo, branch string) (bool, error)
 	ProtectBranch(ctx context.Context, repo Repo, branch string, p Protection) error
 	Dispatch(ctx context.Context, repo Repo, workflow, ref string, inputs map[string]string) error
 	Runs(ctx context.Context, repo Repo, workflow, ref string) ([]WorkflowRun, error)
@@ -59,6 +61,9 @@ type Protection struct {
 
 // WorkflowRun is one workflow run.
 type WorkflowRun struct {
+	Event      string
+	Branch     string
+	CreatedAt  time.Time
 	ID         int64
 	Status     string
 	Conclusion string
@@ -184,7 +189,21 @@ func (a *API) DefaultBranch(ctx context.Context, repo Repo) (string, error) {
 	return out.DefaultBranch, nil
 }
 
-// ProtectBranch implements GitHub.
+// HasProtection implements GitHub. A 404 whose message says the branch is not protected means
+// there is none. Any other 404 (no repository, no access) is an error, not "unprotected".
+func (a *API) HasProtection(ctx context.Context, repo Repo, branch string) (bool, error) {
+	err := a.do(ctx, http.MethodGet, repoPath(repo)+"/branches/"+url.PathEscape(branch)+"/protection", nil, nil)
+	var se *StatusError
+	if errors.As(err, &se) && se.Status == http.StatusNotFound && strings.Contains(strings.ToLower(se.Message), "not protected") {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ProtectBranch implements GitHub, as a PUT of the whole protection.
 func (a *API) ProtectBranch(ctx context.Context, repo Repo, branch string, p Protection) error {
 	checks := p.Checks
 	if checks == nil {
@@ -216,10 +235,13 @@ func (a *API) Runs(ctx context.Context, repo Repo, workflow, ref string) ([]Work
 	q := url.Values{"event": {"workflow_dispatch"}, "branch": {ref}, "per_page": {"20"}}
 	var out struct {
 		Runs []struct {
-			ID         int64  `json:"id"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			HTMLURL    string `json:"html_url"`
+			ID         int64     `json:"id"`
+			Event      string    `json:"event"`
+			HeadBranch string    `json:"head_branch"`
+			CreatedAt  time.Time `json:"created_at"`
+			Status     string    `json:"status"`
+			Conclusion string    `json:"conclusion"`
+			HTMLURL    string    `json:"html_url"`
 		} `json:"workflow_runs"`
 	}
 	if err := a.do(ctx, http.MethodGet, repoPath(repo)+"/actions/workflows/"+url.PathEscape(workflow)+"/runs?"+q.Encode(), nil, &out); err != nil {
@@ -227,7 +249,7 @@ func (a *API) Runs(ctx context.Context, repo Repo, workflow, ref string) ([]Work
 	}
 	runs := make([]WorkflowRun, 0, len(out.Runs))
 	for _, r := range out.Runs {
-		runs = append(runs, WorkflowRun{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL})
+		runs = append(runs, WorkflowRun{ID: r.ID, Event: r.Event, Branch: r.HeadBranch, CreatedAt: r.CreatedAt, Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL})
 	}
 	return runs, nil
 }

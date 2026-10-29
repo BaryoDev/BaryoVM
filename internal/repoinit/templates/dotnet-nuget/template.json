@@ -12,6 +12,7 @@
   "dispatchInputs": {"dry_run": "true"},
   "notes": [
     "Set the repository variable NUGET_USER to your nuget.org profile name (not your email). The workflow reads it as vars.NUGET_USER.",
-    "On nuget.org, sign in, open your username menu, choose Trusted Publishing, and create a policy with the values above. The policy is yours to create: BaryoVM cannot."
+    "On nuget.org, sign in, open your username menu, choose Trusted Publishing, and create a policy with the values above. The policy is yours to create: BaryoVM cannot.",
+    "Pushing a v* tag is the publish right: protect v* tags with a repository ruleset, or limit who can push tags."
   ]
 }

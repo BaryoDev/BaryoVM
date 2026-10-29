@@ -206,11 +206,17 @@ type fakeGH struct {
 	runs       [][]WorkflowRun // one answer per Runs call, the last repeats
 	runsCalls  int
 	jobs       []Job
+	hasProt    bool
+	hasProtErr error
 }
 
 func (f *fakeGH) DefaultBranch(_ context.Context, _ Repo) (string, error) {
 	f.calls = append(f.calls, "default-branch")
 	return f.branch, nil
+}
+func (f *fakeGH) HasProtection(_ context.Context, _ Repo, b string) (bool, error) {
+	f.calls = append(f.calls, "has-protection "+b)
+	return f.hasProt, f.hasProtErr
 }
 func (f *fakeGH) ProtectBranch(_ context.Context, _ Repo, b string, p Protection) error {
 	f.calls = append(f.calls, "protect "+b)
@@ -292,7 +298,7 @@ func TestInitWritesFilesThenProtectsTheDefaultBranch(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(dir, ".github", "CODEOWNERS")); !strings.Contains(string(got), "* @acme") {
 		t.Errorf("CODEOWNERS: %q", got)
 	}
-	if strings.Join(gh.calls, ",") != "default-branch,protect main" {
+	if strings.Join(gh.calls, ",") != "default-branch,has-protection main,protect main" {
 		t.Errorf("calls: %v", gh.calls)
 	}
 	p := gh.protected
@@ -411,7 +417,7 @@ func TestInitCustomChecksAndBranchAreUsed(t *testing.T) {
 	if _, err := Run(context.Background(), o, gh, true); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(gh.calls, ",") != "protect release" || strings.Join(gh.protected.Checks, ",") != "a,b" {
+	if strings.Join(gh.calls, ",") != "has-protection release,protect release" || strings.Join(gh.protected.Checks, ",") != "a,b" {
 		t.Errorf("%v %+v", gh.calls, gh.protected)
 	}
 	o.CodeOwner = "acme"
@@ -435,19 +441,30 @@ func vopts() VerifyOptions {
 	}
 }
 
+var t0 = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
+// wr is a run that was dispatched on main at t0, the shape verify accepts as its own.
+func wr(id int64, status, conclusion, url string) WorkflowRun {
+	return WorkflowRun{ID: id, Status: status, Conclusion: conclusion, URL: url, Event: "workflow_dispatch", Branch: "main", CreatedAt: t0}
+}
+
+func vdeps(gh *fakeGH) VerifyDeps {
+	return VerifyDeps{GH: gh, Sleep: noSleep, Now: func() time.Time { return t0 }}
+}
+
 func steps(ex, conf string) []Job {
 	return []Job{{Name: "publish", Steps: []Step{{Name: "Exchange", Conclusion: ex}, {Name: "Confirm", Conclusion: conf}}}}
 }
 
 func TestVerifyReportsTookWhenEveryOIDCStepSucceededAndIgnoresOlderRuns(t *testing.T) {
-	old := WorkflowRun{ID: 1, Status: "completed", Conclusion: "failure"}
+	old := wr(1, "completed", "failure", "")
 	gh := &fakeGH{branch: "main", jobs: steps("success", "success"), runs: [][]WorkflowRun{
 		{old},
 		{old},
-		{{ID: 2, Status: "in_progress"}, old},
-		{{ID: 2, Status: "completed", Conclusion: "success", URL: "u"}, old},
+		{wr(2, "in_progress", "", ""), old},
+		{wr(2, "completed", "success", "u"), old},
 	}}
-	rep, err := Verify(context.Background(), vopts(), VerifyDeps{GH: gh, Sleep: noSleep})
+	rep, err := Verify(context.Background(), vopts(), vdeps(gh))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,9 +483,9 @@ func TestVerifyReportsTookWhenEveryOIDCStepSucceededAndIgnoresOlderRuns(t *testi
 
 func TestVerifyDidNotTakeWhenTheExchangeStepFailed(t *testing.T) {
 	gh := &fakeGH{branch: "main", jobs: steps("failure", "skipped"), runs: [][]WorkflowRun{
-		{}, {{ID: 5, Status: "completed", Conclusion: "failure"}},
+		{}, {wr(5, "completed", "failure", "")},
 	}}
-	rep, err := Verify(context.Background(), vopts(), VerifyDeps{GH: gh, Sleep: noSleep})
+	rep, err := Verify(context.Background(), vopts(), vdeps(gh))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,14 +496,14 @@ func TestVerifyDidNotTakeWhenTheExchangeStepFailed(t *testing.T) {
 
 func TestVerifyIsInconclusiveWhenTheRunNeverReachedTheStep(t *testing.T) {
 	gh := &fakeGH{branch: "main", jobs: steps("skipped", "skipped"), runs: [][]WorkflowRun{
-		{}, {{ID: 5, Status: "completed", Conclusion: "failure", URL: "https://run"}},
+		{}, {wr(6, "completed", "failure", "https://run")},
 	}}
-	rep, _ := Verify(context.Background(), vopts(), VerifyDeps{GH: gh, Sleep: noSleep})
+	rep, _ := Verify(context.Background(), vopts(), vdeps(gh))
 	if rep.Verdict != Inconclusive || !strings.Contains(rep.Reason, "https://run") {
 		t.Errorf("%+v", rep)
 	}
-	gh = &fakeGH{branch: "main", jobs: []Job{{Name: "publish"}}, runs: [][]WorkflowRun{{}, {{ID: 6, Status: "completed"}}}}
-	rep, _ = Verify(context.Background(), vopts(), VerifyDeps{GH: gh, Sleep: noSleep})
+	gh = &fakeGH{branch: "main", jobs: []Job{{Name: "publish"}}, runs: [][]WorkflowRun{{}, {wr(6, "completed", "", "")}}}
+	rep, _ = Verify(context.Background(), vopts(), vdeps(gh))
 	if rep.Verdict != Inconclusive || rep.Steps[0].Conclusion != "not-found" {
 		t.Errorf("a step missing from the run must not read as success: %+v", rep)
 	}
@@ -496,15 +513,15 @@ func TestVerifyGivesUpAfterTheTimeoutWithoutAWallClock(t *testing.T) {
 	gh := &fakeGH{branch: "main", runs: [][]WorkflowRun{{}}}
 	sleeps := 0
 	o := vopts()
-	rep, err := Verify(context.Background(), o, VerifyDeps{GH: gh, Sleep: func(context.Context, time.Duration) error { sleeps++; return nil }})
+	rep, err := Verify(context.Background(), o, VerifyDeps{GH: gh, Now: func() time.Time { return t0 }, Sleep: func(context.Context, time.Duration) error { sleeps++; return nil }})
 	if err != nil || rep.Verdict != Inconclusive {
 		t.Fatalf("%v %+v", err, rep)
 	}
 	if sleeps != 6 {
 		t.Errorf("polled %d times, want timeout/poll = 6", sleeps)
 	}
-	gh = &fakeGH{branch: "main", runs: [][]WorkflowRun{{}, {{ID: 9, Status: "in_progress", URL: "u"}}}}
-	rep, _ = Verify(context.Background(), o, VerifyDeps{GH: gh, Sleep: noSleep})
+	gh = &fakeGH{branch: "main", runs: [][]WorkflowRun{{}, {wr(9, "in_progress", "", "u")}}}
+	rep, _ = Verify(context.Background(), o, vdeps(gh))
 	if rep.Verdict != Inconclusive || !strings.Contains(rep.Reason, "had not finished") {
 		t.Errorf("%+v", rep)
 	}
@@ -512,7 +529,7 @@ func TestVerifyGivesUpAfterTheTimeoutWithoutAWallClock(t *testing.T) {
 
 func TestVerifyDispatchRefusedPointsAtPushingTheWorkflowFirst(t *testing.T) {
 	gh := &fakeGH{branch: "main", runs: [][]WorkflowRun{{}}, dispatchEr: &StatusError{Status: 404, Method: "POST", Path: "/x", Message: "Not Found"}}
-	_, err := Verify(context.Background(), vopts(), VerifyDeps{GH: gh, Sleep: noSleep})
+	_, err := Verify(context.Background(), vopts(), vdeps(gh))
 	if err == nil || !strings.Contains(err.Error(), "pushed") || !strings.Contains(err.Error(), "before creating the registry policy") {
 		t.Errorf("%v", err)
 	}
@@ -533,7 +550,7 @@ func TestAPISendsTheRightRequestsWithATimeoutAndNeverEchoesTheToken(t *testing.T
 		case strings.HasSuffix(r.URL.Path, "/dispatches"):
 			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(r.URL.Path, "/runs"):
-			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":7,"status":"completed","conclusion":"success","html_url":"h"}]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":7,"event":"workflow_dispatch","head_branch":"main","created_at":"2026-10-30T12:00:00Z","status":"completed","conclusion":"success","html_url":"h"}]}`))
 		case strings.HasSuffix(r.URL.Path, "/jobs"):
 			_, _ = w.Write([]byte(`{"jobs":[{"name":"p","conclusion":"success","steps":[{"name":"s","status":"completed","conclusion":"success"}]}]}`))
 		default:
@@ -554,7 +571,7 @@ func TestAPISendsTheRightRequestsWithATimeoutAndNeverEchoesTheToken(t *testing.T
 	if err := a.Dispatch(ctx, repo, "publish.yml", "main", map[string]string{"dry_run": "true"}); err != nil {
 		t.Fatal(err)
 	}
-	if runs, err := a.Runs(ctx, repo, "publish.yml", "main"); err != nil || len(runs) != 1 || runs[0].ID != 7 {
+	if runs, err := a.Runs(ctx, repo, "publish.yml", "main"); err != nil || len(runs) != 1 || runs[0].ID != 7 || runs[0].Event != "workflow_dispatch" || runs[0].Branch != "main" || !runs[0].CreatedAt.Equal(t0) {
 		t.Fatalf("%v %v", runs, err)
 	}
 	if jobs, err := a.Jobs(ctx, repo, 7); err != nil || jobs[0].Steps[0].Name != "s" {
@@ -590,5 +607,218 @@ func TestAPICallsTimeOut(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Error("the call did not stop at its timeout")
+	}
+}
+
+func TestVerifyIgnoresARunThatIsNotOursAndRefusesToGuessBetweenTwo(t *testing.T) {
+	decoys := []WorkflowRun{
+		{ID: 20, Status: "completed", Conclusion: "success", Event: "push", Branch: "main", CreatedAt: t0},
+		{ID: 21, Status: "completed", Conclusion: "success", Event: "workflow_dispatch", Branch: "other", CreatedAt: t0},
+		{ID: 22, Status: "completed", Conclusion: "success", Event: "workflow_dispatch", Branch: "main", CreatedAt: t0.Add(-time.Hour)},
+	}
+	gh := &fakeGH{branch: "main", jobs: steps("success", "success"), runs: [][]WorkflowRun{{}, append([]WorkflowRun{wr(30, "completed", "success", "u")}, decoys...)}}
+	rep, err := Verify(context.Background(), vopts(), vdeps(gh))
+	if err != nil || rep.Verdict != Took || rep.RunID != 30 {
+		t.Fatalf("a decoy was picked: %v %+v", err, rep)
+	}
+	// a run created a few seconds before our clock is still ours (clock skew)
+	skewed := wr(31, "completed", "success", "u")
+	skewed.CreatedAt = t0.Add(-5 * time.Second)
+	gh = &fakeGH{branch: "main", jobs: steps("success", "success"), runs: [][]WorkflowRun{{}, {skewed}}}
+	if rep, _ = Verify(context.Background(), vopts(), vdeps(gh)); rep.RunID != 31 {
+		t.Errorf("skew: %+v", rep)
+	}
+	gh = &fakeGH{branch: "main", jobs: steps("success", "success"), runs: [][]WorkflowRun{{}, {wr(40, "completed", "success", ""), wr(41, "in_progress", "", "")}}}
+	rep, err = Verify(context.Background(), vopts(), vdeps(gh))
+	if err != nil || rep.Verdict != Inconclusive || !strings.Contains(rep.Reason, "more than one") || rep.RunID != 0 {
+		t.Errorf("two candidates must be inconclusive: %v %+v", err, rep)
+	}
+}
+
+func TestVerifyWithNoStepsToReadIsInconclusiveNotTook(t *testing.T) {
+	gh := &fakeGH{branch: "main", runs: [][]WorkflowRun{{}, {wr(5, "completed", "success", "")}}}
+	o := vopts()
+	o.Steps = nil
+	rep, err := Verify(context.Background(), o, vdeps(gh))
+	if err != nil || rep.Verdict != Inconclusive {
+		t.Errorf("%v %+v", err, rep)
+	}
+}
+
+func TestInitLeavesExistingProtectionAloneUnlessToldTo(t *testing.T) {
+	gh := &fakeGH{branch: "main", hasProt: true}
+	rep, err := Run(context.Background(), opts(t, t.TempDir()), gh, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(gh.calls, ","), "protect main") || rep.Protection.Applied || !strings.Contains(rep.Protection.Note, "--replace-protection") {
+		t.Errorf("existing protection was touched: %v %+v", gh.calls, rep.Protection)
+	}
+	gh = &fakeGH{branch: "main", hasProt: true}
+	o := opts(t, t.TempDir())
+	o.ReplaceProtection = true
+	rep, err = Run(context.Background(), o, gh, true)
+	if err != nil || !rep.Protection.Applied || strings.Join(gh.calls, ",") != "default-branch,protect main" {
+		t.Errorf("--replace-protection: %v %v %+v", err, gh.calls, rep.Protection)
+	}
+	gh = &fakeGH{branch: "main", hasProtErr: errors.New("boom")}
+	if _, err = Run(context.Background(), opts(t, t.TempDir()), gh, true); err == nil || strings.Contains(strings.Join(gh.calls, ","), "protect main") {
+		t.Errorf("a failed read must not fall through to a PUT: %v %v", err, gh.calls)
+	}
+}
+
+func TestAPIHasProtectionTreatsOnlyNotProtectedAsNone(t *testing.T) {
+	answers := map[string]struct {
+		code int
+		body string
+	}{
+		"none":  {404, `{"message":"Branch not protected"}`},
+		"gone":  {404, `{"message":"Not Found"}`},
+		"yes":   {200, `{"url":"x"}`},
+		"nopes": {403, `{"message":"Resource not accessible"}`},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := answers[strings.Split(r.URL.Path, "/")[5]]
+		w.WriteHeader(a.code)
+		_, _ = w.Write([]byte(a.body))
+	}))
+	defer srv.Close()
+	a := &API{Token: "t", Base: srv.URL}
+	repo := Repo{Owner: "acme", Name: "widgets"}
+	if ok, err := a.HasProtection(context.Background(), repo, "none"); ok || err != nil {
+		t.Errorf("none: %v %v", ok, err)
+	}
+	if ok, err := a.HasProtection(context.Background(), repo, "yes"); !ok || err != nil {
+		t.Errorf("yes: %v %v", ok, err)
+	}
+	for _, b := range []string{"gone", "nopes"} {
+		if _, err := a.HasProtection(context.Background(), repo, b); err == nil {
+			t.Errorf("%s: an error was read as unprotected", b)
+		}
+	}
+}
+
+func TestInitRefusesASymlinkedParentFolderInThePlanAndTheApply(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, ".github")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Run(context.Background(), opts(t, dir), &fakeGH{branch: "main"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := 0
+	for _, f := range rep.Files {
+		if strings.HasPrefix(f.Path, ".github/") {
+			if f.Action != FileRefused {
+				t.Errorf("the plan shows %s as %q", f.Path, f.Action)
+			}
+			refused++
+		}
+	}
+	if refused == 0 {
+		t.Fatal("no .github files in the plan")
+	}
+	gh := &fakeGH{branch: "main"}
+	if _, err := Run(context.Background(), opts(t, dir), gh, true); err == nil {
+		t.Error("apply went through a symlinked folder")
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Errorf("%d entries landed outside the checkout", len(ents))
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 1 || len(gh.calls) != 0 {
+		t.Errorf("apply wrote or called before refusing: %d entries, calls %v", len(ents), gh.calls)
+	}
+	// even when the plan was clean, a folder swapped for a link before the write is caught
+	dir2 := t.TempDir()
+	_, files, err := Plan(opts(t, dir2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir2, ".github")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := writeFile(root, ".github/CODEOWNERS", files[".github/CODEOWNERS"], false); err == nil {
+		t.Error("writeFile followed a symlinked parent")
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Errorf("%d entries landed outside the checkout", len(ents))
+	}
+}
+
+// The file appears after the plan and before the write: O_EXCL must keep it.
+func TestInitDoesNotReplaceAFileThatAppearedSinceThePlan(t *testing.T) {
+	dir := t.TempDir()
+	_, files, err := Plan(opts(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	err = writeFile(root, "CONTRIBUTING.md", files["CONTRIBUTING.md"], false)
+	if err == nil || !strings.Contains(err.Error(), "appeared since the plan") {
+		t.Errorf("%v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "CONTRIBUTING.md")); string(b) != "mine\n" {
+		t.Errorf("the file was replaced: %q", b)
+	}
+}
+
+func TestTemplatesMayNotWriteUnderDotGit(t *testing.T) {
+	dir := t.TempDir()
+	writeDirTemplate(t, dir, "hooky", "pub.yml")
+	hook := filepath.Join(dir, "hooky", "files", ".git", "hooks")
+	if err := os.MkdirAll(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hook, "pre-commit"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load("hooky", dir); err == nil || !strings.Contains(err.Error(), ".git") {
+		t.Errorf("a template writing .git/hooks was accepted: %v", err)
+	}
+}
+
+func TestCodeOwnerWithAControlCharacterIsRefused(t *testing.T) {
+	for _, bad := range []string{"@acme\n* @evil", "@acme\r", "@acme @evil", "@acme\t"} {
+		o := opts(t, t.TempDir())
+		o.CodeOwner = bad
+		if _, err := Run(context.Background(), o, &fakeGH{}, false); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestEveryTemplateAndTheOutputSayWhoCanPublishByTag(t *testing.T) {
+	for _, name := range builtinNames(t) {
+		tpl, _ := Load(name, "")
+		found := false
+		for _, n := range tpl.Manifest.Notes {
+			found = found || n == TagNote
+		}
+		if !found {
+			t.Errorf("%s: manifest has no v* tag note", name)
+		}
+	}
+	dir := t.TempDir()
+	writeDirTemplate(t, dir, "mine", "pub.yml")
+	tpl, err := Load("mine", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := Values(tpl, Repo{Owner: "a", Name: "b"}); len(v.Notes) != 1 || v.Notes[0] != TagNote {
+		t.Errorf("a template without the note must still print it once: %v", v.Notes)
 	}
 }

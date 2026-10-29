@@ -20,7 +20,11 @@ alone, so a rerun after a half finished first run is safe.
 
 Branch protection requires the template's checks (--checks replaces them), an up to date branch,
 and a code owner review (--approvals sets the number of approving reviews, default 0). Admins can
-still push. It uses the token from --token-ref, else GITHUB_TOKEN, GH_TOKEN, or gh auth token.
+still push. A branch that already has protection is left alone and reported as "protection exists,
+not changed": the API call replaces the whole rule, so applying it again would reset what someone
+hardened by hand (admin enforcement, push restrictions, signatures). --replace-protection replaces
+it. A file path that leaves the checkout through a symlinked folder is refused, and a dry run shows
+it. It uses the token from --token-ref, else GITHUB_TOKEN, GH_TOKEN, or gh auth token.
 
 BaryoVM does not create the trusted publishing policy. nuget.org and npm create it through their
 web pages and have no API for it, so it is yours to do once, by hand. The order that works:
@@ -55,6 +59,7 @@ baryovm repo init <owner/repo> [flags]
       --force                  overwrite files that already exist
   -h, --help                   help for init
       --path string            the local checkout to write into (default ".")
+      --replace-protection     replace branch protection that already exists (default: leave it alone and say so)
       --template string        template name: dotnet-nuget, node-npm, or one from --templates-dir (required)
       --templates-dir string   a directory of your own templates; one named like a built-in replaces it
       --token-ref string       GitHub token reference: env:NAME, file:PATH or cmd:<command> (default GITHUB_TOKEN, GH_TOKEN, gh auth token)

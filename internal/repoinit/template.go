@@ -213,6 +213,10 @@ func (t *Template) validate() error {
 		if p == "." || strings.HasPrefix(p, "../") || strings.HasPrefix(p, "/") {
 			return fmt.Errorf("file path %q leaves the repository", p)
 		}
+		// A file under .git, a hook for one, runs the next time anyone commits.
+		if first, _, _ := strings.Cut(p, "/"); strings.EqualFold(first, ".git") {
+			return fmt.Errorf("file path %q is inside .git: a template may not write there", p)
+		}
 	}
 	return nil
 }
