@@ -76,10 +76,9 @@ func runReal(name string, args []string) (int, error) {
 func loadPolicy(globals []string) (guard.Policy, error) {
 	var values []string
 	out, err := guardRunner.Git(globals, "config", "--get-all", guard.PolicyKey)
-	switch {
-	case err == nil:
+	if err == nil {
 		values = append(values, strings.Split(out, "\n")...)
-	default:
+	} else {
 		var coded interface{ ExitCode() int }
 		if !errors.As(err, &coded) || coded.ExitCode() != 1 {
 			return guard.Policy{}, fmt.Errorf("cannot read %s from git config (%v): fix the config or run inside a git repository", guard.PolicyKey, err)
