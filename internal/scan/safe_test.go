@@ -63,7 +63,7 @@ func TestEdgeCleansNetworkText(t *testing.T) {
 
 func TestIsGlobalIPRefusesEmbeddedAndReservedRanges(t *testing.T) {
 	for _, ip := range []string{
-		"64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe", "2002:a9fe:a9fe::1", "2002:0a00:0001::1",
+		"64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe", "64:ff9b:1:5db8:d822::1", "64:ff9b:1::5db8:d822", "2002:a9fe:a9fe::1", "2002:0a00:0001::1",
 		"2001:0:4136:e378:8000:63bf:3fff:fdd2", "2001:db8::1", "fec0::1", "::ffff:127.0.0.1",
 		"240.0.0.1", "255.255.255.255", "192.0.2.1", "198.51.100.7", "203.0.113.7", "192.88.99.1",
 	} {
