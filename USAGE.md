@@ -521,8 +521,9 @@ baryovm stack release app --adopt
 baryovm stack deploy app --adopt
 ```
 
-`--adopt` prints each container it will remove (name, image, created time), then runs `docker rm -f`
-on it and carries on. It never passes `-v`, so volumes stay. Before removing anything it reads the
+`--adopt` removes the container for good, with no way back: `docker rm -f` drops its writable layer
+and any anonymous volume, and nothing is backed up first. It prints each container it will remove
+(name, image, created time) before it does, then carries on. It never passes `-v`, so volumes stay. Before removing anything it reads the
 container's mounts with `docker inspect`. If a named volume is not declared `external: true`, it
 refuses, removes nothing, and prints the volume name and the YAML above. There is no flag to skip
 that check. Anonymous volumes and bind mounts are not checked. A container that belongs to another

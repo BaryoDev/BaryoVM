@@ -135,7 +135,7 @@ func checkContainerNames(c sshx.Runner, cs compose.Stack, adopt bool) error {
 			return perr
 		}
 		for _, a := range plan {
-			ui.Notef("adopting: removing container %s (image %s, created %s)", a.Name, a.Image, a.Created)
+			ui.Notef("adopting: removing container %s (image %s, created %s); there is no way back", a.Name, a.Image, a.Created)
 		}
 		return compose.Adopt(c, cs, plan)
 	}
@@ -636,7 +636,7 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
-	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed, refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed with docker rm -f and NOT recoverable: its writable layer and anonymous volumes are lost; refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "continue an earlier release that stopped, from the first step not done, reusing its backup")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the rsync, build, hook, backup and compose commands without connecting or changing anything")
 	cmd.Flags().BoolVar(&clearState, "clear", false, "drop the record of an earlier release that stopped, without running anything")
@@ -879,7 +879,7 @@ func newStackDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the compose commands without connecting")
 	cmd.Flags().BoolVar(&force, "force-recreate", false, "recreate containers even if unchanged")
 	cmd.Flags().BoolVar(&noDeps, "no-deps", false, "don't touch linked services")
-	cmd.Flags().BoolVar(&adopt, "adopt", false, "remove a container started by hand that holds a container_name the compose file wants (refused if it uses a named volume the compose file does not declare external)")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "remove a container started by hand that holds a container_name the compose file wants (docker rm -f, NOT recoverable: its writable layer and anonymous volumes are lost; refused if it uses a named volume the compose file does not declare external)")
 	return cmd
 }
 

@@ -16,7 +16,7 @@ baryovm stack deploy <name> [flags]
 ### Options
 
 ```
-      --adopt             remove a container started by hand that holds a container_name the compose file wants (refused if it uses a named volume the compose file does not declare external)
+      --adopt             remove a container started by hand that holds a container_name the compose file wants (docker rm -f, NOT recoverable: its writable layer and anonymous volumes are lost; refused if it uses a named volume the compose file does not declare external)
       --dry-run           print the compose commands without connecting
       --force-recreate    recreate containers even if unchanged
   -h, --help              help for deploy
