@@ -112,11 +112,32 @@ func newStackAddCmd() *cobra.Command {
 // checkContainerNames refuses a compose up that would collide with a container this project does
 // not own. A failure to read the names is a warning rather than a refusal: compose up reads the same
 // file and reports what is wrong with it, and these commands ran without this check before.
-func checkContainerNames(c sshx.Runner, cs compose.Stack) error {
+//
+// With adopt, a conflict held only by hand-run containers is resolved by removing them (#7), after
+// their mounts are read: a named volume the compose file does not declare external refuses the
+// adoption, with nothing removed. A container owned by another compose project is never adopted.
+func checkContainerNames(c sshx.Runner, cs compose.Stack, adopt bool) error {
 	err := compose.CheckContainerNames(c, cs)
 	var conflict *compose.NameConflictError
 	if errors.As(err, &conflict) {
-		return err
+		if !adopt {
+			return err
+		}
+		var names []string
+		for _, cf := range conflict.Conflicts {
+			if cf.Project != "" {
+				return err
+			}
+			names = append(names, cf.Name)
+		}
+		plan, perr := compose.PlanAdoption(c, cs, names)
+		if perr != nil {
+			return perr
+		}
+		for _, a := range plan {
+			ui.Notef("adopting: removing container %s (image %s, created %s)", a.Name, a.Image, a.Created)
+		}
+		return compose.Adopt(c, cs, plan)
 	}
 	if err != nil {
 		// A stack dir that does not exist yet has no compose file to read, so there is nothing
@@ -432,7 +453,7 @@ func newStackReleaseCmd() *cobra.Command {
 			if !m.NoCompose {
 				if err := rr.step("check-names", func() error {
 					return ui.Step("check container names", func() error {
-						return checkContainerNames(c, releaseComposeStack(st, m))
+						return checkContainerNames(c, releaseComposeStack(st, m), adopt)
 					})
 				}); err != nil {
 					return fail(err)
@@ -598,7 +619,7 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
-	cmd.Flags().BoolVar(&adopt, "adopt", false, "with a tls block: take over a vhost file BaryoVM did not write (backed up first)")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed, refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "continue an earlier release that stopped, from the first step not done, reusing its backup")
 	cmd.Flags().BoolVar(&clearState, "clear", false, "drop the record of an earlier release that stopped, without running anything")
 	return cmd
@@ -805,7 +826,7 @@ func newStackRemoveCmd() *cobra.Command {
 
 func newStackDeployCmd() *cobra.Command {
 	var svcs []string
-	var pull, force, noDeps bool
+	var pull, force, noDeps, adopt bool
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
@@ -815,7 +836,7 @@ func newStackDeployCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStackOp(args[0], "stack deploy", fmt.Sprintf("deploying stack %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (string, error) {
-					if err := checkContainerNames(c, cs); err != nil {
+					if err := checkContainerNames(c, cs, adopt); err != nil {
 						return "", err
 					}
 					return compose.Up(c, cs, compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})
@@ -826,6 +847,7 @@ func newStackDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull images before recreating")
 	cmd.Flags().BoolVar(&force, "force-recreate", false, "recreate containers even if unchanged")
 	cmd.Flags().BoolVar(&noDeps, "no-deps", false, "don't touch linked services")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "remove a container started by hand that holds a container_name the compose file wants (refused if it uses a named volume the compose file does not declare external)")
 	return cmd
 }
 
