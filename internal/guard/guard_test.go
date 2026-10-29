@@ -153,6 +153,38 @@ func TestParseRemoteHost(t *testing.T) {
 	}
 }
 
+func TestParseRemoteHostErrorHasNoURLText(t *testing.T) {
+	token := "TOK" + "EN" + "SECRET123"
+	_, err := ParseRemoteHost("https://user:" + token + "@bad host/x.git")
+	if err == nil {
+		t.Fatal("want an error for a malformed url")
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "bad host") {
+		t.Fatalf("error echoes the url: %v", err)
+	}
+}
+
+func TestGitDiffAndLogFlagsDefeatGitattributes(t *testing.T) {
+	f := &fake{}
+	CheckGit(f, []string{"commit", "-m", "x"}, Policy{})
+	if len(f.calls) == 0 || !strings.Contains(f.calls[0], "--text") || !strings.Contains(f.calls[0], "--no-textconv") {
+		t.Fatalf("commit diff flags: %v", f.calls)
+	}
+	f = &fake{answers: map[string]string{"remote get-url": "https://github.com/o/r\n"}}
+	CheckGit(f, []string{"push", "origin", "main"}, Policy{})
+	var log string
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "log") {
+			log = c
+		}
+	}
+	for _, want := range []string{"--text", "--no-textconv", " -m"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("push log lacks %s: %q", want, log)
+		}
+	}
+}
+
 func TestPolicyAllows(t *testing.T) {
 	tests := []struct {
 		values []string

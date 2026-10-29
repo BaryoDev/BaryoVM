@@ -231,6 +231,25 @@ func TestRealRepoStagedKeyIsFoundWithFileAndLine(t *testing.T) {
 	}
 }
 
+func TestRealRepoBinaryAttributeDoesNotHideAKey(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.cfg binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.cfg"), []byte("a\nk=\""+cliFakeKey+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "x.cfg")
+	v := guard.CheckGit(osRunner{}, []string{"-C", dir, "commit", "-m", "x"}, guard.Policy{})
+	if v.Allowed || len(v.Findings) != 1 || v.Findings[0].File != "x.cfg" || v.Findings[0].Line != 2 {
+		t.Fatalf("got %+v", v)
+	}
+}
+
 func TestInstallHooks(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")

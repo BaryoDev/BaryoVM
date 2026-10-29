@@ -64,7 +64,9 @@ func ParseRemoteHost(raw string) (string, error) {
 	if strings.Contains(raw, "://") {
 		u, err := url.Parse(raw)
 		if err != nil {
-			return "", fmt.Errorf("cannot read remote url: %w", err)
+			// url.Parse echoes the whole URL in its error, and a remote can carry a token as
+			// https://user:TOKEN@host, so the error must not include it.
+			return "", fmt.Errorf("cannot read the remote url: fix it with git remote set-url")
 		}
 		if u.Scheme == "file" {
 			return "", nil

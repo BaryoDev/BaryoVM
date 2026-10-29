@@ -75,7 +75,14 @@ var (
 	commitValueShort = "mFCct"
 )
 
-const diffFlags = "-U0 --no-color --no-ext-diff"
+// --text and --no-textconv stop .gitattributes (binary, a textconv filter) from replacing a file's
+// content with "Binary files differ" or a converted form, which would hide a key from the scan.
+// logDiffFlags adds -m so a merge commit shows its diff against each parent; a key introduced in a
+// conflict resolution appears only there.
+const (
+	diffFlags    = "-U0 --no-color --no-ext-diff --text --no-textconv"
+	logDiffFlags = diffFlags + " -m"
+)
 
 func diffArgs(sub ...string) []string {
 	a := append([]string{}, sub...)
@@ -259,7 +266,7 @@ func checkPush(r Runner, globals, rest []string, pol Policy) Verdict {
 	if isName {
 		not = "--remotes=" + remote
 	}
-	logArgs := append([]string{"log", "-p", "--format="}, strings.Fields(diffFlags)...)
+	logArgs := append([]string{"log", "-p", "--format="}, strings.Fields(logDiffFlags)...)
 	logArgs = append(logArgs, revs...)
 	logArgs = append(logArgs, "--not", not)
 	out, err := r.Git(globals, logArgs...)
@@ -314,7 +321,7 @@ func CheckPrePush(r Runner, remote, url, stdin string, pol Policy) Verdict {
 		if len(f) < 4 || f[1] == zeroSHA {
 			continue
 		}
-		args := append([]string{"log", "-p", "--format="}, strings.Fields(diffFlags)...)
+		args := append([]string{"log", "-p", "--format="}, strings.Fields(logDiffFlags)...)
 		if f[3] == zeroSHA {
 			args = append(args, f[1], "--not", "--remotes="+remote)
 		} else {
