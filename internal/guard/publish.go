@@ -59,6 +59,14 @@ type npmArgs struct {
 	// to `npm config get` so it answers for the same command line, including abbreviated and
 	// unknown flags.
 	cfg []string
+	// ignoreScripts is set when the user passed --ignore-scripts, which pack must honour too.
+	ignoreScripts bool
+}
+
+// isWorkspaceFlag matches -w, -ws and --workspace* in any form, with any value.
+func isWorkspaceFlag(w string) bool {
+	name, _, _ := strings.Cut(w, "=")
+	return strings.HasPrefix(name, "--workspace") || (strings.HasPrefix(name, "-w") && !strings.HasPrefix(name, "--"))
 }
 
 var npmValueFlags = map[string]bool{"--tag": true, "--access": true, "--otp": true, "--registry": true, "--userconfig": true, "--globalconfig": true, "--prefix": true, "--provenance-file": true}
@@ -73,11 +81,14 @@ func parseNpmArgs(args []string) (npmArgs, error) {
 			break
 		}
 		switch {
-		case w == "-w" || w == "--workspace" || w == "--workspaces" || w == "-ws" || strings.HasPrefix(w, "--workspace=") || strings.HasPrefix(w, "-w="):
+		case isWorkspaceFlag(w):
 			return a, errors.New("workspace publishing cannot be checked: publish each package directory on its own")
 		case strings.HasPrefix(w, "--"):
-			name, _, hasVal := strings.Cut(w, "=")
+			name, val, hasVal := strings.Cut(w, "=")
 			a.cfg = append(a.cfg, w)
+			if name == "--ignore-scripts" && (!hasVal || val != "false") {
+				a.ignoreScripts = true
+			}
 			if !hasVal && npmValueFlags[name] && i+1 < len(args) {
 				i++
 				a.cfg = append(a.cfg, args[i])
@@ -160,7 +171,11 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy) Verdict {
 	if err != nil {
 		return refuse(action, action+" refused: "+err.Error(), nil)
 	}
-	out, err := run(a.dir, "npm", []string{"pack", "--dry-run", "--json"})
+	packArgs := []string{"pack", "--dry-run", "--json"}
+	if a.ignoreScripts {
+		packArgs = append(packArgs, "--ignore-scripts")
+	}
+	out, err := run(a.dir, "npm", packArgs)
 	if err != nil {
 		return refuse(action, fmt.Sprintf("%s refused: npm pack --dry-run failed (%v), so the files cannot be checked", action, err), nil)
 	}
@@ -226,7 +241,11 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy) Verdict {
 			if int64(len(b)) > MaxEntryBytes || total > MaxTotalBytes {
 				return refuse(action, fmt.Sprintf("%s refused: the package is over the size the scan reads (%s)", action, f.Path), nil)
 			}
-			fs = append(fs, ScanText(f.Path, string(b))...)
+			found, why := scanContent(f.Path, b)
+			if why != "" {
+				return refuse(action, action+" refused: "+why, nil)
+			}
+			fs = append(fs, found...)
 		}
 	}
 	if len(fs) > 0 {
@@ -294,7 +313,10 @@ func CheckNuGetPush(r Runner, args []string, pol Policy) Verdict {
 	noSymbols, configfile := false, false
 	for i := 0; i < len(args); i++ {
 		w := args[i]
-		name, val, hasVal := strings.Cut(w, "=")
+		name, val, hasVal := w, "", false
+		if i := strings.IndexAny(w, "=:"); i > 0 && strings.HasPrefix(w, "-") {
+			name, val, hasVal = w[:i], w[i+1:], true
+		}
 		if strings.HasPrefix(w, "-") && len(w) > 1 {
 			if !hasVal && nugetValueFlags[name] && i+1 < len(args) {
 				i++
@@ -306,8 +328,14 @@ func CheckNuGetPush(r Runner, args []string, pol Policy) Verdict {
 			case "--configfile":
 				configfile = true
 			case "-s", "--source":
+				if source != "" {
+					return refuse(action, action+" refused: --source is given more than once, so the target cannot be checked", nil)
+				}
 				source = val
 			case "-ss", "--symbol-source":
+				if symbols != "" {
+					return refuse(action, action+" refused: --symbol-source is given more than once, so the target cannot be checked", nil)
+				}
 				symbols = val
 			}
 			continue
@@ -425,7 +453,41 @@ func scanNupkg(r Runner, action, path string, total int64) ([]Finding, int64, Ve
 		if int64(len(data)) > MaxEntryBytes || total > MaxTotalBytes {
 			return nil, total, refuse(action, fmt.Sprintf("%s refused: %s is over the size the scan reads", action, name), nil), true
 		}
-		fs = append(fs, ScanText(name, string(data))...)
+		found, why := scanContent(name, data)
+		if why != "" {
+			return nil, total, refuse(action, action+" refused: "+why, nil), true
+		}
+		fs = append(fs, found...)
 	}
 	return fs, total, Verdict{}, false
+}
+
+// archiveMagic are the starts of formats that hold other files. Their bytes are compressed, so a
+// scan of them proves nothing, and the package is refused instead.
+var archiveMagic = []struct {
+	name  string
+	magic []byte
+}{
+	{"zip", []byte("PK\x03\x04")},
+	{"gzip", []byte{0x1f, 0x8b}},
+	{"7z", []byte{'7', 'z', 0xbc, 0xaf, 0x27, 0x1c}},
+	{"xz", []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}},
+	{"rar", []byte("Rar!\x1a\x07")},
+	{"bzip2", []byte("BZh")},
+}
+
+// scanContent scans one file or entry. A nested archive is refused (why is set). Content with NUL
+// bytes is scanned a second time with them removed, which finds a key stored as UTF-16 (a string
+// literal in a .NET assembly).
+func scanContent(name string, b []byte) ([]Finding, string) {
+	for _, m := range archiveMagic {
+		if bytes.HasPrefix(b, m.magic) && (m.name != "bzip2" || (len(b) > 3 && b[3] >= '1' && b[3] <= '9')) {
+			return nil, fmt.Sprintf("%s is a nested %s archive, which cannot be scanned. Unpack it or leave it out of the package", name, m.name)
+		}
+	}
+	fs := ScanText(name, string(b))
+	if bytes.IndexByte(b, 0) >= 0 {
+		fs = append(fs, ScanText(name, string(bytes.ReplaceAll(b, []byte{0}, nil)))...)
+	}
+	return fs, ""
 }

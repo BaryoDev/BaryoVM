@@ -1030,6 +1030,13 @@ baryovm publish nuget bin/App.1.0.0.nupkg -s https://api.nuget.org/v3/index.json
   refused with `--configfile`, and refused unless symbols are handled: pass `--no-symbols` (`-n`), or
   `--symbol-source` with a feed URL on the list, because dotnet otherwise pushes a `.snupkg` to an
   implicit symbol source. With no list set, none of this applies.
+- Nested archives (zip, gzip, 7z, xz, rar, bzip2, found by their first bytes) in a package are refused,
+  naming the entry, because their contents cannot be scanned. Content with NUL bytes is also scanned
+  with them removed, which finds a key stored as UTF-16 in a .NET assembly.
+- `--ignore-scripts` is passed on to `npm pack`. Without it, pack runs the lifecycle scripts, and files
+  that `prepublishOnly` or `prepare` write only at publish time are not scanned.
+- NuGet options are read as `-s url`, `-s=url` and `-s:url`; a repeated `--source` or
+  `--symbol-source` is refused.
 - A file or entry over 64 MiB, or a package over 512 MiB in total, is refused, not skipped.
 
 To limit where a repository may publish, list the allowed registry hosts (a full URL is reduced to its
