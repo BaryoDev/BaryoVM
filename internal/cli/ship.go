@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
@@ -162,15 +164,20 @@ func runShip(action, stage, name string, f shipFlags) error {
 	if err != nil {
 		return fail(err, nil)
 	}
+	// Ctrl-C ends the waits at once. A tag already pushed stays, and the same command continues.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	var rec *ship.Record
 	runErr := ui.Step(action+": "+name, func() error {
 		var e error
-		rec, e = ship.Run(context.Background(), d, spec, ship.Options{Name: name, Version: f.version, DryRun: f.dry, Stage: stage})
+		rec, e = ship.Run(ctx, d, spec, ship.Options{Name: name, Version: f.version, DryRun: f.dry, Stage: stage})
 		return e
 	})
 	if rec != nil && !rec.DryRun && len(rec.Steps) > 0 {
-		if p := ship.RecordPath(baryovmHome(), name, rec.Version); rec.Version != "" {
-			if err := writeShipRecord(p, rec); err != nil {
+		if rec.Version != "" {
+			if p, err := ship.RecordPath(baryovmHome(), name, rec.Version); err != nil {
+				ui.Warnf("the record was not saved: %v", err)
+			} else if err := writeShipRecord(p, rec); err != nil {
 				ui.Warnf("the record was not saved: %v", err)
 			}
 		}

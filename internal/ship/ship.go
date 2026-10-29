@@ -106,9 +106,6 @@ func Run(ctx context.Context, d Deps, s Spec, o Options) (*Record, error) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	if d.Sleep == nil {
-		d.Sleep = time.Sleep
-	}
 	d.Timings = d.Timings.withDefaults()
 	if o.Stage == "" {
 		o.Stage = StageFull
@@ -287,7 +284,7 @@ func (r *Record) tagAndPush(ctx context.Context, d Deps, s Spec, st *gateState) 
 	case st.haveLocal || st.haveRemote:
 		r.step("tag", "skipped", "tag "+st.tag+" already exists at HEAD")
 	default:
-		if _, err := d.git(ctx, "tag", st.tag); err != nil {
+		if _, err := d.git(ctx, "tag", "--", st.tag); err != nil {
 			r.step("tag", "failed", err.Error())
 			return err
 		}
@@ -307,10 +304,14 @@ func (r *Record) tagAndPush(ctx context.Context, d Deps, s Spec, st *gateState) 
 
 // poll runs fn until it reports done or total passes. An error from fn is kept and retried: a
 // registry or API that hiccups mid-watch must not end a release that is already tagged.
-func (r *Record) poll(d Deps, total time.Duration, what string, fn func() (bool, error)) error {
+// A cancelled context (Ctrl-C) ends it at once, and the message says a rerun resumes.
+func (r *Record) poll(ctx context.Context, d Deps, total time.Duration, what string, fn func() (bool, error)) error {
 	deadline := d.Now().Add(total)
 	var last error
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("interrupted while waiting for %s: run the same command again to continue from here: %w", what, err)
+		}
 		done, err := fn()
 		if done && err == nil {
 			return nil
@@ -322,13 +323,20 @@ func (r *Record) poll(d Deps, total time.Duration, what string, fn func() (bool,
 			}
 			return fmt.Errorf("gave up waiting for %s after %s", what, total)
 		}
-		d.Sleep(d.Timings.Poll)
+		if d.Sleep != nil {
+			d.Sleep(d.Timings.Poll)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(d.Timings.Poll):
+		}
 	}
 }
 
 func (r *Record) watch(ctx context.Context, d Deps, s Spec, st *gateState, gh GitHub) (*WorkflowRun, error) {
 	var run *WorkflowRun
-	err := r.poll(d, d.Timings.RunWait, "the tag push to start a run", func() (bool, error) {
+	err := r.poll(ctx, d, d.Timings.RunWait, "the tag push to start a run", func() (bool, error) {
 		c, cancel := d.call(ctx)
 		defer cancel()
 		got, err := gh.FindRun(c, st.repo, st.tag, st.head, s.Workflow)
@@ -343,7 +351,7 @@ func (r *Record) watch(ctx context.Context, d Deps, s Spec, st *gateState, gh Gi
 	}
 	r.step("find-run", "ok", fmt.Sprintf("run %d %s", run.ID, run.URL))
 	r.Run = run
-	err = r.poll(d, d.Timings.Watch, fmt.Sprintf("run %d to finish", run.ID), func() (bool, error) {
+	err = r.poll(ctx, d, d.Timings.Watch, fmt.Sprintf("run %d to finish", run.ID), func() (bool, error) {
 		c, cancel := d.call(ctx)
 		defer cancel()
 		got, err := gh.GetRun(c, st.repo, run.ID)
@@ -376,31 +384,52 @@ func (r *Record) publishStepRan(ctx context.Context, d Deps, s Spec, st *gateSta
 		r.step("publish-step", "failed", err.Error())
 		return fmt.Errorf("cannot read the jobs of run %d: %w", run.ID, err)
 	}
-	want := strings.ToLower(s.publishStep())
-	var matched, skipped []Step
+	var matched, bad []Step
 	for _, sp := range steps {
-		if !strings.Contains(strings.ToLower(sp.Name), want) {
+		if !stepMatches(sp, s) {
 			continue
 		}
 		matched = append(matched, sp)
-		if sp.Conclusion == "success" {
-			res := StepResult{Name: sp.Name, Status: "ok", Detail: "conclusion success"}
-			r.Publish = &res
-			r.step("publish-step", "ok", sp.Name)
-			return nil
+		if sp.Conclusion != "success" {
+			bad = append(bad, sp)
 		}
-		skipped = append(skipped, sp)
+	}
+	label := func(sp Step) string {
+		if sp.Name == "" {
+			return "job " + sp.Job
+		}
+		return sp.Job + " / " + sp.Name
 	}
 	var msg string
-	if len(matched) == 0 {
-		msg = fmt.Sprintf("no step or job in run %d matches %q: set publish.publishStep to the publishing step's name", run.ID, s.publishStep())
-	} else {
-		msg = fmt.Sprintf("the run is green but the publish step %q concluded %q: it did not run, so nothing was published (check its if: condition)", skipped[0].Name, skipped[0].Conclusion)
-		res := StepResult{Name: skipped[0].Name, Status: "failed", Detail: "conclusion " + skipped[0].Conclusion}
+	switch {
+	case len(matched) == 0:
+		msg = fmt.Sprintf("no step in run %d is named %q: set publish.publishStep to the publishing step's exact name", run.ID, s.publishStep())
+	case len(bad) > 0:
+		msg = fmt.Sprintf("the run is green but the publish step %q concluded %q: it did not run, so nothing was published (check its if: condition)", label(bad[0]), bad[0].Conclusion)
+		res := StepResult{Name: label(bad[0]), Status: "failed", Detail: "conclusion " + bad[0].Conclusion}
 		r.Publish = &res
+	default:
+		res := StepResult{Name: label(matched[0]), Status: "ok", Detail: fmt.Sprintf("%d matching step(s), all success", len(matched))}
+		r.Publish = &res
+		r.step("publish-step", "ok", res.Name)
+		return nil
 	}
 	r.step("publish-step", "failed", msg)
 	return errors.New(msg)
+}
+
+// stepMatches is an exact, case-insensitive match on the step's own name, not the job's: a job that
+// happens to be called publish does not make its checkout step the publish step, and "Verify
+// publish" is not "publish". A job with no steps is matched by its job name.
+func stepMatches(sp Step, s Spec) bool {
+	if s.PublishJob != "" && !strings.EqualFold(sp.Job, s.PublishJob) {
+		return false
+	}
+	name := sp.Name
+	if name == "" {
+		name = sp.Job
+	}
+	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(s.publishStep()))
 }
 
 func (r *Record) indexed(ctx context.Context, d Deps, st *gateState) error {
@@ -408,7 +437,7 @@ func (r *Record) indexed(ctx context.Context, d Deps, st *gateState) error {
 	for _, p := range st.packages {
 		pending[p] = true
 	}
-	err := r.poll(d, d.Timings.Index, "every package to resolve on the registry", func() (bool, error) {
+	err := r.poll(ctx, d, d.Timings.Index, "every package to resolve on the registry", func() (bool, error) {
 		var lastErr error
 		for _, p := range st.packages {
 			if !pending[p] {
@@ -456,7 +485,7 @@ func (r *Record) artifact(ctx context.Context, d Deps, s Spec, st *gateState) er
 		}
 		got, verr := d.Registry.MetadataVersion(meta)
 		a := Assertion{Package: p, Assert: "metadata version is " + st.version, Observed: got}
-		a.OK = verr == nil && got == st.version
+		a.OK = verr == nil && d.Registry.SameVersion(got, st.version)
 		if verr != nil {
 			a.Observed = verr.Error()
 		}
@@ -522,6 +551,13 @@ func (r *Record) release(ctx context.Context, d Deps, st *gateState, gh GitHub) 
 }
 
 // RecordPath is where a record is kept under home, one file per name and version.
-func RecordPath(home, name, version string) string {
-	return filepath.Join(home, "ship", name, version+".json")
+// It refuses a name or version that would put the file anywhere else.
+func RecordPath(home, name, version string) (string, error) {
+	base := filepath.Join(home, "ship", name)
+	p := filepath.Join(base, version+".json")
+	root := filepath.Join(home, "ship")
+	if name == "" || version == "" || !strings.HasPrefix(base, root+string(filepath.Separator)) || filepath.Dir(p) != base {
+		return "", fmt.Errorf("the record path for %q %q would leave %s: use a plain stack name and version", name, version, root)
+	}
+	return p, nil
 }

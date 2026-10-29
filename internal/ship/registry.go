@@ -33,6 +33,9 @@ type Registry interface {
 	Metadata(ctx context.Context, pkg, version string) ([]byte, error)
 	// MetadataVersion reads the version the published metadata declares.
 	MetadataVersion(meta []byte) (string, error)
+	// SameVersion compares two versions the way the registry does: NuGet ignores build metadata
+	// and a zero fourth segment, so 1.3.0.0 and 1.3.0+build are 1.3.0.
+	SameVersion(a, b string) bool
 }
 
 // Doer is the HTTP seam.
@@ -109,13 +112,54 @@ func (nugetRegistry) Version(f []byte) (string, error) {
 	return string(m[1]), nil
 }
 
+// PackageName is the declared PackageId, or the project's own name when the file is a project. A
+// $(property) value, or a shared props file such as Directory.Build.props, names no package, so
+// the answer is empty and the gate asks for publish.packages.
 func (nugetRegistry) PackageName(path string, f []byte) string {
 	if m := nugetIDRe.FindSubmatch(f); m != nil {
-		return string(m[1])
+		id := string(m[1])
+		if strings.Contains(id, "$(") {
+			return ""
+		}
+		return id
 	}
 	base := filepath.Base(path)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".csproj", ".fsproj", ".vbproj":
+		return strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	return ""
 }
+
+// normNuGet is NuGet's normalised version: build metadata dropped, leading zeros dropped, three
+// segments (a fourth only when not zero), the prerelease label lower case.
+func normNuGet(v string) string {
+	v = strings.TrimSpace(v)
+	if i := strings.Index(v, "+"); i >= 0 {
+		v = v[:i]
+	}
+	pre := ""
+	if i := strings.Index(v, "-"); i >= 0 {
+		v, pre = v[:i], strings.ToLower(v[i:])
+	}
+	parts := strings.Split(v, ".")
+	for i, p := range parts {
+		if t := strings.TrimLeft(p, "0"); t == "" {
+			parts[i] = "0"
+		} else {
+			parts[i] = t
+		}
+	}
+	for len(parts) < 3 {
+		parts = append(parts, "0")
+	}
+	if len(parts) == 4 && parts[3] == "0" {
+		parts = parts[:3]
+	}
+	return strings.Join(parts, ".") + pre
+}
+
+func (nugetRegistry) SameVersion(a, b string) bool { return normNuGet(a) == normNuGet(b) }
 
 func (nugetRegistry) ReleaseNotes(f []byte) (string, bool) {
 	m := nugetNotesRe.FindSubmatch(f)
@@ -137,7 +181,7 @@ func (r nugetRegistry) Published(ctx context.Context, pkg, version string) (bool
 		return false, fmt.Errorf("nuget index for %s is not JSON: %w", pkg, err)
 	}
 	for _, v := range idx.Versions {
-		if strings.EqualFold(v, version) {
+		if normNuGet(v) == normNuGet(version) {
 			return true, nil
 		}
 	}
@@ -145,7 +189,7 @@ func (r nugetRegistry) Published(ctx context.Context, pkg, version string) (bool
 }
 
 func (r nugetRegistry) Metadata(ctx context.Context, pkg, version string) ([]byte, error) {
-	id, v := url.PathEscape(strings.ToLower(pkg)), url.PathEscape(strings.ToLower(version))
+	id, v := url.PathEscape(strings.ToLower(pkg)), url.PathEscape(normNuGet(version))
 	b, found, err := get(ctx, r.h, r.base+"/"+id+"/"+v+"/"+id+".nuspec")
 	if err != nil {
 		return nil, err
@@ -216,6 +260,8 @@ func (r npmRegistry) Metadata(ctx context.Context, pkg, version string) ([]byte,
 	}
 	return b, nil
 }
+
+func (npmRegistry) SameVersion(a, b string) bool { return a == b }
 
 func (npmRegistry) MetadataVersion(meta []byte) (string, error) {
 	return npmRegistry{}.Version(meta)

@@ -26,9 +26,10 @@ type WorkflowRun struct {
 	HeadSHA    string `json:"headSha,omitempty"`
 }
 
-// Step is one step of a job, flattened as "job / step". A job skipped whole is one Step named for
-// the job.
+// Step is one step of a job. A job with no steps (skipped whole, for one) is one Step with an empty
+// Name, so the job's own conclusion can still be matched.
 type Step struct {
+	Job        string `json:"job"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
@@ -59,7 +60,10 @@ func (g APIGitHub) base() string {
 	return strings.TrimRight(g.Base, "/")
 }
 
-func (g APIGitHub) do(ctx context.Context, method, path string, body any, out any) (int, error) {
+// do sends one request. A 404 is an answer only for a call that says so (allow404, the GETs that ask
+// whether something exists); anywhere else it is an error, so a POST that finds nothing cannot read
+// as success with an empty body.
+func (g APIGitHub) do(ctx context.Context, method, path string, body any, out any, allow404 bool) (int, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -84,7 +88,7 @@ func (g APIGitHub) do(ctx context.Context, method, path string, body any, out an
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound && allow404 {
 		return resp.StatusCode, nil
 	}
 	if resp.StatusCode/100 != 2 {
@@ -118,12 +122,13 @@ func (g APIGitHub) FindRun(ctx context.Context, repo, tag, sha, workflow string)
 	var out struct {
 		Runs []apiRun `json:"workflow_runs"`
 	}
-	if _, err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/actions/runs?event=push&per_page=50&head_sha="+url.QueryEscape(sha), nil, &out); err != nil {
+	if _, err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/actions/runs?event=push&per_page=50&head_sha="+url.QueryEscape(sha), nil, &out, false); err != nil {
 		return nil, err
 	}
 	for _, r := range out.Runs {
-		// A tag push reports the tag name as the head branch.
-		if r.HeadBranch != tag || r.Event != "push" {
+		// A tag push reports the tag name as the head branch. The commit is compared here as well as
+		// in the query, so a run of another commit that reused the tag name is never watched.
+		if r.HeadBranch != tag || r.Event != "push" || r.HeadSHA != sha {
 			continue
 		}
 		if workflow != "" && !strings.Contains(r.Name, workflow) && !strings.Contains(r.Path, workflow) {
@@ -136,39 +141,41 @@ func (g APIGitHub) FindRun(ctx context.Context, repo, tag, sha, workflow string)
 
 func (g APIGitHub) GetRun(ctx context.Context, repo string, id int64) (*WorkflowRun, error) {
 	var r apiRun
-	code, err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, id), nil, &r)
-	if err != nil {
+	if _, err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, id), nil, &r, false); err != nil {
 		return nil, err
-	}
-	if code == http.StatusNotFound {
-		return nil, fmt.Errorf("run %d not found in %s", id, repo)
 	}
 	return r.run(), nil
 }
 
 func (g APIGitHub) Steps(ctx context.Context, repo string, id int64) ([]Step, error) {
-	var out struct {
-		Jobs []struct {
-			Name       string `json:"name"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			Steps      []struct {
+	var steps []Step
+	// A matrix can run past 100 jobs: read every page, up to a cap that no real run reaches.
+	for page := 1; page <= 30; page++ {
+		var out struct {
+			Jobs []struct {
 				Name       string `json:"name"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
-			} `json:"steps"`
-		} `json:"jobs"`
-	}
-	if _, err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?per_page=100", repo, id), nil, &out); err != nil {
-		return nil, err
-	}
-	var steps []Step
-	for _, j := range out.Jobs {
-		if len(j.Steps) == 0 {
-			steps = append(steps, Step{Name: j.Name, Status: j.Status, Conclusion: j.Conclusion})
+				Steps      []struct {
+					Name       string `json:"name"`
+					Status     string `json:"status"`
+					Conclusion string `json:"conclusion"`
+				} `json:"steps"`
+			} `json:"jobs"`
 		}
-		for _, s := range j.Steps {
-			steps = append(steps, Step{Name: j.Name + " / " + s.Name, Status: s.Status, Conclusion: s.Conclusion})
+		if _, err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?per_page=100&page=%d", repo, id, page), nil, &out, false); err != nil {
+			return nil, err
+		}
+		for _, j := range out.Jobs {
+			if len(j.Steps) == 0 {
+				steps = append(steps, Step{Job: j.Name, Status: j.Status, Conclusion: j.Conclusion})
+			}
+			for _, s := range j.Steps {
+				steps = append(steps, Step{Job: j.Name, Name: s.Name, Status: s.Status, Conclusion: s.Conclusion})
+			}
+		}
+		if len(out.Jobs) < 100 {
+			break
 		}
 	}
 	return steps, nil
@@ -178,7 +185,7 @@ func (g APIGitHub) ReleaseURL(ctx context.Context, repo, tag string) (string, bo
 	var r struct {
 		HTMLURL string `json:"html_url"`
 	}
-	code, err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/releases/tags/"+url.PathEscape(tag), nil, &r)
+	code, err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/releases/tags/"+url.PathEscape(tag), nil, &r, true)
 	if err != nil || code == http.StatusNotFound {
 		return "", false, err
 	}
@@ -189,6 +196,11 @@ func (g APIGitHub) CreateRelease(ctx context.Context, repo, tag, title, notes st
 	var r struct {
 		HTMLURL string `json:"html_url"`
 	}
-	_, err := g.do(ctx, http.MethodPost, "/repos/"+repo+"/releases", map[string]any{"tag_name": tag, "name": title, "body": notes}, &r)
-	return r.HTMLURL, err
+	if _, err := g.do(ctx, http.MethodPost, "/repos/"+repo+"/releases", map[string]any{"tag_name": tag, "name": title, "body": notes}, &r, false); err != nil {
+		return "", err
+	}
+	if r.HTMLURL == "" {
+		return "", fmt.Errorf("POST /repos/%s/releases answered without a release URL: check %s/releases", repo, repo)
+	}
+	return r.HTMLURL, nil
 }

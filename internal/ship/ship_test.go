@@ -27,6 +27,7 @@ const changelog = "# Changelog\n\n## [1.3.0] - 2026-10-30\n- moves EF to 8.0.30\
 type fakeGit struct {
 	status, branch, remoteHead, remoteURL string
 	localTag, remoteTag                   string // sha, "" for none
+	pushErr                               string
 	calls                                 []string
 }
 
@@ -72,6 +73,9 @@ func (g *fakeGit) Run(_ context.Context, _ string, args ...string) (string, erro
 		g.localTag = head
 		return "", nil
 	case args[0] == "push":
+		if g.pushErr != "" {
+			return "", errors.New(g.pushErr)
+		}
 		g.remoteTag = head
 		return "", nil
 	}
@@ -115,17 +119,19 @@ func (r *fakeReg) Published(_ context.Context, pkg, _ string) (bool, error) {
 func (r *fakeReg) Metadata(context.Context, string, string) ([]byte, error) {
 	return []byte(r.meta), nil
 }
+func (r *fakeReg) SameVersion(a, b string) bool { return nugetRegistry{}.SameVersion(a, b) }
 func (r *fakeReg) MetadataVersion(m []byte) (string, error) {
 	return nugetRegistry{}.MetadataVersion(m)
 }
 
 type fakeGH struct {
-	run       *WorkflowRun
-	steps     []Step
-	created   int
-	existing  bool
-	findCalls int
-	getCalls  int
+	run        *WorkflowRun
+	steps      []Step
+	created    int
+	existing   bool
+	findCalls  int
+	getCalls   int
+	conclusion string
 }
 
 func (g *fakeGH) FindRun(context.Context, string, string, string, string) (*WorkflowRun, error) {
@@ -135,7 +141,10 @@ func (g *fakeGH) FindRun(context.Context, string, string, string, string) (*Work
 func (g *fakeGH) GetRun(context.Context, string, int64) (*WorkflowRun, error) {
 	g.getCalls++
 	r := *g.run
-	r.Status, r.Conclusion = "completed", "success"
+	r.Status, r.Conclusion = "completed", g.conclusion
+	if g.conclusion == "" {
+		r.Conclusion = "success"
+	}
 	return &r, nil
 }
 func (g *fakeGH) Steps(context.Context, string, int64) ([]Step, error) { return g.steps, nil }
@@ -163,7 +172,7 @@ func newRig() *rig {
 	r := &rig{git: newGit(), reg: &fakeReg{published: map[string]bool{}, meta: nuspec},
 		gh: &fakeGH{
 			run:   &WorkflowRun{ID: 7, URL: "https://github.com/acme/lib/actions/runs/7", Status: "in_progress"},
-			steps: []Step{{Name: "build / Checkout", Conclusion: "success"}, {Name: "build / Publish to NuGet", Conclusion: "success"}},
+			steps: []Step{{Job: "build", Name: "Checkout", Conclusion: "success"}, {Job: "build", Name: "Publish to NuGet", Conclusion: "success"}},
 		},
 		files: map[string]string{"src/Lib.csproj": csproj, "CHANGELOG.md": changelog}}
 	now := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
@@ -186,7 +195,7 @@ func newRig() *rig {
 }
 
 func spec() Spec {
-	return Spec{Registry: NuGet, VersionFrom: "src/Lib.csproj", Assert: []string{`Microsoft.EntityFrameworkCore" version="8.0.30"`}}
+	return Spec{Registry: NuGet, VersionFrom: "src/Lib.csproj", PublishStep: "Publish to NuGet", Assert: []string{`Microsoft.EntityFrameworkCore" version="8.0.30"`}}
 }
 
 func (r *rig) ship(t *testing.T, o Options) (*Record, error) {
@@ -294,7 +303,7 @@ func TestShipTagsPushesWatchesVerifiesAndReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%+v", err, rec.Steps)
 	}
-	if got := r.git.mutations(); len(got) != 2 || got[0] != "tag v1.3.0" || got[1] != "push origin refs/tags/v1.3.0" {
+	if got := r.git.mutations(); len(got) != 2 || got[0] != "tag -- v1.3.0" || got[1] != "push origin refs/tags/v1.3.0" {
 		t.Errorf("mutations = %v", got)
 	}
 	if r.gh.created != 1 || rec.Release == "" {
@@ -316,7 +325,7 @@ func TestShipTagsPushesWatchesVerifiesAndReleases(t *testing.T) {
 
 func TestAWorkflowThatSucceedsWhileSkippingItsPublishStepFails(t *testing.T) {
 	r := newRig()
-	r.gh.steps = []Step{{Name: "build / Checkout", Conclusion: "success"}, {Name: "build / Publish to NuGet", Conclusion: "skipped"}}
+	r.gh.steps = []Step{{Job: "build", Name: "Checkout", Conclusion: "success"}, {Job: "build", Name: "Publish to NuGet", Conclusion: "skipped"}}
 	rec, err := r.ship(t, Options{})
 	if err == nil || !strings.Contains(err.Error(), "concluded \"skipped\"") || !strings.Contains(err.Error(), "nothing was published") {
 		t.Fatalf("a skipped publish must fail, got %v", err)
@@ -326,7 +335,7 @@ func TestAWorkflowThatSucceedsWhileSkippingItsPublishStepFails(t *testing.T) {
 	}
 	// A skipped job, with no steps, is the same failure.
 	r2 := newRig()
-	r2.gh.steps = []Step{{Name: "publish", Conclusion: "skipped"}}
+	r2.gh.steps = []Step{{Job: "Publish to NuGet", Conclusion: "skipped"}}
 	if _, err := r2.ship(t, Options{}); err == nil {
 		t.Error("a skipped publish job must fail")
 	}
@@ -354,7 +363,7 @@ func TestAnArtifactThatDoesNotMatchTheAssertionFails(t *testing.T) {
 	// The metadata's own version is asserted even with no configured lines.
 	r3 := newRig()
 	r3.reg.meta = strings.Replace(nuspec, "<version>1.3.0", "<version>1.2.0", 1)
-	if _, err := Run(context.Background(), r3.d, Spec{Registry: NuGet, VersionFrom: "src/Lib.csproj"}, Options{Name: "lib"}); err == nil {
+	if _, err := Run(context.Background(), r3.d, Spec{Registry: NuGet, VersionFrom: "src/Lib.csproj", PublishStep: "Publish to NuGet"}, Options{Name: "lib"}); err == nil {
 		t.Error("an artifact declaring another version must fail")
 	}
 }

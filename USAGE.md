@@ -1672,7 +1672,12 @@ The spec comes from `--file`, then the stack's `publish` setting (also valid in 
 ```
 
 `registry` is `nuget` or `npm`. Optional: `tag` (default `v{version}`), `packages`, `registryUrl`,
-`remote`, `branch`, `repo`, `workflow`, `publishStep` (default `publish`).
+`remote`, `branch`, `repo`, `workflow`, `publishStep` (default `publish`), `publishJob`.
+
+`publishStep` is the exact name of the workflow step that publishes (case does not matter). Every step
+with that name must have succeeded, so a skipped leg of a matrix refuses, and no match refuses.
+`publishJob` limits the match to one job. The version read from the project file must be a plain
+version (`1.3.0`, `1.3.0-beta.1`); anything with `/`, `..` or a leading `-` is refused.
 
 The gate reports every check and refuses with each cause named: the tree is not clean, the branch is not
 the default branch, the branch is not synced with the remote, the tag exists at another commit, the

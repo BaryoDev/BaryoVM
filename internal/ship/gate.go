@@ -84,8 +84,28 @@ func (d Deps) call(ctx context.Context) (context.Context, context.CancelFunc) {
 func (d Deps) git(ctx context.Context, args ...string) (string, error) {
 	c, cancel := d.call(ctx)
 	defer cancel()
-	return d.Git.Run(c, d.Dir, args...)
+	out, err := d.Git.Run(c, d.Dir, args...)
+	if err != nil {
+		err = redactedErr{msg: redact(err.Error()), err: err}
+	}
+	return out, err
 }
+
+// redactedErr keeps errors.Is and errors.As working while the text drops any URL credentials: a
+// remote written as https://user:token@host would otherwise reach a check reason, the record and
+// -o json through git's own error text.
+type redactedErr struct {
+	msg string
+	err error
+}
+
+func (e redactedErr) Error() string { return e.msg }
+func (e redactedErr) Unwrap() error { return e.err }
+
+var userinfoRe = regexp.MustCompile(`(://)[^/@\s'"]+@`)
+
+// redact removes user:password@ from every URL in s.
+func redact(s string) string { return userinfoRe.ReplaceAllString(s, "${1}") }
 
 // gateState is what the gate learned and later stages reuse.
 type gateState struct {
@@ -99,7 +119,10 @@ type gateState struct {
 	notes                 string
 }
 
-var githubRemoteRe = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
+// githubRemoteRe is anchored on the host, so evilgithub.com/o/r and github.com.evil.example/o/r do
+// not read as GitHub. It takes https://, ssh:// and git:// URLs (with optional credentials and a
+// port) and the scp form git@github.com:owner/name.
+var githubRemoteRe = regexp.MustCompile(`^(?:(?:https?|ssh|git)://(?:[^/@]+@)?|[A-Za-z0-9_.-]+@)github\.com(?::[0-9]+/|[:/])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
 
 func short(s string) string {
 	if len(s) > 8 {
@@ -124,6 +147,8 @@ func preflight(ctx context.Context, d Deps, s Spec, wantVersion string) ([]Check
 		fail(CheckVersion, "cannot read versionFrom %s: %v", s.VersionFrom, err)
 	} else if v, err := d.Registry.Version(b); err != nil {
 		fail(CheckVersion, "%s yields no version: %v", s.VersionFrom, err)
+	} else if verr := validVersion(v); verr != nil {
+		fail(CheckVersion, "%s: %v", s.VersionFrom, verr)
 	} else if wantVersion != "" && wantVersion != v {
 		fail(CheckVersion, "%s says %s but %s was asked for: bump the file first, or ask for %s", s.VersionFrom, v, wantVersion, v)
 	} else {
@@ -188,7 +213,7 @@ func preflight(ctx context.Context, d Deps, s Spec, wantVersion string) ([]Check
 		} else if m := githubRemoteRe.FindStringSubmatch(strings.TrimSpace(out)); m != nil {
 			st.repo = m[1] + "/" + m[2]
 		} else {
-			fail(CheckRepo, "%s is not a GitHub remote (%s): set publish.repo", remote, strings.TrimSpace(out))
+			fail(CheckRepo, "%s is not a GitHub remote (%s): set publish.repo", remote, redact(strings.TrimSpace(out)))
 		}
 	}
 	if st.repo != "" {
@@ -215,7 +240,7 @@ func preflight(ctx context.Context, d Deps, s Spec, wantVersion string) ([]Check
 		// release notes field
 		if text, present := d.Registry.ReleaseNotes(verFile); !present {
 			ok(CheckNotes, "the registry has no release notes field here")
-		} else if !strings.Contains(text, st.version) {
+		} else if !mentionsVersion(text, st.version) {
 			fail(CheckNotes, "PackageReleaseNotes in %s does not mention %s: update it, it is the only changelog a version comparison shows", s.VersionFrom, st.version)
 		} else {
 			ok(CheckNotes, "mentions "+st.version)
@@ -228,7 +253,7 @@ func preflight(ctx context.Context, d Deps, s Spec, wantVersion string) ([]Check
 			}
 		}
 		if len(st.packages) == 0 {
-			fail(CheckPublished, "no package name: %s declares none, set publish.packages", s.VersionFrom)
+			fail(CheckPublished, "no package name: %s declares no usable PackageId (a $(property) or a shared props file cannot name one), set publish.packages", s.VersionFrom)
 		} else {
 			var already, errs []string
 			for _, p := range st.packages {
@@ -271,6 +296,8 @@ func preflight(ctx context.Context, d Deps, s Spec, wantVersion string) ([]Check
 			fail(CheckDeployed, "cannot read the release record of stack %s: %v", s.RequireDeployed, err)
 		case !found:
 			fail(CheckDeployed, "stack %s has never finished a release: release it from this commit first", s.RequireDeployed)
+		case len(strings.TrimSpace(commit)) < 7:
+			fail(CheckDeployed, "the release record of stack %s holds no usable commit (%q): release it again from this commit", s.RequireDeployed, commit)
 		case st.head == "" || (commit != st.head && !strings.HasPrefix(st.head, commit)):
 			fail(CheckDeployed, "stack %s last released %s, not this source (%s): release it from this commit first", s.RequireDeployed, short(commit), short(st.head))
 		default:
@@ -339,3 +366,43 @@ func firstErr(errs ...error) error {
 	}
 	return nil
 }
+
+// mentionsVersion reports whether text names exactly version: "1.3.0" and "v1.3.0" count, "11.3.0",
+// "1.3.0-beta" and "1.3.01" do not. A full stop that ends a sentence after the version is fine.
+func mentionsVersion(text, version string) bool {
+	for from := 0; ; {
+		i := strings.Index(text[from:], version)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(version)
+		from = i + 1
+		if i > 0 {
+			b := text[i-1]
+			if b == 'v' || b == 'V' {
+				if i > 1 && isVerChar(text[i-2]) {
+					continue
+				}
+			} else if isVerChar(b) {
+				continue
+			}
+		}
+		if end < len(text) {
+			a := text[end]
+			if a == '-' || a == '+' || isAlnum(a) {
+				continue
+			}
+			if a == '.' && end+1 < len(text) && isAlnum(text[end+1]) {
+				continue
+			}
+		}
+		return true
+	}
+}
+
+func isAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func isVerChar(c byte) bool { return isAlnum(c) || c == '.' || c == '-' || c == '+' }

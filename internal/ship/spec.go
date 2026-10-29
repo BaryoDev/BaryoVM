@@ -17,6 +17,7 @@ package ship
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -56,9 +57,12 @@ type Spec struct {
 	Repo string `json:"repo,omitempty"`
 	// Workflow limits the run search to workflows whose name or file contains this.
 	Workflow string `json:"workflow,omitempty"`
-	// PublishStep is the text of the step or job that publishes. Default "publish". It must have
-	// run, not been skipped.
+	// PublishStep is the exact name of the step that publishes (a job with no steps is matched by
+	// its job name), compared without regard to case. Default "publish". Every step it matches must
+	// have run and succeeded, so a matrix with one skipped leg fails.
 	PublishStep string `json:"publishStep,omitempty"`
+	// PublishJob limits the match to the job with this name. Optional.
+	PublishJob string `json:"publishJob,omitempty"`
 	// Assert are lines the published artifact's metadata must contain. {version} and {package}
 	// are replaced. The metadata's own version is always asserted.
 	Assert []string `json:"assert,omitempty"`
@@ -100,13 +104,33 @@ func (s Spec) Validate() error {
 	if s.Repo != "" && !repoRe.MatchString(s.Repo) {
 		return fmt.Errorf("publish.repo %q must be owner/name", s.Repo)
 	}
-	if s.RegistryURL != "" && !strings.HasPrefix(s.RegistryURL, "https://") && !strings.HasPrefix(s.RegistryURL, "http://127.0.0.1") {
-		return fmt.Errorf("publish.registryUrl %q must be https", s.RegistryURL)
+	if s.RegistryURL != "" {
+		u, err := url.Parse(s.RegistryURL)
+		local := err == nil && u.Scheme == "http" && u.Hostname() == "127.0.0.1"
+		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !local) {
+			return fmt.Errorf("publish.registryUrl %q must be an https URL without credentials (http only for 127.0.0.1)", redact(s.RegistryURL))
+		}
+	}
+	for _, a := range s.Assert {
+		if strings.TrimSpace(a) == "" {
+			return fmt.Errorf("publish.assert has an empty line: an empty assertion holds for any artifact")
+		}
 	}
 	for _, p := range s.Packages {
 		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " \t\r\n?#") {
 			return fmt.Errorf("publish.packages has a bad name %q", p)
 		}
+	}
+	return nil
+}
+
+var versionRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+){0,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// validVersion is the shape a version must have before it reaches a tag name, a git argument, a URL
+// or a file name: digits and dots, then an optional -prerelease and +build.
+func validVersion(v string) error {
+	if !versionRe.MatchString(v) || strings.Contains(v, "..") {
+		return fmt.Errorf("%q is not a version: expected digits and dots with an optional -prerelease and +build, such as 1.2.3 or 1.2.3-beta.1", v)
 	}
 	return nil
 }

@@ -29,7 +29,7 @@ func (ExecGit) Run(ctx context.Context, dir string, args ...string) (string, err
 			return string(out), fmt.Errorf("git %s: %w", args[0], ctx.Err())
 		}
 		if m := strings.TrimSpace(stderr.String()); m != "" {
-			return string(out), fmt.Errorf("git %s: %s", args[0], m)
+			return string(out), fmt.Errorf("git %s: %s", args[0], redact(m))
 		}
 		return string(out), fmt.Errorf("git %s: %w", args[0], err)
 	}

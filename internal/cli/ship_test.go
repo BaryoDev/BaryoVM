@@ -119,8 +119,10 @@ func TestShipDryRunEmitsTheRecordAndTagsNothing(t *testing.T) {
 			t.Errorf("dry run ran %q", c)
 		}
 	}
-	if _, err := os.Stat(ship.RecordPath(baryovmHome(), "lib", "1.3.0")); err == nil {
-		t.Error("a dry run saved a record")
+	if p, _ := ship.RecordPath(baryovmHome(), "lib", "1.3.0"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			t.Error("a dry run saved a record")
+		}
 	}
 }
 
