@@ -978,10 +978,10 @@ Checked:
 Option parsing follows the tools: git long options may be abbreviated (an
 ambiguous abbreviation is refused), grouped short flags are read letter by
 letter, a gh flag group with a letter the subcommand does not have is refused,
-and a relative `-F` path is refused when git may be redirected (`--git-dir`,
-`--work-tree`, `--bare`, `-c core.worktree`, `-c core.bare`, `GIT_DIR`,
-`GIT_WORK_TREE`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`); pass an absolute
-path. For `gh pr`, `gh issue` and `gh release` the only flags allowed before the
+and a relative `-F` path is refused when any git global flag other than `-C` is
+given, or `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` or any `GIT_CONFIG*`
+variable is set, since each can move where git reads the file from; pass an
+absolute path. For `gh pr`, `gh issue` and `gh release` the only flags allowed before the
 command are `-R <repo>`, `--repo <repo>` and `--repo=<repo>`.
 
 Every other git and gh command passes straight through with the tool's own

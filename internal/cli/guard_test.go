@@ -375,6 +375,9 @@ func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
 		{"git", "-c", "Core.WorkTree=/x", "commit", "-F", "m.txt"},
 		{"git", "--bare", "commit", "-F", "m.txt"},
 		{"git", "--config-env=core.worktree=X", "commit", "-F", "m.txt"},
+		{"git", "-c", "user.name=x", "commit", "-F", "m.txt"},
+		{"git", "-cinclude.path=/x", "commit", "-F", "m.txt"},
+		{"git", "--no-pager", "commit", "-F", "m.txt"},
 	} {
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		err := runGroup(t, args...)
@@ -382,19 +385,21 @@ func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
 			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
 		}
 	}
-	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
+	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL"} {
 		t.Setenv(env, "1")
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		err := runGroup(t, "git", "commit", "-F", "m.txt")
 		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
 			t.Fatalf("%s: err=%v ran=%v", env, err, *ran)
 		}
-		t.Setenv(env, "")
+		if err := os.Unsetenv(env); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// An unrelated -c is not a redirect.
+	// With no global flag and no GIT_* redirect, the relative file is read and the commit runs.
 	ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
-	if err := runGroup(t, "git", "-c", "user.name=x", "commit", "-F", "m.txt"); err != nil || len(*ran) != 1 {
-		t.Fatalf("unrelated -c: err=%v ran=%v", err, *ran)
+	if err := runGroup(t, "git", "commit", "-F", "m.txt"); err != nil || len(*ran) != 1 {
+		t.Fatalf("plain commit: err=%v ran=%v", err, *ran)
 	}
 }
 

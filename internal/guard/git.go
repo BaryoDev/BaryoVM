@@ -229,25 +229,26 @@ func commitFilePath(globals []string, p string) (string, error) {
 	if filepath.IsAbs(p) {
 		return p, nil
 	}
-	// With --git-dir, --work-tree, GIT_DIR or GIT_WORK_TREE set, git decides where a relative path
-	// starts from the work tree layout. That is not guessed here: the path is refused.
+	// Where git starts a relative path depends on the work tree layout, which globals, -c config
+	// and GIT_* variables can all move. Listing every way to move it is a race this guard loses,
+	// so only -C is trusted: any other global flag, or any variable that can point git elsewhere,
+	// refuses the relative path.
 	redirected := false
-	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
-		if os.Getenv(env) != "" {
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == "GIT_DIR" || name == "GIT_WORK_TREE" || name == "GIT_COMMON_DIR" || strings.HasPrefix(name, "GIT_CONFIG") {
 			redirected = true
 		}
 	}
-	for i, g := range globals {
-		l := strings.ToLower(g)
-		if g == "--bare" || g == "--git-dir" || g == "--work-tree" || strings.HasPrefix(g, "--git-dir=") || strings.HasPrefix(g, "--work-tree=") || strings.HasPrefix(g, "--config-env") {
-			redirected = true
+	for i := 0; i < len(globals); i++ {
+		if globals[i] == "-C" && i+1 < len(globals) {
+			i++
+			continue
 		}
-		if strings.HasPrefix(l, "-ccore.") || (i > 0 && globals[i-1] == "-c" && (strings.HasPrefix(l, "core.worktree") || strings.HasPrefix(l, "core.bare"))) {
-			redirected = true
-		}
+		redirected = true
 	}
 	if redirected {
-		return "", fmt.Errorf("the message file %s is relative and git may be pointed at another work tree (--git-dir, --work-tree, --bare, -c core.worktree, -c core.bare, GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT): pass an absolute path to -F", p)
+		return "", fmt.Errorf("the message file %s is relative and git may read it from another work tree (a global flag other than -C, or GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR or GIT_CONFIG* is set): pass an absolute path to -F", p)
 	}
 	dir := ""
 	for i := 0; i+1 < len(globals); i++ {
