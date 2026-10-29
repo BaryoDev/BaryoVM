@@ -231,14 +231,23 @@ func commitFilePath(globals []string, p string) (string, error) {
 	}
 	// With --git-dir, --work-tree, GIT_DIR or GIT_WORK_TREE set, git decides where a relative path
 	// starts from the work tree layout. That is not guessed here: the path is refused.
-	redirected := os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != ""
-	for _, g := range globals {
-		if g == "--git-dir" || g == "--work-tree" || strings.HasPrefix(g, "--git-dir=") || strings.HasPrefix(g, "--work-tree=") {
+	redirected := false
+	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
+		if os.Getenv(env) != "" {
+			redirected = true
+		}
+	}
+	for i, g := range globals {
+		l := strings.ToLower(g)
+		if g == "--bare" || g == "--git-dir" || g == "--work-tree" || strings.HasPrefix(g, "--git-dir=") || strings.HasPrefix(g, "--work-tree=") || strings.HasPrefix(g, "--config-env") {
+			redirected = true
+		}
+		if strings.HasPrefix(l, "-ccore.") || (i > 0 && globals[i-1] == "-c" && (strings.HasPrefix(l, "core.worktree") || strings.HasPrefix(l, "core.bare"))) {
 			redirected = true
 		}
 	}
 	if redirected {
-		return "", fmt.Errorf("the message file %s is relative and git is pointed elsewhere by --git-dir, --work-tree, GIT_DIR or GIT_WORK_TREE. Pass an absolute path to -F", p)
+		return "", fmt.Errorf("the message file %s is relative and git may be pointed at another work tree (--git-dir, --work-tree, --bare, -c core.worktree, -c core.bare, GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT): pass an absolute path to -F", p)
 	}
 	dir := ""
 	for i := 0; i+1 < len(globals); i++ {

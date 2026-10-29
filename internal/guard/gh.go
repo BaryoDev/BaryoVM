@@ -79,25 +79,28 @@ func CheckGh(r Runner, args []string) Verdict {
 	var words []string
 	// The group and verb are the first two words that are not flags. -R and --repo take a value
 	// that is not a word, so it is skipped: `gh pr -R o/r create` is still `pr create`.
+	// Any other flag before the verb cannot be read with certainty (how many words it takes), so
+	// for the groups we scan it is refused rather than guessed at.
+	oddFlag := ""
 	for i := 0; i < len(args) && len(words) < 2; i++ {
 		a := args[i]
-		if a == "--repo" {
+		switch {
+		case a == "-R" || a == "--repo":
 			i++
-			continue
-		}
-		if len(a) >= 2 && a[0] == '-' && a[1] != '-' {
-			// Before the verb is known only -R matters: it takes the next word as its value.
-			if k := strings.IndexByte(a, 'R'); k >= 0 && k == len(a)-1 {
-				i++
+		case strings.HasPrefix(a, "--repo="):
+		case strings.HasPrefix(a, "-"):
+			if oddFlag == "" {
+				oddFlag = a
 			}
-			continue
-		}
-		if !strings.HasPrefix(a, "-") {
+		default:
 			words = append(words, a)
 		}
 	}
 	if len(words) < 2 {
 		return allow("gh")
+	}
+	if oddFlag != "" && (words[0] == "pr" || words[0] == "issue" || words[0] == "release") {
+		return refuse("gh "+words[0]+" "+words[1], fmt.Sprintf("gh %s %s refused: cannot read the flag %s before the command. Put flags after the command; only -R <repo> and --repo <repo> may come before it", words[0], words[1], oddFlag), nil)
 	}
 	action := "gh " + words[0] + " " + words[1]
 	if !ghChecked[words[0]+" "+words[1]] {
