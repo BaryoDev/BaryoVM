@@ -459,6 +459,17 @@ func TestGhGroupedShortFlagsAreWalked(t *testing.T) {
 	if err := runGroup(t, "gh", "release", "create", "v1", "-wb", cliFakeKey); err == nil || len(*ran) != 0 {
 		t.Fatalf("w is not a release create flag: err=%v ran=%v", err, *ran)
 	}
+	// The refusal is for the letter itself: the value here is clean.
+	for _, args := range [][]string{
+		{"gh", "pr", "create", "-zb", "fine"},
+		{"gh", "release", "create", "v1", "-wb", "fine"},
+	} {
+		ran = withGuardSeams(t, &fakeGuardRunner{}, 0)
+		err := runGroup(t, args...)
+		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "flag group") {
+			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
+		}
+	}
 	// A clean group passes.
 	ran = withGuardSeams(t, &fakeGuardRunner{}, 0)
 	if err := runGroup(t, "gh", "pr", "create", "-wb", "fine"); err != nil || len(*ran) != 1 {
