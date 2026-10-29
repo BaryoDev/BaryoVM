@@ -181,3 +181,44 @@ func TestStackSetPublishRoundTripsAndClears(t *testing.T) {
 		t.Error("an invalid spec was stored")
 	}
 }
+
+type deployedRunner struct {
+	out  string
+	seen []string
+}
+
+func (r *deployedRunner) Run(cmd string) (string, error) {
+	r.seen = append(r.seen, cmd)
+	return r.out, nil
+}
+func (r *deployedRunner) Close() error { return nil }
+
+// requireDeployed reads the stack's release record over its VM: this runs that path against a fake VM.
+func TestDeployedCommitReadsTheReleaseRecordOverTheVM(t *testing.T) {
+	stackFixture(t)
+	r := &deployedRunner{out: `{"stack":"app","commit":"abc123","at":"2026-10-30T00:00:00Z"}`}
+	prev := dialRelease
+	dialRelease = func(vm *fleet.VM) (remoteSession, error) {
+		if vm.Name != "vm1" {
+			t.Errorf("dialed %q, want the stack's VM vm1", vm.Name)
+		}
+		return r, nil
+	}
+	t.Cleanup(func() { dialRelease = prev })
+
+	commit, found, err := deployedCommit(context.Background(), "app")
+	if err != nil || !found || commit != "abc123" {
+		t.Fatalf("commit=%q found=%v err=%v", commit, found, err)
+	}
+	if len(r.seen) != 1 || !strings.Contains(r.seen[0], ".baryovm-release-app.deployed.json") {
+		t.Errorf("the record was not read from the stack record file: %v", r.seen)
+	}
+
+	r.out = ""
+	if _, found, err := deployedCommit(context.Background(), "app"); err != nil || found {
+		t.Errorf("a stack with no record: found=%v err=%v", found, err)
+	}
+	if _, _, err := deployedCommit(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), `no stack named "nope"`) {
+		t.Errorf("unknown stack: %v", err)
+	}
+}

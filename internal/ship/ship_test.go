@@ -92,7 +92,8 @@ type fakeReg struct {
 	published map[string]bool // by package
 	meta      string
 	queries   int
-	failAfter int // published becomes true after this many Published calls, when > 0
+	afterTag  *fakeGit // when set, packages resolve once the tag is on the remote, as a real publish run would
+	failAfter int      // published becomes true after this many Published calls, when > 0
 }
 
 func (r *fakeReg) Name() string { return NuGet }
@@ -104,6 +105,9 @@ func (r *fakeReg) ReleaseNotes(f []byte) (string, bool)  { return nugetRegistry{
 func (r *fakeReg) Published(_ context.Context, pkg, _ string) (bool, error) {
 	r.queries++
 	if r.failAfter > 0 && r.queries > r.failAfter {
+		return true, nil
+	}
+	if r.afterTag != nil && r.afterTag.remoteTag == head {
 		return true, nil
 	}
 	return r.published[pkg], nil
@@ -163,6 +167,7 @@ func newRig() *rig {
 		},
 		files: map[string]string{"src/Lib.csproj": csproj, "CHANGELOG.md": changelog}}
 	now := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	r.reg.afterTag = r.git
 	r.d = Deps{
 		Dir: "/repo", Git: r.git, Registry: r.reg,
 		ReadFile: func(p string) ([]byte, error) {
@@ -426,6 +431,7 @@ func TestAMissingTokenStopsBeforeTheTag(t *testing.T) {
 
 func TestRegistryPollsUntilEveryPackageResolves(t *testing.T) {
 	r := newRig()
+	r.reg.afterTag = nil
 	r.reg.failAfter = 3 // the gate asks once, then two empty polls
 	if _, err := r.ship(t, Options{}); err != nil {
 		t.Fatal(err)
@@ -436,6 +442,7 @@ func TestRegistryPollsUntilEveryPackageResolves(t *testing.T) {
 	r2 := newRig()
 	r2.d.Timings = Timings{Index: time.Minute, Poll: 10 * time.Second}
 	r2.reg.published["x"] = false
+	r2.reg.afterTag = nil
 	r2.reg.failAfter = 0
 	// published stays false after the tag, so the wait must end with the package named.
 	_, err := r2.ship(t, Options{})
