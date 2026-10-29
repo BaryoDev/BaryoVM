@@ -52,6 +52,8 @@ previously accepted is called out here rather than left to be discovered.
   HTTP dialer refuses them, and text from the network is stripped of control characters and capped
   at 300 characters. `--url` now refuses a bare IP, a non-punycode name and a URL with credentials.
   ([#107])
+  `scan` now refuses IP and single-label targets (`localhost`, raw IPs) that were passed straight to
+  ZAP before, and `--fail-on low` or `informational` now counts the DNS posture findings.
 - **`vm prune <name>`.** Plans disk cleanup by default (item, size, reason) and deletes nothing
   until `--apply`, which prints the space freed and `df` before and after. Never touches named
   volumes, images any container uses, `bin/` without a project file, or dirty worktrees. `--floor
