@@ -117,9 +117,27 @@ func checkContainerNames(c sshx.Runner, cs compose.Stack) error {
 		return err
 	}
 	if err != nil {
+		// A stack dir that does not exist yet has no compose file to read, so there is nothing
+		// to collide with and nothing worth a warning (#121).
+		if strings.Contains(err.Error(), "No such file or directory") {
+			return nil
+		}
 		ui.Warnf("could not check container names before compose up: %v", err)
 	}
 	return nil
+}
+
+// backupCause turns a failed pre-release backup into a message that names the cause. The raw error
+// carries the whole remote script, which says nothing about why it failed.
+func backupCause(err error, container string) string {
+	msg := err.Error()
+	if strings.Contains(msg, "No such container") {
+		return fmt.Sprintf("no container named %s", container)
+	}
+	if i := strings.LastIndex(msg, "`: "); i >= 0 {
+		msg = msg[i+3:]
+	}
+	return strings.TrimSpace(msg)
 }
 
 // runLocal runs a local command (e.g. rsync) and returns combined output. A variable so a release
@@ -250,34 +268,44 @@ func newStackReleaseCmd() *cobra.Command {
 				return e
 			}
 
-			// A container_name held by a container this project does not own, typically one started
-			// by hand with docker run, fails compose up at the very end: after the backup, the rsync
-			// and a full image build (#1). So it is checked before any of them.
-			if !m.NoCompose {
-				if err := ui.Step("check container names", func() error {
-					c, err := dialRelease(vm)
-					if err != nil {
-						return err
-					}
-					defer c.Close()
-					return checkContainerNames(c, releaseComposeStack(st, m))
-				}); err != nil {
-					return fail(err)
-				}
+			// A static site's artifact is built outside the release. Refuse before anything is
+			// backed up, synced or run if it is not there (#68).
+			if err := m.CheckRequireLocal(); err != nil {
+				return fail(err)
 			}
 
 			// Safety first: back up before releasing (unless opted out / no DB configured).
 			if !noBackup && st.DBContainer != "" && st.DBName != "" {
-				if err := ui.Step("backup", func() error {
+				// A first release has no database container yet, so there is nothing to dump. That is
+				// skipped with one line. A container that exists and fails to dump still stops the
+				// release, and so does a probe that cannot tell (it falls through to the backup).
+				bcfg := releaseBackupConfig(st, m)
+				skip := false
+				if err := ui.Step("check database container", func() error {
 					c, err := dialRelease(vm)
 					if err != nil {
 						return err
 					}
 					defer c.Close()
-					_, err = backup.Backup(c, releaseBackupConfig(st, m))
-					return err
+					if ok, e := backup.ContainerExists(c, bcfg); e == nil && !ok {
+						skip = true
+					}
+					return nil
 				}); err != nil {
 					return fail(fmt.Errorf("pre-release backup failed: %w", err))
+				}
+				if skip {
+					ui.Notef("no database container named %s yet, skipping the pre-release backup", st.DBContainer)
+				} else if err := ui.Step("backup", func() error {
+					c, err := dialRelease(vm)
+					if err != nil {
+						return err
+					}
+					defer c.Close()
+					_, err = backup.Backup(c, bcfg)
+					return err
+				}); err != nil {
+					return fail(fmt.Errorf("pre-release backup failed: %s", backupCause(err, st.DBContainer)))
 				}
 			}
 
@@ -319,6 +347,19 @@ func newStackReleaseCmd() *cobra.Command {
 				return fail(err)
 			}
 			defer c.Close()
+
+			// A container_name held by a container this project does not own, typically one started
+			// by hand with docker run, fails compose up at the very end. It is checked here, after
+			// the sync, because compose reads the compose file from the VM and on a first release
+			// that file is not there until the sync has put it there (#150). It still comes before
+			// the image builds and compose up, which are the expensive and disruptive steps.
+			if !m.NoCompose {
+				if err := ui.Step("check container names", func() error {
+					return checkContainerNames(c, releaseComposeStack(st, m))
+				}); err != nil {
+					return fail(err)
+				}
+			}
 
 			if !noBuild {
 				for _, b := range m.Builds {
@@ -397,12 +438,14 @@ func newStackReleaseCmd() *cobra.Command {
 			// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
 			// every listing pointed at.
 			plan := m.Verification(st.HealthURL)
+			attemptsUsed := 0
 			if len(plan.Commands) == 0 {
 				ui.Warnf("nothing to verify: set verify in the manifest or healthUrl on the stack")
 			} else {
 				if err := ui.Step("verify", func() error {
 					var last error
 					for attempt := 1; attempt <= plan.Attempts; attempt++ {
+						attemptsUsed = attempt
 						last = nil
 						for _, cmdStr := range plan.Commands {
 							out, e := c.Run(cmdStr)
@@ -425,8 +468,20 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
+			// Say which check ran, so a release that verified nothing cannot read as one that did.
 			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released",
-				Data: map[string]string{"transport": string(transport)}})
+				Data: map[string]any{
+					"transport": string(transport),
+					"verify": map[string]any{
+						"source":   plan.Source,
+						"checks":   len(plan.Commands),
+						"attempts": attemptsUsed,
+					},
+				}})
+			if len(plan.Commands) > 0 {
+				ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", args[0],
+					verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)
+			}
 			ui.Successf("%s: release done", args[0])
 			return nil
 		},
@@ -436,6 +491,17 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "with a tls block: take over a vhost file BaryoVM did not write (backed up first)")
 	return cmd
+}
+
+// verifyLabel names a verify plan's source for the success line.
+func verifyLabel(source string) string {
+	switch source {
+	case "manifest":
+		return "the manifest verify list"
+	case "healthUrl":
+		return "the stack healthUrl"
+	}
+	return source
 }
 
 func lastLines(s string, n int) string {

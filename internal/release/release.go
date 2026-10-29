@@ -82,6 +82,12 @@ type Manifest struct {
 	// would fail after the sync had already succeeded.
 	NoCompose bool `json:"noCompose,omitempty"`
 
+	// RequireLocal lists paths, relative to localRoot, that must exist before anything is synced.
+	// A static site's artifact is built outside the release, and a release over a missing one
+	// syncs nothing, reloads the web server and verifies the previous deploy still answering 200.
+	// This turns that into a refusal. It catches a missing artifact, not a stale one.
+	RequireLocal []string `json:"requireLocal,omitempty"`
+
 	// PreDeploy runs on the VM after syncing and building, and BEFORE compose up. This is where a
 	// guard belongs: a check in PostDeploy runs after the thing it guards has already taken
 	// effect, so a release can only report that the stack is now wrong, not prevent it.
@@ -128,6 +134,11 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 	}
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
+	}
+	for _, rel := range m.RequireLocal {
+		if strings.TrimSpace(rel) == "" {
+			return nil, fmt.Errorf("%s: requireLocal entries must not be empty", path)
+		}
 	}
 	if m.TLS != nil {
 		if err := m.TLS.Validate(m.RemoteRoot); err != nil {
@@ -229,6 +240,19 @@ func (m *Manifest) BuildCmd(b Build) string {
 // different parser, so not the same function.
 func quoteRsync(p string) string { return "'" + strings.ReplaceAll(p, "'", "''") + "'" }
 
+// CheckRequireLocal refuses a release whose required local paths are not all there. It runs before
+// the sync, so nothing has been transferred and no hook has run when it says no.
+func (m *Manifest) CheckRequireLocal() error {
+	root := expand(m.LocalRoot)
+	for _, rel := range m.RequireLocal {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("required local path %s is missing: build it before releasing, nothing was synced", p)
+		}
+	}
+	return nil
+}
+
 func expand(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -255,6 +279,8 @@ func sortedKeys(m map[string]string) []string {
 // VerifyPlan is what a release should run to satisfy itself that the deploy worked, and how long to
 // keep trying.
 type VerifyPlan struct {
+	// Source says where the commands came from: "manifest", "healthUrl" or "none".
+	Source string
 	// Commands run on the VM, in order. Empty means nothing was configured.
 	Commands []string
 	// Attempts is how many times the whole plan may be retried before the release is failed.
@@ -339,10 +365,13 @@ func (m *Manifest) Verification(healthURL string) VerifyPlan {
 		for _, c := range m.Verify {
 			p.Commands = append(p.Commands, m.inRemoteRoot(c))
 		}
+		p.Source = "manifest"
 		return p
 	}
 
+	p.Source = "none"
 	if strings.TrimSpace(healthURL) != "" {
+		p.Source = "healthUrl"
 		p.Commands = append(p.Commands,
 			fmt.Sprintf("curl --fail --silent --show-error --max-time 10 -o /dev/null %s",
 				sshx.Quote(healthURL)))

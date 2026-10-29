@@ -90,6 +90,22 @@ func ValidateEnvFile(name string) error {
 	return nil
 }
 
+// ContainerExists reports whether the configured database container exists on the host, running or
+// not. It lists names rather than inspecting the one container, so an error (docker not reachable,
+// permission denied) comes back as an error and is never mistaken for "no such container".
+func ContainerExists(c sshx.Runner, cfg Config) (bool, error) {
+	out, err := c.Run(cfg.dockerCmd() + ` ps -a --format '{{.Names}}'`)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == cfg.DBContainer {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Backup dumps the DB (custom format) + copies the config, then prunes old ones.
 func Backup(c sshx.Runner, cfg Config) (string, error) {
 	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
