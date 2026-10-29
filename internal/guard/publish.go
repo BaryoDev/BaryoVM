@@ -41,12 +41,6 @@ var publicRegistries = map[string]bool{
 // Exec runs a command in dir and returns its stdout. It is the seam to npm, so tests never run it.
 type Exec func(dir, name string, args []string) (string, error)
 
-// NpmContext is the npm configuration that does not live in the package directory.
-type NpmContext struct {
-	EnvRegistry string // npm_config_registry
-	UserConfig  string // path of the user .npmrc
-}
-
 // registryHost returns the lowercased host of a registry URL. The error never echoes the URL: it
 // can carry a token as userinfo.
 func registryHost(raw string) (string, error) {
@@ -57,34 +51,25 @@ func registryHost(raw string) (string, error) {
 	return strings.ToLower(u.Hostname()), nil
 }
 
-// parseNpmrc reads key=value lines, skipping comments, and expands ${VAR} from the environment.
-func parseNpmrc(text string) map[string]string {
-	out := map[string]string{}
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		v = strings.Trim(strings.TrimSpace(v), `"'`)
-		v = os.Expand(v, os.Getenv)
-		out[strings.TrimSpace(k)] = v
-	}
-	return out
-}
-
 // npmArgs holds what the wrapper needs from the publish arguments. Everything is passed on to npm
 // unchanged; this only reads them.
 type npmArgs struct {
-	dir        string
-	registry   string
-	userconfig string
+	dir string
+	// cfg are the arguments that change which npm configuration applies. They are passed to
+	// `npm config get` so it answers for the same command line.
+	cfg []string
 }
 
-var npmValueFlags = map[string]bool{"--tag": true, "--access": true, "--otp": true, "--registry": true, "--userconfig": true, "--provenance-file": true}
+var npmValueFlags = map[string]bool{"--tag": true, "--access": true, "--otp": true, "--registry": true, "--userconfig": true, "--globalconfig": true, "--prefix": true, "--provenance-file": true}
+
+// isNpmConfigFlag reports whether a flag changes npm's configuration lookup.
+func isNpmConfigFlag(name string) bool {
+	switch name {
+	case "--registry", "--userconfig", "--globalconfig", "--prefix":
+		return true
+	}
+	return strings.HasPrefix(name, "--@") && strings.HasSuffix(name, ":registry")
+}
 
 func parseNpmArgs(args []string) (npmArgs, error) {
 	var a npmArgs
@@ -104,11 +89,8 @@ func parseNpmArgs(args []string) (npmArgs, error) {
 				i++
 				val = args[i]
 			}
-			switch name {
-			case "--registry":
-				a.registry = val
-			case "--userconfig":
-				a.userconfig = val
+			if isNpmConfigFlag(name) {
+				a.cfg = append(a.cfg, name+"="+val)
 			}
 		case strings.HasPrefix(w, "-") && len(w) > 1:
 			// short boolean flags (-h)
@@ -170,9 +152,6 @@ type pkgJSON struct {
 }
 
 func readOptional(r Runner, path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
 	b, err := r.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -185,7 +164,7 @@ func readOptional(r Runner, path string) (string, error) {
 
 // CheckNpmPublish plans `npm publish`: pack the package without writing anything, scan every file
 // npm would ship, then check the registry npm would publish to against the policy.
-func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy, nc NpmContext) Verdict {
+func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy) Verdict {
 	const action = "publish npm"
 	a, err := parseNpmArgs(args)
 	if err != nil {
@@ -209,23 +188,22 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy, nc NpmContex
 		return refuse(action, action+" refused: cannot read package.json in "+a.dir, nil)
 	}
 
-	user := nc.UserConfig
-	if a.userconfig != "" {
-		user = a.userconfig
-	}
-	projText, perr := readOptional(r, filepath.Join(a.dir, ".npmrc"))
-	userText, uerr := readOptional(r, user)
-	if perr != nil || uerr != nil {
-		return refuse(action, action+" refused: cannot read .npmrc, so the registry cannot be resolved", nil)
-	}
+	// Ask npm which registry applies, so project, user, global and builtin config, environment
+	// variables and flags are resolved by npm and not by a copy of its rules here. A failure or an
+	// answer that is not a URL refuses.
 	layers := []map[string]string{pubConfig(pkg.PublishConfig)}
-	if a.registry != "" {
-		layers = append(layers, map[string]string{"registry": a.registry})
+	if scope, _, ok := strings.Cut(pkg.Name, "/"); ok && strings.HasPrefix(scope, "@") {
+		v, err := npmConfigGet(run, a, scope+":registry")
+		if err != nil {
+			return refuse(action, fmt.Sprintf("%s refused: %v, so the registry cannot be resolved", action, err), nil)
+		}
+		layers = append(layers, map[string]string{scope + ":registry": v})
 	}
-	if nc.EnvRegistry != "" {
-		layers = append(layers, map[string]string{"registry": nc.EnvRegistry})
+	v, err := npmConfigGet(run, a, "registry")
+	if err != nil || v == "" {
+		return refuse(action, fmt.Sprintf("%s refused: npm config get registry gave no answer (%v), so the registry cannot be resolved", action, err), nil)
 	}
-	layers = append(layers, parseNpmrc(projText), parseNpmrc(userText))
+	layers = append(layers, map[string]string{"registry": v})
 	raw := resolveRegistry(pkg.Name, layers)
 	host, err := registryHost(raw)
 	if err != nil {
@@ -265,6 +243,20 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy, nc NpmContex
 		return keyRefusal(action, "the files npm would publish", fs)
 	}
 	return allow(action)
+}
+
+// npmConfigGet runs `npm config get key` with the config-affecting arguments. npm prints
+// "undefined" for a key that is not set; that comes back as "".
+func npmConfigGet(run Exec, a npmArgs, key string) (string, error) {
+	out, err := run(a.dir, "npm", append([]string{"config", "get", key}, a.cfg...))
+	if err != nil {
+		return "", fmt.Errorf("npm config get %s failed (%v)", key, err)
+	}
+	out = strings.TrimSpace(out)
+	if out == "" || out == "undefined" || out == "null" {
+		return "", nil
+	}
+	return out, nil
 }
 
 func pubConfig(m map[string]any) map[string]string {
@@ -308,6 +300,7 @@ func CheckNuGetPush(r Runner, args []string, pol Policy) Verdict {
 	const action = "publish nuget"
 	var pkgs []string
 	source, symbols := "", ""
+	noSymbols, configfile := false, false
 	for i := 0; i < len(args); i++ {
 		w := args[i]
 		name, val, hasVal := strings.Cut(w, "=")
@@ -317,6 +310,10 @@ func CheckNuGetPush(r Runner, args []string, pol Policy) Verdict {
 				val = args[i]
 			}
 			switch name {
+			case "-n", "--no-symbols":
+				noSymbols = true
+			case "--configfile":
+				configfile = true
 			case "-s", "--source":
 				source = val
 			case "-ss", "--symbol-source":
@@ -328,6 +325,18 @@ func CheckNuGetPush(r Runner, args []string, pol Policy) Verdict {
 	}
 	if len(pkgs) == 0 {
 		return refuse(action, action+" refused: name the .nupkg file to push", nil)
+	}
+	if pol.RegistriesRestricted() {
+		// NuGet.Config can redirect the default source and a .snupkg goes to an implicit symbol
+		// source, neither of which can be read here, so a policy needs both made explicit.
+		switch {
+		case configfile:
+			return refuse(action, action+" refused: --configfile can change the source in ways that cannot be checked. Remove it and pass --source", nil)
+		case source == "":
+			return refuse(action, fmt.Sprintf("%s refused: no --source, and the default comes from NuGet.Config which cannot be checked against %s. Pass --source with the feed URL", action, RegistryPolicyKey), nil)
+		case !noSymbols && symbols == "":
+			return refuse(action, action+" refused: dotnet pushes a .snupkg to an implicit symbol source. Pass --no-symbols, or --symbol-source with the feed URL", nil)
+		}
 	}
 	if source == "" {
 		source = nugetDefaultSource

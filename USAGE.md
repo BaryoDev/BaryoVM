@@ -1017,14 +1017,19 @@ baryovm publish nuget bin/App.1.0.0.nupkg -s https://api.nuget.org/v3/index.json
 ```
 
 - npm: `npm pack --dry-run --json` lists what would ship (only its JSON is read) and every file is
-  scanned with the same key rules as `git`. The registry is resolved the way npm does: `publishConfig`,
-  then `--registry`, `npm_config_registry`, the project `.npmrc`, the user `.npmrc`, then
-  registry.npmjs.org (a scoped `@scope:registry` wins over the plain one). A package with
-  `"private": true` that resolves to a public registry is refused with the registry named. A tarball
-  argument and workspace flags are refused because they cannot be checked.
+  scanned with the same key rules as `git`. The registry comes from `publishConfig.registry` first,
+  then from npm itself: `npm config get registry` (and `npm config get @scope:registry` for a scoped
+  package) run in the package directory with your `--registry`, `--userconfig`, `--globalconfig` and
+  `--prefix` flags, so project, user, global and builtin config and environment variables count as npm
+  counts them. If npm cannot answer, or answers with something that is not a URL, the command is
+  refused. A package with `"private": true` that resolves to a public registry is refused with the
+  registry named. A tarball argument and workspace flags are refused because they cannot be checked.
 - NuGet: the `.nupkg` is opened as a zip and every entry is scanned. `--source` (`-s`) and
-  `--symbol-source` are checked; with no `--source` the source is api.nuget.org. `defaultPushSource` in
-  NuGet.Config is not read.
+  `--symbol-source` (`-ss`) are checked against the registry list. While a registry list is set, the
+  push is refused unless `--source` is given (the default comes from NuGet.Config, which is not read),
+  refused with `--configfile`, and refused unless symbols are handled: pass `--no-symbols` (`-n`), or
+  `--symbol-source` with a feed URL on the list, because dotnet otherwise pushes a `.snupkg` to an
+  implicit symbol source. With no list set, none of this applies.
 - A file or entry over 64 MiB, or a package over 512 MiB in total, is refused, not skipped.
 
 To limit where a repository may publish, list the allowed registry hosts (a full URL is reduced to its

@@ -8,7 +8,9 @@ Runs dotnet nuget push with the same arguments, after two checks:
 
   files   the .nupkg is opened as a zip and every entry is scanned for keys
   source  --source (or -s), and --symbol-source, are checked against the allowed
-          registries; with no --source the default is api.nuget.org
+          registries. While a registry policy is set, --source is required,
+          --configfile is refused, and symbols need --no-symbols or --symbol-source
+          (dotnet pushes a .snupkg to an implicit symbol source otherwise)
 
 An entry over the size limit is refused, not skipped. A source that is a name
 from NuGet.Config cannot be resolved here and is refused while a registry policy

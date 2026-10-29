@@ -6,9 +6,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/guard"
@@ -53,9 +51,10 @@ Runs npm publish with the same arguments, after two checks:
 
   files     npm pack --dry-run --json lists what would ship, and every file is
             scanned for keys
-  registry  the registry npm would publish to (publishConfig, then --registry,
-            npm_config_registry, the project .npmrc and the user .npmrc, then
-            registry.npmjs.org) is checked against the allowed registries
+  registry  the registry npm would publish to (publishConfig, then what
+            npm config get registry answers, with your --registry, --userconfig,
+            --globalconfig and --prefix flags) is checked against the allowed
+            registries; if npm cannot answer, the publish is refused
 
 A package marked "private": true that would go to the public registry is
 refused, with the registry named. A refusal names the file and line, never the
@@ -82,27 +81,10 @@ stay with you.
 			if err != nil {
 				return finishGuard(policyRefusal("publish npm", err), "npm", append([]string{"publish"}, args...))
 			}
-			nc := guard.NpmContext{EnvRegistry: os.Getenv("npm_config_registry"), UserConfig: userNpmrc()}
-			if nc.EnvRegistry == "" {
-				nc.EnvRegistry = os.Getenv("NPM_CONFIG_REGISTRY")
-			}
-			v := guard.CheckNpmPublish(guardRunner, publishExec, args, pol, nc)
+			v := guard.CheckNpmPublish(guardRunner, publishExec, args, pol)
 			return finishGuard(v, "npm", append([]string{"publish"}, args...))
 		},
 	}
-}
-
-func userNpmrc() string {
-	if p := os.Getenv("NPM_CONFIG_USERCONFIG"); p != "" {
-		return p
-	}
-	if p := os.Getenv("npm_config_userconfig"); p != "" {
-		return p
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".npmrc")
-	}
-	return ""
 }
 
 func newPublishNuGetCmd() *cobra.Command {
@@ -114,7 +96,9 @@ Runs dotnet nuget push with the same arguments, after two checks:
 
   files   the .nupkg is opened as a zip and every entry is scanned for keys
   source  --source (or -s), and --symbol-source, are checked against the allowed
-          registries; with no --source the default is api.nuget.org
+          registries. While a registry policy is set, --source is required,
+          --configfile is refused, and symbols need --no-symbols or --symbol-source
+          (dotnet pushes a .snupkg to an implicit symbol source otherwise)
 
 An entry over the size limit is refused, not skipped. A source that is a name
 from NuGet.Config cannot be resolved here and is refused while a registry policy

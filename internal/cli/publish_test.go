@@ -18,18 +18,28 @@ func withPublishSeams(t *testing.T, packOut string, packErr error) *[]string {
 	t.Helper()
 	old := publishExec
 	var ran []string
+	testNpmCfg = map[string]string{"registry": "https://registry.npmjs.org/"}
 	publishExec = func(dir, name string, args []string) (string, error) {
 		ran = append(ran, dir+": "+name+" "+strings.Join(args, " "))
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" {
+			v, ok := testNpmCfg[args[2]]
+			if !ok {
+				return "undefined\n", nil
+			}
+			if v == "FAIL" {
+				return "", errFake("npm config broke")
+			}
+			return v + "\n", nil
+		}
 		return packOut, packErr
 	}
 	t.Cleanup(func() { publishExec = old })
-	t.Setenv("NPM_CONFIG_USERCONFIG", "/no-user/.npmrc")
-	t.Setenv("npm_config_userconfig", "")
-	t.Setenv("npm_config_registry", "")
-	t.Setenv("NPM_CONFIG_REGISTRY", "")
 	t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "")
 	return &ran
 }
+
+// testNpmCfg is what the fake npm config get answers, by key.
+var testNpmCfg map[string]string
 
 const packOne = `[{"name":"demo","files":[{"path":"package.json","size":40},{"path":"index.js","size":20}]}]`
 
@@ -110,33 +120,71 @@ func TestPublishNpmRegistryOutsidePolicyIsRefusedAndNamed(t *testing.T) {
 	wantRefused(t, err, ran, 0, "registry.npmjs.org", "baryovm.allowedRegistries")
 }
 
-func TestPublishNpmRegistryResolutionOrder(t *testing.T) {
-	t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
-	cases := map[string]map[string]string{
-		"publishConfig": {"package.json": `{"name":"demo","publishConfig":{"registry":"https://pkgs.corp.example/npm/"}}`, "index.js": "x\n"},
-		"project npmrc": {"package.json": `{"name":"demo"}`, "index.js": "x\n", ".npmrc": "registry=https://pkgs.corp.example/npm/\n"},
-		"scoped npmrc":  {"package.json": `{"name":"@acme/demo"}`, "index.js": "x\n", ".npmrc": "@acme:registry=https://pkgs.corp.example/npm/\n"},
-		"user npmrc":    {"package.json": `{"name":"demo"}`, "index.js": "x\n", "/no-user/.npmrc": "registry=https://pkgs.corp.example/npm/\n"},
-	}
-	for name, files := range cases {
-		t.Run(name, func(t *testing.T) {
-			withPublishSeams(t, packOne, nil)
-			t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
-			ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
-			if err := runGroup(t, "publish", "npm"); err != nil {
-				t.Fatal(err)
-			}
-			if len(*ran) != 1 {
-				t.Fatalf("ran %v", *ran)
-			}
-		})
-	}
-	t.Run("publishConfig wins over npmrc", func(t *testing.T) {
+func TestPublishNpmRegistryComesFromNpmConfig(t *testing.T) {
+	t.Run("npm says allowed", func(t *testing.T) {
 		withPublishSeams(t, packOne, nil)
+		testNpmCfg["registry"] = "https://pkgs.corp.example/npm/"
 		t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
-		files := map[string]string{"package.json": `{"name":"demo","publishConfig":{"registry":"https://evil.example/"}}`, "index.js": "x\n", ".npmrc": "registry=https://pkgs.corp.example/\n"}
+		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+		if err := runGroup(t, "publish", "npm"); err != nil || len(*ran) != 1 {
+			t.Fatalf("err %v ran %v", err, *ran)
+		}
+	})
+	t.Run("scoped registry from npm", func(t *testing.T) {
+		withPublishSeams(t, packOne, nil)
+		testNpmCfg["@acme:registry"] = "https://pkgs.corp.example/npm/"
+		t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+		files := npmFiles("x\n")
+		files["package.json"] = `{"name":"@acme/demo"}`
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		if err := runGroup(t, "publish", "npm"); err != nil || len(*ran) != 1 {
+			t.Fatalf("err %v ran %v", err, *ran)
+		}
+	})
+	t.Run("npm outranks a project .npmrc that says otherwise", func(t *testing.T) {
+		withPublishSeams(t, packOne, nil)
+		testNpmCfg["registry"] = "https://evil.example/"
+		t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+		files := npmFiles("x\n")
+		files[".npmrc"] = "registry=https://pkgs.corp.example/\n"
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "evil.example")
+	})
+	t.Run("publishConfig wins over npm", func(t *testing.T) {
+		withPublishSeams(t, packOne, nil)
+		testNpmCfg["registry"] = "https://pkgs.corp.example/"
+		t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+		files := map[string]string{"package.json": `{"name":"demo","publishConfig":{"registry":"https://evil.example/"}}`, "index.js": "x\n"}
+		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "evil.example")
+	})
+	t.Run("npm config get failing refuses", func(t *testing.T) {
+		withPublishSeams(t, packOne, nil)
+		testNpmCfg["registry"] = "FAIL"
+		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+		wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "npm config get registry")
+	})
+	t.Run("an answer that is not a URL refuses", func(t *testing.T) {
+		withPublishSeams(t, packOne, nil)
+		testNpmCfg["registry"] = "not-a-url"
+		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+		wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "not a readable URL")
+	})
+	t.Run("config flags reach npm config get", func(t *testing.T) {
+		packs := withPublishSeams(t, packOne, nil)
+		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+		if err := runGroup(t, "publish", "npm", "--userconfig", "/u/.npmrc", "--tag", "next"); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, c := range *packs {
+			if strings.Contains(c, "config get registry --userconfig=/u/.npmrc") {
+				found = true
+			}
+		}
+		if !found || (*ran)[0] != "npm publish --userconfig /u/.npmrc --tag next" {
+			t.Fatalf("calls %v ran %v", *packs, *ran)
+		}
 	})
 }
 
@@ -197,11 +245,30 @@ func TestPublishNuGetSourceOutsidePolicyIsRefused(t *testing.T) {
 	pkg := nupkg(t, map[string]string{"App.nuspec": "<package/>"})
 	t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.dev.azure.com")
 	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"App.1.0.0.nupkg": pkg}}, 0)
-	// No --source means nuget.org.
-	wantRefused(t, runGroup(t, "publish", "nuget", "App.1.0.0.nupkg"), ran, 0, "api.nuget.org")
-	wantRefused(t, runGroup(t, "publish", "nuget", "App.1.0.0.nupkg", "--source", "feedname"), ran, 0, "feedname")
-	if err := runGroup(t, "publish", "nuget", "App.1.0.0.nupkg", "-s", "https://pkgs.dev.azure.com/o/_packaging/f/nuget/v3/index.json"); err != nil {
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.1.0.0.nupkg", "-s", "https://api.nuget.org/v3/index.json", "-n"), ran, 0, "api.nuget.org")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.1.0.0.nupkg", "--source", "feedname", "-n"), ran, 0, "feedname")
+	if err := runGroup(t, "publish", "nuget", "App.1.0.0.nupkg", "-n", "-s", "https://pkgs.dev.azure.com/o/_packaging/f/nuget/v3/index.json"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublishNuGetPolicyNeedsExplicitSourceAndSymbols(t *testing.T) {
+	pkg := nupkg(t, map[string]string{"App.nuspec": "<package/>"})
+	t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+	ran := withGuardSeams(t, &fakeGuardRunner{files: map[string]string{"App.nupkg": pkg}}, 0)
+	feed := "https://pkgs.corp.example/nuget/v3/index.json"
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "--no-symbols"), ran, 0, "no --source")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", feed, "--no-symbols", "--configfile", "n.config"), ran, 0, "--configfile")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", feed), ran, 0, "symbol")
+	wantRefused(t, runGroup(t, "publish", "nuget", "App.nupkg", "-s", feed, "-ss", "https://evil.example/s"), ran, 0, "evil.example")
+	if err := runGroup(t, "publish", "nuget", "App.nupkg", "-s", feed, "-n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGroup(t, "publish", "nuget", "App.nupkg", "-s", feed, "-ss", feed); err != nil {
+		t.Fatal(err)
+	}
+	if len(*ran) != 2 {
+		t.Fatalf("ran %v", *ran)
 	}
 }
 
