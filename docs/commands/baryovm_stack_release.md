@@ -16,6 +16,7 @@ baryovm stack release <name> [flags]
 ### Options
 
 ```
+      --adopt           with a tls block: take over a vhost file BaryoVM did not write (backed up first)
       --config string   release manifest path (overrides the stack's --release-file)
   -h, --help            help for release
       --no-backup       skip the automatic pre-release DB backup

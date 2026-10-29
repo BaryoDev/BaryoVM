@@ -1,0 +1,16 @@
+# Managed by BaryoVM (baryovm stack tls). Hand edits are overwritten on the next run.
+# Stage 1: port 80 only, until the certificate for example.com exists.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com www.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://example.com$request_uri;
+    }
+}

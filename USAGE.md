@@ -297,6 +297,45 @@ Manifest options:
 | `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
 | `verifyDelaySeconds` | `3` | wait between attempts |
 
+#### TLS and the nginx vhost
+
+A manifest with a `tls` block gets its nginx vhost and Let's Encrypt certificate written by
+`stack release` (after compose up, before `postDeploy`), or on its own with `stack tls`.
+
+```json
+"tls": {
+  "hosts": ["app.example.com"],
+  "canonical": "app.example.com",
+  "redirects": ["www.example.com"],
+  "email": "you@example.com",
+  "proxy": { "port": 5012, "maxBodySize": "32m", "largeHeaders": true }
+}
+```
+
+| key | what it does |
+|---|---|
+| `hosts` | names served, all on the certificate. Plain DNS names only; anything else is refused |
+| `canonical` | the name that serves content, default the first host. Other names redirect to it |
+| `redirects` | extra names that only redirect to `canonical`, also on the certificate |
+| `email` | ACME account contact |
+| `root` | static document root, default `remoteRoot`. Ignored with `proxy` |
+| `proxy.port` | proxy to `127.0.0.1:<port>`; Host, X-Forwarded-For, X-Forwarded-Proto and the upgrade headers are set by nginx |
+| `proxy.maxBodySize` | `client_max_body_size`, for example `32m` |
+| `proxy.largeHeaders` | larger proxy buffers, for backoffice logins whose cookies overflow the default |
+
+The sequence is safe to rerun: write a port 80 vhost (only when no certificate exists yet), run
+`certbot certonly --webroot` with `--keep-until-expiring`, write the real vhost, `nginx -t`, reload.
+The vhost is `/etc/nginx/conf.d/<canonical>.conf`, its first line says BaryoVM wrote it, and a file
+at that path without the line is refused unless you pass `--adopt`, which copies it to
+`<file>.baryovm-bak-<time>` first. If `nginx -t` rejects the new file the old one is put back and
+nginx is not reloaded. The steps run with `sudo -n`, so the SSH user needs passwordless sudo, and
+certbot must be installed. `/var/www/letsencrypt` is used as the ACME webroot.
+
+```sh
+baryovm stack tls app --dry-run     # print both configs and every command, touch nothing
+baryovm stack tls app --adopt       # take over a hand-written vhost
+```
+
 #### Moving a hand-run container into a stack
 
 A VM you already have is usually running containers started with `docker run`. If your compose file

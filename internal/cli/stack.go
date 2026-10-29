@@ -30,7 +30,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(),
 	)
 	return cmd
 }
@@ -210,7 +210,7 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 
 func newStackReleaseCmd() *cobra.Command {
 	var config string
-	var noBuild, noBackup bool
+	var noBuild, noBackup, adopt bool
 	cmd := &cobra.Command{
 		Use:   "release <name>",
 		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
@@ -365,6 +365,14 @@ func newStackReleaseCmd() *cobra.Command {
 				}
 			}
 
+			// The vhost and certificate, when the manifest declares them. After compose up so the
+			// upstream exists, before postDeploy so a hook that reloads nginx sees the new vhost.
+			if m.TLS != nil {
+				if err := m.ApplyTLS(c, tlsOptions(adopt), ui.Step); err != nil {
+					return fail(err)
+				}
+			}
+
 			// Whatever has to happen on the VM once the files are in place: restore an SELinux
 			// context, reload nginx, warm a cache. Ordered, and the first failure stops the release
 			// rather than reporting success over a half-applied deploy.
@@ -426,6 +434,7 @@ func newStackReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
+	cmd.Flags().BoolVar(&adopt, "adopt", false, "with a tls block: take over a vhost file BaryoVM did not write (backed up first)")
 	return cmd
 }
 
