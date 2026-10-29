@@ -247,3 +247,11 @@ func TestVMRemoteSetMarksAndClears(t *testing.T) {
 		t.Error("a bad mode must be refused")
 	}
 }
+
+func TestProbeKeyDiffersPerKeyPath(t *testing.T) {
+	a := probeKey(sshx.Target{Host: "h", Port: 22, User: "u", KeyPath: "/k/a"})
+	b := probeKey(sshx.Target{Host: "h", Port: 22, User: "u", KeyPath: "/k/b"})
+	if a == b {
+		t.Errorf("two keys for one host, port and user share the probe key %q", a)
+	}
+}

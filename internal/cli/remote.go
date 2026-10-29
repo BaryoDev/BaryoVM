@@ -49,6 +49,12 @@ func verifyRuns(key string, r sshx.Runner) error {
 	return nil
 }
 
+// probeKey is what the swallowed-command probe is cached under. The key path is part of it: two
+// keys for one host, port and user can differ in whether the VM pins a command to them.
+func probeKey(t sshx.Target) string {
+	return fmt.Sprintf("%s:%d:%s:%s", t.Host, t.Port, t.User, t.KeyPath)
+}
+
 // dialChecked is sshx.Dial for every command that sends shell. It refuses a VM marked forced, and
 // on any other VM proves the command is really executed, so a key pinned with command="..." fails
 // loudly instead of reporting success for a script baryovm never ran.
@@ -60,8 +66,7 @@ func dialChecked(vm *fleet.VM) (*sshx.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := vm.Target()
-	if err := verifyRuns(fmt.Sprintf("%s:%d:%s", t.Host, t.Port, t.User), c); err != nil {
+	if err := verifyRuns(probeKey(vm.Target()), c); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%s: %w", vm.Name, err)
 	}
