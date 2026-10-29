@@ -170,6 +170,41 @@ func TestPublishNpmRegistryComesFromNpmConfig(t *testing.T) {
 		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
 		wantRefused(t, runGroup(t, "publish", "npm"), ran, 0, "not a readable URL")
 	})
+	t.Run("an abbreviated registry flag is refused under a policy", func(t *testing.T) {
+		packs := withPublishSeams(t, packOne, nil)
+		old := publishExec
+		publishExec = func(dir, name string, args []string) (string, error) {
+			if len(args) >= 3 && args[0] == "config" {
+				for _, a := range args[3:] {
+					if v, ok := strings.CutPrefix(a, "--reg="); ok {
+						return v + "\n", nil
+					}
+				}
+			}
+			return old(dir, name, args)
+		}
+		t.Setenv("BARYOVM_ALLOWED_REGISTRIES", "pkgs.corp.example")
+		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
+		wantRefused(t, runGroup(t, "publish", "npm", "--reg=https://evil.example"), ran, 0, "evil.example")
+		_ = packs
+	})
+	t.Run("config get runs in the process cwd and gets unknown flags", func(t *testing.T) {
+		packs := withPublishSeams(t, packOne, nil)
+		files := map[string]string{"sub/package.json": `{"name":"demo"}`, "sub/index.js": "x\n"}
+		withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
+		if err := runGroup(t, "publish", "npm", "sub", "--frobnicate"); err != nil {
+			t.Fatal(err)
+		}
+		var cfgCall string
+		for _, c := range *packs {
+			if strings.Contains(c, "config get registry") {
+				cfgCall = c
+			}
+		}
+		if cfgCall != ": npm config get registry --frobnicate" {
+			t.Fatalf("calls %v", *packs)
+		}
+	})
 	t.Run("config flags reach npm config get", func(t *testing.T) {
 		packs := withPublishSeams(t, packOne, nil)
 		ran := withGuardSeams(t, &fakeGuardRunner{files: npmFiles("x\n")}, 0)
@@ -178,7 +213,7 @@ func TestPublishNpmRegistryComesFromNpmConfig(t *testing.T) {
 		}
 		found := false
 		for _, c := range *packs {
-			if strings.Contains(c, "config get registry --userconfig=/u/.npmrc") {
+			if strings.Contains(c, "config get registry --userconfig /u/.npmrc --tag next") {
 				found = true
 			}
 		}

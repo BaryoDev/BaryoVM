@@ -1085,8 +1085,8 @@ baryovm publish nuget bin/App.1.0.0.nupkg -s https://api.nuget.org/v3/index.json
 - npm: `npm pack --dry-run --json` lists what would ship (only its JSON is read) and every file is
   scanned with the same key rules as `git`. The registry comes from `publishConfig.registry` first,
   then from npm itself: `npm config get registry` (and `npm config get @scope:registry` for a scoped
-  package) run in the package directory with your `--registry`, `--userconfig`, `--globalconfig` and
-  `--prefix` flags, so project, user, global and builtin config and environment variables count as npm
+  package) run with every option you gave (abbreviated and unknown flags included),
+  from the directory you run it in, so project, user, global and builtin config and environment variables count as npm
   counts them. If npm cannot answer, or answers with something that is not a URL, the command is
   refused. A package with `"private": true` that resolves to a public registry is refused with the
   registry named. A tarball argument and workspace flags are refused because they cannot be checked.

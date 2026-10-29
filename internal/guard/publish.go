@@ -55,21 +55,13 @@ func registryHost(raw string) (string, error) {
 // unchanged; this only reads them.
 type npmArgs struct {
 	dir string
-	// cfg are the arguments that change which npm configuration applies. They are passed to
-	// `npm config get` so it answers for the same command line.
+	// cfg are every option the user gave (flags with their values, not the package argument), passed
+	// to `npm config get` so it answers for the same command line, including abbreviated and
+	// unknown flags.
 	cfg []string
 }
 
 var npmValueFlags = map[string]bool{"--tag": true, "--access": true, "--otp": true, "--registry": true, "--userconfig": true, "--globalconfig": true, "--prefix": true, "--provenance-file": true}
-
-// isNpmConfigFlag reports whether a flag changes npm's configuration lookup.
-func isNpmConfigFlag(name string) bool {
-	switch name {
-	case "--registry", "--userconfig", "--globalconfig", "--prefix":
-		return true
-	}
-	return strings.HasPrefix(name, "--@") && strings.HasSuffix(name, ":registry")
-}
 
 func parseNpmArgs(args []string) (npmArgs, error) {
 	var a npmArgs
@@ -84,16 +76,14 @@ func parseNpmArgs(args []string) (npmArgs, error) {
 		case w == "-w" || w == "--workspace" || w == "--workspaces" || w == "-ws" || strings.HasPrefix(w, "--workspace=") || strings.HasPrefix(w, "-w="):
 			return a, errors.New("workspace publishing cannot be checked: publish each package directory on its own")
 		case strings.HasPrefix(w, "--"):
-			name, val, hasVal := strings.Cut(w, "=")
+			name, _, hasVal := strings.Cut(w, "=")
+			a.cfg = append(a.cfg, w)
 			if !hasVal && npmValueFlags[name] && i+1 < len(args) {
 				i++
-				val = args[i]
-			}
-			if isNpmConfigFlag(name) {
-				a.cfg = append(a.cfg, name+"="+val)
+				a.cfg = append(a.cfg, args[i])
 			}
 		case strings.HasPrefix(w, "-") && len(w) > 1:
-			// short boolean flags (-h)
+			a.cfg = append(a.cfg, w)
 		default:
 			pos = append(pos, w)
 		}
@@ -248,7 +238,8 @@ func CheckNpmPublish(r Runner, run Exec, args []string, pol Policy) Verdict {
 // npmConfigGet runs `npm config get key` with the config-affecting arguments. npm prints
 // "undefined" for a key that is not set; that comes back as "".
 func npmConfigGet(run Exec, a npmArgs, key string) (string, error) {
-	out, err := run(a.dir, "npm", append([]string{"config", "get", key}, a.cfg...))
+	// Run in the process cwd: `npm publish <folder>` reads project config from there, not from the folder.
+	out, err := run("", "npm", append([]string{"config", "get", key}, a.cfg...))
 	if err != nil {
 		return "", fmt.Errorf("npm config get %s failed (%v)", key, err)
 	}

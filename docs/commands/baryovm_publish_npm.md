@@ -9,8 +9,8 @@ Runs npm publish with the same arguments, after two checks:
   files     npm pack --dry-run --json lists what would ship, and every file is
             scanned for keys
   registry  the registry npm would publish to (publishConfig, then what
-            npm config get registry answers, with your --registry, --userconfig,
-            --globalconfig and --prefix flags) is checked against the allowed
+            npm config get registry answers, with all your
+            flags, run in the current directory) is checked against the allowed
             registries; if npm cannot answer, the publish is refused
 
 A package marked "private": true that would go to the public registry is
