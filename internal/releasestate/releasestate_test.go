@@ -48,7 +48,7 @@ func TestCommandsQuoteAndElevate(t *testing.T) {
 	l := For("/home/o'pc/src", "d", true)
 	for _, cmd := range []string{l.LockCmd(), l.UnlockCmd(), l.ReadCmd(), l.RemoveCmd(), WriteCmd(l, l.File, []byte("{}"))} {
 		if !strings.HasPrefix(cmd, "sudo -n ") {
-			t.Errorf("not elevated: %s", cmd)
+			t.Errorf("missing sudo -n: %s", cmd)
 		}
 		if strings.Contains(cmd, "o'pc") {
 			t.Errorf("path not quoted: %s", cmd)
