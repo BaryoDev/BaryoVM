@@ -32,6 +32,13 @@ down.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.
+- **Secret references**. A secret reaches a deploy as a reference (`env:NAME`, `file:PATH`, or
+  `cmd:<command>` on the command line), resolved on your machine at use time and never stored. The
+  value is sent over the SSH session's stdin, into an owner-only (`0600`) file for `docker run
+  --env-file` or into the build's own shell, and is never on a local or remote command line. It is
+  absent from errors, `-o json` output, the audit log and `--dry-run` output. A `cmd:` reference is
+  run without a shell, with a timeout and with stderr discarded, and is refused when it comes from a
+  committed file (a project file or release manifest).
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.

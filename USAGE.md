@@ -484,6 +484,13 @@ the sync list, so secrets can't be wiped by `--delete`.
 }
 ```
 
+A build `args` value is a literal or a reference (`env:NAME`, `file:PATH`; `cmd:` is not accepted in a
+manifest, since a committed file must not run a program). Either way the value is sent on stdin and
+exported in the build's own shell, and the command carries only `--build-arg NAME`, so it is not in
+`ps` on the VM. A build arg is still baked into image history if the Dockerfile uses it in a `RUN`.
+For a value that must stay out of the image, add `"secrets": { "npmrc": "env:NPM_TOKEN" }` to the
+build and read it with `RUN --mount=type=secret,id=npmrc` (BuildKit). Existing manifests keep working.
+
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
   --release-file ~/repos/BaryoClub/baryovm.release.json \
@@ -1123,10 +1130,30 @@ baryovm deploy --vm oracle --image nginx:alpine --name site -p 80:80
 baryovm deploy --vm oracle --image app:latest --name app \
   -p 127.0.0.1:8080:8080 -e KEY=value --pull
 baryovm deploy --vm oracle --image app:latest --name app -e KEY=value --dry-run
+
+# secrets by reference: resolved on this machine, never stored
+baryovm deploy --vm oracle --image app:latest --name app \
+  --env-ref API_KEY=env:APP_API_KEY \
+  --env-ref DB_PASSWORD=file:~/.secrets/db \
+  --env-ref GH_TOKEN="cmd:gh auth token"
 ```
 
+Secret references (`--env-ref KEY=<reference>`, also on `up`) come in three kinds and nothing else:
+`env:NAME` (a local environment variable), `file:PATH` (a local file, trailing newline trimmed) and
+`cmd:<command>` (the stdout of a signed-in CLI such as `op read op://vault/item/field` or
+`gh auth token`). A `cmd:` reference is split into arguments and run directly, with no shell, and a
+30 second timeout; its stderr is never shown. A reference that does not resolve stops the command
+before anything is provisioned or contacted, and the error names the reference, never a value.
+
+Whether the value comes from `-e` or from a reference, it does not go on the remote command line.
+It is sent over the SSH session's stdin into a private file the VM creates with `mktemp` (mode 0600),
+`docker run --env-file` reads it, and the file is removed when the command ends, however it ends.
+Nothing secret shows in `ps` on the VM. A value cannot contain a line break. The container's
+environment is still visible to `docker inspect` on the VM, as it always was.
+
 `--dry-run` prints the docker commands to stderr and in the result's `data`, and opens no
-connection. Env values are masked as `***` in that output.
+connection. Env values are masked as `***` in that output, and references are checked for syntax but
+never resolved, so a dry run reads no secret.
 
 ## Provision + deploy in one (untested, billable)
 

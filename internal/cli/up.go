@@ -20,7 +20,7 @@ import (
 func newUpCmd() *cobra.Command {
 	var pf provisionFlags
 	var image, container string
-	var ports, envs []string
+	var ports, envs, envRefs []string
 	var pull bool
 
 	cmd := &cobra.Command{
@@ -35,6 +35,14 @@ func newUpCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			name := args[0]
+
+			// Resolved first, before provisioning bills or anything connects: a reference that
+			// does not resolve must stop the command with nothing created.
+			env, err := buildEnv(envs, envRefs, true)
+			if err != nil {
+				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
+				return err
+			}
 
 			// 1. Resolve or provision the VM.
 			store, err := fleet.Load()
@@ -79,10 +87,6 @@ func newUpCmd() *cobra.Command {
 			}
 
 			// 3. Deploy the container.
-			env, err := parseEnv(envs)
-			if err != nil {
-				return err
-			}
 			var rep deploy.Report
 			if err := ui.Step(fmt.Sprintf("deploying %s", image), func() error {
 				c, err := sshx.Dial(vm.Target())
@@ -115,6 +119,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&container, "container", "", "container name (required)")
 	cmd.Flags().StringArrayVarP(&ports, "publish", "p", nil, "port mapping host:container (repeatable)")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", nil, "environment KEY=value (repeatable)")
+	cmd.Flags().StringArrayVar(&envRefs, "env-ref", nil, "environment KEY=<reference> (repeatable): env:NAME, file:PATH or cmd:<command>, resolved here, never stored")
 	cmd.Flags().BoolVar(&pull, "pull", false, "pull the image before running")
 	_ = cmd.MarkFlagRequired("image")
 	_ = cmd.MarkFlagRequired("container")

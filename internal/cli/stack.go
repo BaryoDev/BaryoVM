@@ -402,6 +402,17 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 		return nil
 	}
 
+	// Build args and secrets that are references are resolved now, before the first connection,
+	// so one that does not resolve stops the release with nothing sent (#93). A manifest is a
+	// committed file, so cmd: is not accepted here.
+	var buildInputs []string
+	if !noBuild {
+		buildInputs, err = m.BuildInputs(fileResolver())
+		if err != nil {
+			return fail(err)
+		}
+	}
+
 	// The progress record. It is written under the host lock before the first step that
 	// changes anything, so two releases cannot both read "nothing in progress" (#136).
 	sc, err := dialRelease(vm)
@@ -539,11 +550,11 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 
 	if !noBuild {
-		for _, b := range m.Builds {
-			b := b
+		for i, b := range m.Builds {
+			b, input := b, buildInputs[i]
 			if err := rr.step("build:"+b.Image, func() error {
 				return ui.Step("build "+b.Image, func() error {
-					out, e := c.Run(m.BuildCmd(b))
+					out, e := runBuild(c, m.BuildCmd(b), input, b.HasInput())
 					if e != nil {
 						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
 					}
@@ -738,6 +749,27 @@ func verifyLabel(source string) string {
 		return "the manifest verifyVisual block"
 	}
 	return source
+}
+
+// runBuild runs one build command. A build with args or secrets sends their values on stdin, which
+// needs a session that can take input; the real one can. Anything that comes back is stripped of
+// those values before it can reach an error.
+func runBuild(c sshx.Runner, cmd, input string, hasInput bool) (string, error) {
+	if !hasInput {
+		return c.Run(cmd)
+	}
+	ri, ok := c.(interface {
+		RunInput(cmd string, stdin string) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("this session cannot send build args on stdin")
+	}
+	out, err := ri.RunInput(cmd, input)
+	out = release.Redact(input, out)
+	if err != nil {
+		err = fmt.Errorf("%s", release.Redact(input, err.Error()))
+	}
+	return out, err
 }
 
 func lastLines(s string, n int) string {
