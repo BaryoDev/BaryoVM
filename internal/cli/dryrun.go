@@ -286,6 +286,9 @@ func planRelease(name string, st *fleet.Stack, vm *fleet.VM, m *release.Manifest
 	if !o.NoBuild {
 		for _, b := range m.Builds {
 			p.add("build "+b.Image, m.BuildCmd(b))
+			if b.HasInput() {
+				p.note("build %s: args and secrets are sent on stdin and are not read or shown in a dry run", b.Image)
+			}
 		}
 	} else if len(m.Builds) > 0 {
 		p.note("builds skipped: --no-build")

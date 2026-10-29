@@ -1,0 +1,1 @@
+sh -c 'f=$(mktemp) && trap '\''rm -f "$f"'\'' EXIT && cat > "$f" && docker run -d --name '\''web'\'' --restart unless-stopped --env-file "$f" '\''app:1'\'''

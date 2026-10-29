@@ -251,7 +251,7 @@ func exportProject(store *fleet.Store, outDir, name, keyEnv string, only []strin
 		if !needed[v.Name] {
 			continue
 		}
-		if !fleet.IsEnvRef(v.KeyPath) {
+		if !fleet.IsRef(v.KeyPath) {
 			switch {
 			case keyEnv != "":
 				v.KeyPath = "env:" + keyEnv
