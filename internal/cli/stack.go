@@ -20,6 +20,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/managed"
+	"github.com/BaryoDev/BaryoVM/internal/recipe"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
 	"github.com/BaryoDev/BaryoVM/internal/remote"
@@ -58,7 +59,7 @@ func validStackName(name string) error {
 type stackAddInput struct {
 	Name, VM, Path, File                            string
 	DBContainer, DBName, DBUser, EnvFile, BackupDir string
-	ReleaseFile                                     string
+	ReleaseFile, Recipe                             string
 	Keep                                            int
 	Sudo                                            bool
 	Changed                                         func(name string) bool
@@ -83,6 +84,16 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		verb = "updated"
 	}
 	st.VM, st.Dir = in.VM, in.Path
+	if in.Changed("recipe") && in.Recipe != "" {
+		_, abs, err := loadRecipeFile(in.Recipe)
+		if err != nil {
+			return fleet.Stack{}, "", err
+		}
+		in.Recipe = abs
+		if st.File == "" && !in.Changed("file") {
+			st.File = recipe.DefaultComposeFile
+		}
+	}
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
 		return fleet.Stack{}, "", err
 	}
@@ -117,6 +128,7 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		"backup-dir":   func() { st.BackupDir = in.BackupDir },
 		"keep":         func() { st.Keep = in.Keep },
 		"release-file": func() { st.ReleaseFile = in.ReleaseFile },
+		"recipe":       func() { st.RecipeFile = in.Recipe },
 		"sudo":         func() { st.Sudo = in.Sudo },
 	} {
 		if in.Changed(name) {
@@ -141,7 +153,7 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
-	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile string
+	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile, recipePath string
 	var keep int
 	var useSudo bool
 	cmd := &cobra.Command{
@@ -157,7 +169,7 @@ func newStackAddCmd() *cobra.Command {
 			st, verb, err := registerStack(store, stackAddInput{
 				Name: args[0], VM: vm, Path: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser, EnvFile: envFile,
-				BackupDir: backupDir, ReleaseFile: releaseFile, Keep: keep, Sudo: useSudo,
+				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, Keep: keep, Sudo: useSudo,
 				Changed: f.Changed,
 			})
 			if err != nil {
@@ -171,7 +183,7 @@ func newStackAddCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&vm, "vm", "", "VM the stack runs on (required)")
-	cmd.Flags().StringVar(&path, "path", "", "remote project directory, e.g. /opt/barakocms (required)")
+	cmd.Flags().StringVar(&path, "path", "", "remote project directory, e.g. /opt/app (required)")
 	cmd.Flags().StringVar(&file, "file", "", "compose file name (default: compose's own default)")
 	cmd.Flags().StringVar(&dbContainer, "db-container", "", "postgres container for backups, e.g. deploy-postgres-1")
 	cmd.Flags().StringVar(&dbName, "db-name", "", "database to back up")
@@ -180,6 +192,7 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
+	cmd.Flags().StringVar(&recipePath, "recipe", "", "recipe file (or a directory holding baryovm.recipe.json) from the app repository; `stack release` then deploys its services")
 	cmd.Flags().BoolVar(&useSudo, "sudo", false,
 		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
 			"root-owned. See USAGE.md for what it covers and the three things that change with it")
@@ -353,6 +366,9 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 type stackReleaseOpts struct {
 	Config                                          string
 	NoBuild, NoBackup, Adopt, Resume, Clear, DryRun bool
+	// Recipe overrides the stack's registered recipe; Inputs are NAME=ref bindings for its inputs.
+	Recipe string
+	Inputs []string
 }
 
 // releaseStack releases one stack of store. It does not emit: the result the caller should emit is
@@ -370,6 +386,9 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	}
 	if err := requireLinux(vm, "stack release"); err != nil {
 		return err
+	}
+	if o.Recipe != "" || st.RecipeFile != "" {
+		return releaseRecipe(st, vm, o, out)
 	}
 	manifestPath := config
 	if manifestPath == "" {
@@ -762,6 +781,8 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 func newStackReleaseCmd() *cobra.Command {
 	var config string
 	var noBuild, noBackup, adopt, resume, clearState, dryRun bool
+	var recipeFlag string
+	var inputs []string
 	cmd := &cobra.Command{
 		Use:   "release <name>",
 		Short: "Sync source to the VM, build images there, then compose up (config-driven)",
@@ -775,7 +796,7 @@ func newStackReleaseCmd() *cobra.Command {
 			}
 			var res ui.Result
 			err = releaseStack(store, args[0], stackReleaseOpts{Config: config, NoBuild: noBuild, NoBackup: noBackup,
-				Adopt: adopt, Resume: resume, Clear: clearState, DryRun: dryRun}, &res)
+				Adopt: adopt, Resume: resume, Clear: clearState, DryRun: dryRun, Recipe: recipeFlag, Inputs: inputs}, &res)
 			if res.Action != "" {
 				ui.Emit(res)
 			}
@@ -783,6 +804,8 @@ func newStackReleaseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
+	cmd.Flags().StringVar(&recipeFlag, "recipe", "", "deploy the services in this recipe (a file, or a directory holding baryovm.recipe.json) instead of a release manifest")
+	cmd.Flags().StringArrayVar(&inputs, "input", nil, "bind a recipe input, NAME=env:VAR or NAME=file:PATH (a literal only for a non-secret input); repeatable")
 	cmd.Flags().BoolVar(&noBuild, "no-build", false, "skip building images (just sync + compose up)")
 	cmd.Flags().BoolVar(&noBackup, "no-backup", false, "skip the automatic pre-release DB backup")
 	cmd.Flags().BoolVar(&adopt, "adopt", false, "take over what BaryoVM did not create: a hand-run container holding a container_name (removed with docker rm -f and NOT recoverable: its writable layer and anonymous volumes are lost; refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)")
@@ -1120,8 +1143,8 @@ func newStackDeployCmd() *cobra.Command {
 		Use:   "deploy <name>",
 		Short: "compose up -d the stack (optionally pull + recreate)",
 		Args:  cobra.ExactArgs(1),
-		Example: "  baryovm stack deploy barako --force-recreate --service api,console\n" +
-			"  baryovm stack deploy barako --pull",
+		Example: "  baryovm stack deploy app --force-recreate --service api,console\n" +
+			"  baryovm stack deploy app --pull",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dryRun {
 				return dryStackDeploy(args[0], compose.UpOptions{Services: svcs, Pull: pull, ForceRecreate: force, NoDeps: noDeps})

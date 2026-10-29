@@ -17,7 +17,8 @@ baryovm stack add <name> [flags]
       --file string                  compose file name (default: compose's own default)
   -h, --help                         help for add
       --keep int                     backups to retain per kind (default 14)
-      --path string                  remote project directory, e.g. /opt/barakocms (required)
+      --path string                  remote project directory, e.g. /opt/app (required)
+      --recipe stack release         recipe file (or a directory holding baryovm.recipe.json) from the app repository; stack release then deploys its services
       --release-file stack release   local JSON release manifest for stack release
       --sudo                         run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is root-owned. See USAGE.md for what it covers and the three things that change with it
       --vm string                    VM the stack runs on (required)

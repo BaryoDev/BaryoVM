@@ -33,6 +33,7 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		AutoUpdate:     true,
 		HealthURL:      "http://127.0.0.1:8080/health",
 		NoDatabase:     true,
+		RecipeFile:     "/repo/baryovm.recipe.json",
 		UpdateServices: []string{"app", "admin"},
 		Managed:        &managed.Spec{Provider: managed.AWS, Profile: "prod", Region: "ap-southeast-1", Database: "appdb"},
 		Verify: &verify.Spec{
