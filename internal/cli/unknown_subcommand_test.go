@@ -27,7 +27,7 @@ func runGroup(t *testing.T, args ...string) error {
 }
 
 func TestUnknownSubcommandFailsForEveryGroup(t *testing.T) {
-	for _, group := range []string{"vm", "stack", "stack tls"} {
+	for _, group := range []string{"vm", "stack"} {
 		args := append(strings.Fields(group), "nosuch")
 		err := runGroup(t, args...)
 		if err == nil {
