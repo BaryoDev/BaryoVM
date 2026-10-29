@@ -1,6 +1,6 @@
 {
   "vms": [
-    {"name": "client-vm", "host": "203.0.113.10", "port": 2222, "user": "deploy", "keyPath": "env:DEPLOY_KEY_PATH", "provider": "ssh", "hostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqlYXBjMxZ3MPo9cHdk3oXL1Bq6mC8mWQfTt0k8hQmP"}
+    {"name": "client-vm", "host": "203.0.113.10", "port": 2222, "user": "deploy", "keyPath": "env:BARYOVM_DEPLOY_KEY_PATH", "provider": "ssh", "hostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqlYXBjMxZ3MPo9cHdk3oXL1Bq6mC8mWQfTt0k8hQmP"}
   ],
   "stacks": [
     {"name": "api", "vm": "client-vm", "dir": "/opt/barako/api", "envFile": ".env", "releaseFile": "api.release.json", "healthUrl": "http://127.0.0.1:5010/health/ready", "sudo": true},

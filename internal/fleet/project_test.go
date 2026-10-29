@@ -52,7 +52,7 @@ func TestProjectUnknownFieldsRoundTrip(t *testing.T) {
 	newer := `{
 	  "project": "p",
 	  "channel": "stable",
-	  "vms": [{"name": "v", "host": "h", "user": "u", "keyPath": "env:K", "region": "ap-southeast-2"}],
+	  "vms": [{"name": "v", "host": "h", "user": "u", "keyPath": "env:BARYOVM_K", "region": "ap-southeast-2"}],
 	  "stacks": [{"name": "s", "vm": "v", "dir": "/opt/s", "releaseFile": "s.json", "verify": {"http": "/up"}}],
 	  "order": ["s"]
 	}`
@@ -91,9 +91,9 @@ func TestProjectRefusesALiteralWhereAReferenceIsExpected(t *testing.T) {
 		"bare token":  {projectWith(`"` + ghToken + `"`), "vms[0].keyPath"},
 		"bad env ref": {projectWith(`"env:not valid"`), "vms[0].keyPath"},
 		"empty":       {projectWith(`""`), "vms[0].keyPath"},
-		"password field": {`{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:K","password":"hunter2"}],` +
+		"password field": {`{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:BARYOVM_K","password":"hunter2"}],` +
 			`"stacks":[]}`, "vms[0].password"},
-		"token in a stack field": {`{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:K"}],` +
+		"token in a stack field": {`{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:BARYOVM_K"}],` +
 			`"stacks":[{"name":"s","vm":"v","dir":"/opt/s","releaseFile":"s.json","healthUrl":"https://x/?k=` + ghToken + `"}]}`, "stacks[0].healthUrl"},
 		"private key in a hostKey path":      {`{"project":"p","vms":[],"stacks":[],"notes":{"hostKey":"-----BEGIN OPENSSH ` + "PRIVATE " + `KEY-----\nabc"}}`, "notes.hostKey"},
 		"private key behind a host key line": {projectWithHostKey(`"ssh-ed25519 AAAA\n-----BEGIN OPENSSH ` + "PRIVATE " + `KEY-----\nabc"`), "vms[0].hostKey"},
@@ -122,7 +122,7 @@ func TestProjectRefusesALiteralWhereAReferenceIsExpected(t *testing.T) {
 }
 
 func TestProjectAcceptsReferences(t *testing.T) {
-	for _, key := range []string{`"env:DEPLOY_KEY_PATH"`, `"~/.ssh/deploy"`, `"/home/runner/.ssh/id"`, `".keys/deploy"`} {
+	for _, key := range []string{`"env:BARYOVM_DEPLOY_KEY_PATH"`, `"~/.ssh/deploy"`, `"/home/runner/.ssh/id"`, `".keys/deploy"`} {
 		if _, err := ParseProject([]byte(projectWith(key))); err != nil {
 			t.Errorf("%s: %v", key, err)
 		}
@@ -138,7 +138,7 @@ func TestProjectValidation(t *testing.T) {
 	base := func(mut func(m map[string]any)) string {
 		m := map[string]any{
 			"project": "p",
-			"vms":     []any{map[string]any{"name": "v", "host": "h", "user": "u", "keyPath": "env:K"}},
+			"vms":     []any{map[string]any{"name": "v", "host": "h", "user": "u", "keyPath": "env:BARYOVM_K"}},
 			"stacks":  []any{map[string]any{"name": "s", "vm": "v", "dir": "/opt/s", "releaseFile": "s.json"}},
 		}
 		mut(m)
@@ -176,7 +176,7 @@ func TestProjectStoreResolvesPathsAgainstTheFileDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"DEPLOY_KEY_PATH": "/run/secrets/key"}
+	env := map[string]string{"BARYOVM_DEPLOY_KEY_PATH": "/run/secrets/key"}
 	s, err := p.Store("/repo/deploy", func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestProjectStoreResolvesPathsAgainstTheFileDirectory(t *testing.T) {
 	if s.VMs[0].KeyPath != "/run/secrets/key" {
 		t.Errorf("keyPath = %q", s.VMs[0].KeyPath)
 	}
-	if _, err := p.Store("/repo/deploy", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "DEPLOY_KEY_PATH") {
+	if _, err := p.Store("/repo/deploy", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "BARYOVM_DEPLOY_KEY_PATH") {
 		t.Errorf("an unset key variable should be named, got %v", err)
 	}
 }
@@ -195,7 +195,7 @@ func TestProjectStoreResolvesPathsAgainstTheFileDirectory(t *testing.T) {
 var ghToken = "gh" + "p_" + strings.Repeat("a", 36)
 
 func projectWithHostKey(hk string) string {
-	return `{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:K","hostKey":` + hk + `}],` +
+	return `{"project":"p","vms":[{"name":"v","host":"h","user":"u","keyPath":"env:BARYOVM_K","hostKey":` + hk + `}],` +
 		`"stacks":[{"name":"s","vm":"v","dir":"/opt/s","releaseFile":"s.json"}]}`
 }
 

@@ -38,7 +38,7 @@ func newHostKey(t *testing.T) string {
 func projectDir(t *testing.T, mutate func(p map[string]any)) (string, string) {
 	t.Helper()
 	t.Setenv("BARYOVM_HOME", t.TempDir())
-	t.Setenv("DEPLOY_KEY_PATH", "/keys/ci-id")
+	t.Setenv("BARYOVM_DEPLOY_KEY_PATH", "/keys/ci-id")
 	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
 	dir := t.TempDir()
 	hostKey := newHostKey(t)
@@ -63,7 +63,7 @@ func projectDir(t *testing.T, mutate func(p map[string]any)) (string, string) {
 	p := map[string]any{
 		"project": "demo",
 		"vms": []any{map[string]any{"name": "client-vm", "host": "203.0.113.10", "user": "deploy",
-			"keyPath": "env:DEPLOY_KEY_PATH", "hostKey": hostKey}},
+			"keyPath": "env:BARYOVM_DEPLOY_KEY_PATH", "hostKey": hostKey}},
 		"stacks": stacks,
 		"order":  order,
 	}
@@ -155,7 +155,7 @@ func TestProjectReleaseNeedsNoVMAddAndReleasesInOrder(t *testing.T) {
 		t.Errorf("stacks must run in order api, console, site; got positions %d %d %d:\n%s", api, console, site, strings.Join(f.seen, "\n"))
 	}
 	if len(dialed) == 0 || dialed[0].Host != "203.0.113.10" || dialed[0].KeyPath != "/keys/ci-id" || dialed[0].User != "deploy" {
-		t.Errorf("the VM should come from the project file and the key from env:DEPLOY_KEY_PATH, got %+v", dialed)
+		t.Errorf("the VM should come from the project file and the key from env:BARYOVM_DEPLOY_KEY_PATH, got %+v", dialed)
 	}
 	if got := fleetFileExists(); got {
 		t.Error("a project release must not write fleet.json")
@@ -307,10 +307,10 @@ func TestProjectReleaseRefusesALiteralKeyBeforeConnecting(t *testing.T) {
 
 func TestProjectReleaseNamesAnUnsetKeyVariable(t *testing.T) {
 	dir, _ := projectDir(t, nil)
-	t.Setenv("DEPLOY_KEY_PATH", "")
+	t.Setenv("BARYOVM_DEPLOY_KEY_PATH", "")
 	f := &fakeRunner{}
 	_, dialed, err := projectRun(t, f, "--file", filepath.Join(dir, fleet.DefaultProjectFile))
-	if err == nil || !strings.Contains(err.Error(), "DEPLOY_KEY_PATH") || len(dialed) != 0 {
+	if err == nil || !strings.Contains(err.Error(), "BARYOVM_DEPLOY_KEY_PATH") || len(dialed) != 0 {
 		t.Fatalf("want the variable named and no connection, got %v (dialed %d)", err, len(dialed))
 	}
 }
@@ -355,7 +355,7 @@ func TestProjectReleaseResolvesManifestsRelativeToTheFile(t *testing.T) {
 // Done when: export from an existing fleet produces a file that project release accepts.
 func TestProjectExportProducesAFileProjectReleaseAccepts(t *testing.T) {
 	t.Setenv("BARYOVM_HOME", t.TempDir())
-	t.Setenv("DEPLOY_KEY_PATH", "/keys/ci-id")
+	t.Setenv("BARYOVM_DEPLOY_KEY_PATH", "/keys/ci-id")
 	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
 	out := t.TempDir()
 
@@ -404,7 +404,7 @@ func TestProjectExportProducesAFileProjectReleaseAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("export wrote a file its own parser refuses: %v\n%s", err, text)
 	}
-	if p.Stacks[0].ReleaseFile != "deploy/api.release.json" || p.VMs[0].KeyPath != "env:DEPLOY_KEY_PATH" || p.VMs[0].HostKey != hostKey {
+	if p.Stacks[0].ReleaseFile != "deploy/api.release.json" || p.VMs[0].KeyPath != "env:BARYOVM_DEPLOY_KEY_PATH" || p.VMs[0].HostKey != hostKey {
 		t.Errorf("paths, key reference or host key not exported as expected: %+v %+v", p.Stacks[0], p.VMs[0])
 	}
 	if strings.Join(p.Order, ",") != "api,console" || p.Stacks[0].EnvFile != ".env" || p.Stacks[0].HealthURL == "" {
@@ -476,7 +476,7 @@ func TestProjectExportKeyReferencesAreDistinctPerVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.VMs[0].KeyPath != "env:DEPLOY_KEY_PATH_WEB_1" || p.VMs[1].KeyPath != "env:DEPLOY_KEY_PATH_DB_2" {
+	if p.VMs[0].KeyPath != "env:BARYOVM_DEPLOY_KEY_PATH_WEB_1" || p.VMs[1].KeyPath != "env:BARYOVM_DEPLOY_KEY_PATH_DB_2" {
 		t.Errorf("each VM needs its own variable: %q %q", p.VMs[0].KeyPath, p.VMs[1].KeyPath)
 	}
 }

@@ -15,8 +15,9 @@ import (
 // operator wrote it.
 func cmdResolver() secretref.Resolver { return secretref.Default().WithCmd() }
 
-// fileResolver resolves references read from a committed file (a release manifest): no cmd:.
-func fileResolver() secretref.Resolver { return secretref.Default() }
+// fileResolver resolves references read from a committed file (a release manifest) whose directory
+// is root: no cmd:, env: names start with BARYOVM_, file: paths stay inside root.
+func fileResolver(root string) secretref.Resolver { return secretref.Default().Confine(root) }
 
 // buildEnv merges -e KEY=value and --env-ref KEY=<reference> into one environment. Every reference
 // is resolved here, before the caller dials anything, so one that does not resolve stops the
