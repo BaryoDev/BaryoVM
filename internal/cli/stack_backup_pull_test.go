@@ -161,3 +161,47 @@ func TestSetFilesDropsPartialAndUnsafeNames(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestSetFilesKeepsADoubleDotNameOutOfThePullSet(t *testing.T) {
+	// "a..b" passes the name pattern and holds no slash, but a double dot is dropped all the same.
+	got := backup.SetFiles("a..b-20260101-120000.sql\nok-20260101-120000.sql\n", "20260101-120000")
+	if strings.Join(got, ",") != "ok-20260101-120000.sql" {
+		t.Errorf("got %v", got)
+	}
+}
+
+// A hand-edited fleet.json can hold a name that stackNameRe would have refused. ".." would resolve
+// the pull directory to the fleet directory itself, and "a/b" to a nested one.
+func TestBackupPullRefusesAHandEditedStackName(t *testing.T) {
+	for _, bad := range []string{"..", "a/b", ".hidden"} {
+		stackFixture(t)
+		store, _ := fleet.Load()
+		store.FindStack("app").Name = bad
+		if err := store.Save(); err != nil {
+			t.Fatal(err)
+		}
+		r := newPullRunner()
+		_, _, err := runCmdE(t, newStackBackupCmd(), r, true, bad, "--pull")
+		if err == nil || !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("%q: err = %v", bad, err)
+		}
+		if len(r.seen) != 0 {
+			t.Errorf("%q: ran remote commands: %q", bad, r.seen)
+		}
+		if _, err := os.Stat(filepath.Join(fleet.Dir(), "backups")); err == nil {
+			t.Errorf("%q: a local directory was created", bad)
+		}
+	}
+}
+
+func TestBackupPullRefusesDryRun(t *testing.T) {
+	stackFixture(t)
+	r := newPullRunner()
+	_, _, err := runCmdE(t, newStackBackupCmd(), r, true, "app", "--pull", "--dry-run")
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.seen) != 0 {
+		t.Errorf("ran remote commands: %q", r.seen)
+	}
+}

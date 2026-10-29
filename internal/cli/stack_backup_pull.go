@@ -140,10 +140,12 @@ func runStackBackupPull(name string) error {
 	if !hasBackupStrategies(st) {
 		return fail(noBackupConfigError(st))
 	}
-	dir := pullDir(name)
-	if strings.TrimSpace(name) == "" || filepath.Base(name) != name {
-		return fail(fmt.Errorf("stack name %q cannot be used as a directory name", name))
+	// The name becomes a directory name. fleet.json can be edited by hand, so the check that
+	// `stack add` makes is made again here: ".." would resolve the directory to the fleet dir.
+	if err := validStackName(name); err != nil {
+		return fail(err)
 	}
+	dir := pullDir(name)
 	if err := preparePullDir(dir); err != nil {
 		return fail(err)
 	}

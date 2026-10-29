@@ -74,3 +74,30 @@ func TestUnknownRuntimeIsRefusedByTheCommands(t *testing.T) {
 		t.Errorf("a refused runtime was stored: %+v", store.Stacks)
 	}
 }
+
+// The manifest path takes the build runtime from the stack. Losing `m.Runtime = st.Runtime` builds a
+// podman stack's images with docker.
+func TestManifestReleaseOfAPodmanStackBuildsWithPodman(t *testing.T) {
+	releaseFixture(t)
+	store, err := fleet.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FindStack("demo").Runtime = "podman"
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	host := newStateHost(nil)
+	answers := stateAnswers(ownedDemo)
+	answers["podman build"] = ""
+	inner := &fakeRunner{answers: answers}
+	if stdout, err := stateRelease(t, host, inner, nil, "--no-backup"); err != nil {
+		t.Fatalf("release: %v\n%s", err, stdout)
+	}
+	if !didRun(inner.seen, "podman build") {
+		t.Fatalf("the image was not built with podman: %v", inner.seen)
+	}
+	if didRun(inner.seen, "docker build") {
+		t.Fatalf("a podman stack built with docker: %v", inner.seen)
+	}
+}

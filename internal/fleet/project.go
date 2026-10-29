@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/BaryoDev/BaryoVM/internal/ctr"
 	"github.com/BaryoDev/BaryoVM/internal/secretref"
 )
 
@@ -149,6 +150,14 @@ func (p *Project) Validate() error {
 		}
 		if s.ReleaseFile != "" && (filepath.IsAbs(s.ReleaseFile) || strings.HasPrefix(s.ReleaseFile, "~")) {
 			return fmt.Errorf("%s.releaseFile: %q is not relative to the project file, so it cannot be shared: write it relative to the directory holding the project file", f, s.ReleaseFile)
+		}
+		if err := ctr.Valid(s.Runtime); err != nil {
+			return fmt.Errorf("%s.runtime: stack %q: %w", f, s.Name, err)
+		}
+		if s.Managed != nil {
+			if err := s.Managed.Validate(); err != nil {
+				return fmt.Errorf("%s.managed: stack %q: %w", f, s.Name, err)
+			}
 		}
 		stacks[s.Name] = true
 	}
