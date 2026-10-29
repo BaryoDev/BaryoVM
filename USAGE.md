@@ -274,6 +274,8 @@ baryovm stack add baryoclub --vm oracle --path …/deploy \
 
 baryovm stack release baryoclub                 # backup → sync → build → deploy
 baryovm stack release baryoclub --no-backup     # skip the pre-release backup
+# On a first release the database container does not exist yet. The backup is then skipped with one
+# line. A container that exists and fails to dump still stops the release.
 baryovm stack release baryoclub --no-build      # just sync + compose up
 baryovm stack release baryoclub --config ./other.release.json
 ```
@@ -292,6 +294,7 @@ Manifest options:
 | `builds` | none | images to build on the VM after syncing |
 | `sudo` | `false` | run the release's remote steps as root: the far side of the rsync, the image builds, `preDeploy`, `postDeploy` and the closing `compose up`. A stack registered `--sudo` turns this on for its own release and a manifest cannot turn it back off |
 | `noCompose` | `false` | skip `docker compose up` at the end |
+| `requireLocal` | none | paths under `localRoot` that must exist before anything runs. A missing one refuses the release before the backup, the sync and `postDeploy`, and names the path. It catches a missing build artifact, not a stale one |
 | `postDeploy` | none | commands to run on the VM after syncing and building |
 | `verify` | none | commands run on the VM after `postDeploy` that decide whether the release worked. Every one must exit zero |
 | `verifyAttempts` | `5` | maximum number of times the whole verify plan may run, not retries after a first run |
@@ -340,8 +343,11 @@ baryovm stack tls app --adopt       # take over a hand-written vhost
 
 A VM you already have is usually running containers started with `docker run`. If your compose file
 gives a service the same `container_name`, compose cannot create it while the old container exists.
-`stack release`, `stack deploy` and `stack update` check this before they back up, sync, build or
-pull, and stop with the container's name and the command that frees it:
+`stack deploy` and `stack update` check this before they back up, sync, build or pull. `stack
+release` checks it after the sync (compose reads the compose file from the VM, and on a first
+release the sync is what puts it there) and before any image build or `compose up`. A stack
+directory that does not exist yet is not warned about. The check stops with the container's name
+and the command that frees it:
 
 ```
 container name "umbraco-pwa-demo" is held by a container compose does not manage, probably started with docker run: check it is safe to remove, then run `docker rm -f 'umbraco-pwa-demo'` on the VM and try again
@@ -372,6 +378,10 @@ not pass**:
 - Otherwise, if the stack has a `healthUrl`, it becomes a `curl --fail` probe.
 - If neither is set, the release warns that it verified nothing and still succeeds. An interactive
   release is not an unattended update, so this is a warning rather than a refusal.
+
+A passing release says which plan ran and on which attempt, for example `verified by the manifest
+verify list, 2 check(s) passed on attempt 1`. In JSON it is `data.verify`, with `source`
+(`manifest`, `healthUrl` or `none`), `checks` and `attempts`.
 
 The probe runs **on the VM**, not locally. A `healthUrl` is usually loopback, which from your
 laptop either fails or, worse, reaches something local and passes.
