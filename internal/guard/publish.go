@@ -437,7 +437,7 @@ func scanNupkg(r Runner, action, path string, total int64) ([]Finding, int64, Ve
 			continue
 		}
 		name := base + ":" + e.Name
-		if e.UncompressedSize64 > uint64(MaxEntryBytes) {
+		if e.UncompressedSize64 > uint64(MaxEntryBytes) { // #nosec G115 -- MaxEntryBytes is a positive constant
 			return nil, total, refuse(action, fmt.Sprintf("%s refused: %s is over the %d byte limit the scan reads", action, name, MaxEntryBytes), nil), true
 		}
 		rc, err := e.Open()

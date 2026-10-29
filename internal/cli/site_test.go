@@ -458,7 +458,7 @@ func TestSiteDeployDryRunNeverTransfers(t *testing.T) {
 
 // The deploy path uses the release code's transport choice, so the tar fallback must work too.
 func TestSiteDeployFallsBackToTarWithoutRsync(t *testing.T) {
-	var _ release.Transport = release.TransportTar
+	_ = release.TransportTar
 	h := siteFixture(t)
 	recordSite(t)
 	prev := lookPath

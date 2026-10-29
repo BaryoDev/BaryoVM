@@ -197,7 +197,7 @@ func Add(r sshx.Runner, o Options, step StepFunc) (rep Report, err error) {
 	// A live HTTPS site being replaced (--force) already has its certificate and a block that
 	// serves it. Writing the HTTP-only block first would take HTTPS down until certbot finished,
 	// so that stage is skipped and the full block goes in directly.
-	if !(state == Managed && certPresent) {
+	if state != Managed || !certPresent {
 		if err := do(StepHTTPBlock, func() error { return write(HTTPBlock(o)) }); err != nil {
 			return rep, err
 		}

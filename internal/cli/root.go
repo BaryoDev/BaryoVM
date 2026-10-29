@@ -111,14 +111,14 @@ var failedPath string
 func jsonRequested(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		switch {
-		case a == "--":
+		switch a {
+		case "--":
 			return false
-		case a == "-o" || a == "--output":
+		case "-o", "--output":
 			if i+1 < len(args) && args[i+1] == "json" {
 				return true
 			}
-		case a == "-ojson" || a == "-o=json" || a == "--output=json":
+		case "-ojson", "-o=json", "--output=json":
 			return true
 		}
 	}
