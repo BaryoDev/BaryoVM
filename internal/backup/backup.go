@@ -130,6 +130,15 @@ func ContainerExists(c sshx.Runner, cfg Config) (bool, error) {
 
 // Backup dumps the DB (custom format) + copies the config, then prunes old ones.
 func Backup(c sshx.Runner, cfg Config) (string, error) {
+	script, err := BackupScript(cfg)
+	if err != nil {
+		return "", err
+	}
+	return c.Run(script)
+}
+
+// BackupScript builds the script Backup runs, without running it.
+func BackupScript(cfg Config) (string, error) {
 	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
 		return "", err
 	}
@@ -162,7 +171,7 @@ func Backup(c sshx.Runner, cfg Config) (string, error) {
 	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
 	b.WriteString("sz=$(du -h \"$BK/db-$ts.dump\" | cut -f1)\n")
 	b.WriteString(`echo "backup ok: db-$ts.dump ($sz) in $BK"` + "\n")
-	return c.Run(b.String())
+	return b.String(), nil
 }
 
 // NoBackupsMarker is what the remote script prints when the glob matches nothing. It is a line for
@@ -224,6 +233,11 @@ func DescribeList(out string) ListResult {
 // Restore replaces the database from a backup (newest if file is empty). The
 // Postgres container must be running; the caller should restart app services after.
 func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
+	return c.Run(RestoreScript(cfg, file))
+}
+
+// RestoreScript builds the script Restore runs, without running it.
+func RestoreScript(cfg Config, file string) string {
 	q := sshx.Quote
 	var b strings.Builder
 	b.WriteString("set -e\n")
@@ -243,5 +257,5 @@ func Restore(c sshx.Runner, cfg Config, file string) (string, error) {
 	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	b.WriteString(`echo "restored from $f"` + "\n")
-	return c.Run(b.String())
+	return b.String()
 }
