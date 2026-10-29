@@ -49,7 +49,7 @@ func TestParseDiskAndVerdict(t *testing.T) {
 	}
 	cases := map[int]string{50: OK, 80: Warn, 89: Warn, 90: Fail, 100: Fail}
 	for pct, want := range cases {
-		if got := DiskCheck("disk-root", "/", Disk{Percent: pct}, nil, Options{}).Verdict; got != want {
+		if got := DiskCheck("disk-root", "/", Disk{Percent: pct}, nil, DefaultOptions()).Verdict; got != want {
 			t.Errorf("%d%%: got %s want %s", pct, got, want)
 		}
 	}
@@ -83,24 +83,24 @@ func TestDockerRootAndDF(t *testing.T) {
 
 func TestUpdatesSplitAndVerdict(t *testing.T) {
 	u := ParseUpdates("ALL|446\nSEC|31\n")
-	c := UpdatesCheck("dnf", u, Options{})
+	c := UpdatesCheck("dnf", u, DefaultOptions())
 	if c.Verdict != Fail || c.Metrics["security"] != 31 || c.Metrics["other"] != 415 {
 		t.Fatalf("%+v", c)
 	}
-	if c := UpdatesCheck("dnf", ParseUpdates("ALL|30\nSEC|0\n"), Options{}); c.Verdict != Warn {
+	if c := UpdatesCheck("dnf", ParseUpdates("ALL|30\nSEC|0\n"), DefaultOptions()); c.Verdict != Warn {
 		t.Fatalf("%+v", c)
 	}
-	if c := UpdatesCheck("dnf", ParseUpdates("ALL|3\nSEC|0\n"), Options{}); c.Verdict != OK {
+	if c := UpdatesCheck("dnf", ParseUpdates("ALL|3\nSEC|0\n"), DefaultOptions()); c.Verdict != OK {
 		t.Fatalf("%+v", c)
 	}
 	// A failed package manager is unknown, never "0 pending".
-	if c := UpdatesCheck("dnf", ParseUpdates("ERR|dnf check-update failed\n"), Options{}); c.Verdict != Unknown {
+	if c := UpdatesCheck("dnf", ParseUpdates("ERR|dnf check-update failed\n"), DefaultOptions()); c.Verdict != Unknown {
 		t.Fatalf("%+v", c)
 	}
-	if c := UpdatesCheck("dnf", ParseUpdates(""), Options{}); c.Verdict != Unknown {
+	if c := UpdatesCheck("dnf", ParseUpdates(""), DefaultOptions()); c.Verdict != Unknown {
 		t.Fatalf("%+v", c)
 	}
-	if c := UpdatesCheck("apt", ParseUpdates("ALL|1\nSEC|0\n"), Options{}); !strings.Contains(c.Detail, "cached") {
+	if c := UpdatesCheck("apt", ParseUpdates("ALL|1\nSEC|0\n"), DefaultOptions()); !strings.Contains(c.Detail, "cached") {
 		t.Fatalf("apt cache caveat missing: %s", c.Detail)
 	}
 }
@@ -174,7 +174,7 @@ func TestContainers(t *testing.T) {
 	if state != "ok" || len(cs) != 7 || cs[0].Name != "web" {
 		t.Fatalf("%v %s", cs, state)
 	}
-	c := ContainersCheck(cs, state, Options{})
+	c := ContainersCheck(cs, state, DefaultOptions())
 	if c.Verdict != Fail {
 		t.Fatalf("%+v", c)
 	}
@@ -189,19 +189,19 @@ func TestContainers(t *testing.T) {
 	}
 
 	cs, state = ParseContainers("DOCKER|1\nCTR|/a|running|0|0|always|healthy\n")
-	if c := ContainersCheck(cs, state, Options{}); c.Verdict != OK {
+	if c := ContainersCheck(cs, state, DefaultOptions()); c.Verdict != OK {
 		t.Fatalf("%+v", c)
 	}
 	cs, state = ParseContainers("DOCKER|1\nCTR|/a|running|0|7|always|\n")
-	if c := ContainersCheck(cs, state, Options{}); c.Verdict != Warn {
+	if c := ContainersCheck(cs, state, DefaultOptions()); c.Verdict != Warn {
 		t.Fatalf("%+v", c)
 	}
 	cs, state = ParseContainers("DOCKER|0\n")
-	if c := ContainersCheck(cs, state, Options{}); c.Verdict != Skip {
+	if c := ContainersCheck(cs, state, DefaultOptions()); c.Verdict != Skip {
 		t.Fatalf("%+v", c)
 	}
 	cs, state = ParseContainers("DOCKER|denied\n")
-	if c := ContainersCheck(cs, state, Options{}); c.Verdict != Unknown {
+	if c := ContainersCheck(cs, state, DefaultOptions()); c.Verdict != Unknown {
 		t.Fatalf("%+v", c)
 	}
 	if !strings.Contains(ContainersCmd(), "sudo -n docker inspect") {
@@ -251,7 +251,7 @@ func rhelRunner() *fakeRunner {
 
 func TestRunWholeReport(t *testing.T) {
 	r := rhelRunner()
-	rep := Run(r, "oracle", Options{})
+	rep, _ := Run(r, "oracle", DefaultOptions())
 	if rep.VM != "oracle" || rep.PackageManager != "dnf" || rep.Verdict != Fail || !rep.Failed() {
 		t.Fatalf("%+v", rep)
 	}
@@ -274,7 +274,7 @@ func TestRunWholeReport(t *testing.T) {
 
 func TestRunChangesNothing(t *testing.T) {
 	r := rhelRunner()
-	Run(r, "oracle", Options{})
+	_, _ = Run(r, "oracle", DefaultOptions())
 	for _, c := range r.cmds {
 		for _, bad := range []string{"update -y", "upgrade", "systemctl reboot", "docker rm", "docker stop", "docker restart", "docker prune", "rm ", "apt-get update", "systemd-run"} {
 			if strings.Contains(c, bad) {
@@ -293,7 +293,7 @@ func TestRunDegradesPerCheck(t *testing.T) {
 		on("docker inspect", "DOCKER|0\n").
 		on("needs-restarting", "REBOOT|no\nUPTIME|100\n").
 		on("UNATTENDED", "UNATTENDED|yes|dnf-automatic-install.timer\n")
-	rep := Run(r, "vm", Options{})
+	rep, _ := Run(r, "vm", DefaultOptions())
 	if check(rep, CheckDiskDocker).Verdict != Skip || check(rep, CheckContainers).Verdict != Skip {
 		t.Errorf("docker checks should skip: %+v", rep.Checks)
 	}
@@ -307,7 +307,7 @@ func TestRunDegradesPerCheck(t *testing.T) {
 
 func TestRunNoSupportedPackageManager(t *testing.T) {
 	r := (&fakeRunner{}).on("echo \"PM|dnf\"", "PM|none\n").on("df -P -k '/'", "DISK|/|100|10|10\n")
-	rep := Run(r, "vm", Options{})
+	rep, _ := Run(r, "vm", DefaultOptions())
 	if c := check(rep, CheckUpdates); c.Verdict != Unknown || !strings.Contains(c.Detail, "package manager") {
 		t.Fatalf("%+v", c)
 	}
@@ -321,5 +321,35 @@ func TestUnreachableAndSkipped(t *testing.T) {
 	s := Skipped("w", "windows")
 	if s.Failed() || s.Verdict != Skip {
 		t.Fatalf("%+v", s)
+	}
+}
+
+func TestMaxZeroWarnsOnAny(t *testing.T) {
+	o := DefaultOptions()
+	o.OtherUpdatesWarn = 0
+	if c := UpdatesCheck("dnf", ParseUpdates("ALL|1\nSEC|0\n"), o); c.Verdict != Warn {
+		t.Fatalf("1 pending, max 0: %+v", c)
+	}
+	if c := UpdatesCheck("dnf", ParseUpdates("ALL|0\nSEC|0\n"), o); c.Verdict != OK {
+		t.Fatalf("0 pending, max 0: %+v", c)
+	}
+	o.RestartWarn = 0
+	cs, st := ParseContainers("DOCKER|1\nCTR|/a|running|0|1|always|\n")
+	if c := ContainersCheck(cs, st, o); c.Verdict != Warn {
+		t.Fatalf("%+v", c)
+	}
+	cs, st = ParseContainers("DOCKER|1\nCTR|/a|running|0|0|always|\n")
+	if c := ContainersCheck(cs, st, o); c.Verdict != OK {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestRunValidatesOptionsItIsGiven(t *testing.T) {
+	r := &fakeRunner{}
+	if _, err := Run(r, "vm", Options{}); err == nil {
+		t.Fatal("the zero Options must be refused, not defaulted")
+	}
+	if len(r.cmds) != 0 {
+		t.Fatal("sent commands with bad options")
 	}
 }

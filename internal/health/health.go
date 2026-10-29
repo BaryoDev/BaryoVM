@@ -49,28 +49,22 @@ const (
 	CheckUnattended = "unattended-updates"
 )
 
-// Options holds the thresholds. The zero Options takes the defaults; once any field is set the
-// struct is used as given, so a count of 0 turns that warning off.
+// Options holds the thresholds. They are used exactly as given and checked by Validate; the zero
+// Options is not "use the defaults", it is a 0 percent disk limit and is refused. Start from
+// DefaultOptions.
 type Options struct {
 	// DiskWarn and DiskFail are percent used.
 	DiskWarn int `json:"diskWarn"`
 	DiskFail int `json:"diskFail"`
-	// OtherUpdatesWarn is how many non-security updates make the updates check a warning.
+	// OtherUpdatesWarn is how many non-security updates are allowed: more than this warns, so 0 warns on any.
 	OtherUpdatesWarn int `json:"maxUpdates"`
-	// RestartWarn is the restart count at which a running container is called out.
+	// RestartWarn is how many restarts a running container is allowed: more than this warns, so 0 warns on any.
 	RestartWarn int `json:"maxRestarts"`
 }
 
-// Defaults are the thresholds used when no flag changes them.
-func Defaults() Options {
+// DefaultOptions are the thresholds used when no flag changes them.
+func DefaultOptions() Options {
 	return Options{DiskWarn: 80, DiskFail: 90, OtherUpdatesWarn: 25, RestartWarn: 5}
-}
-
-func (o Options) withDefaults() Options {
-	if o == (Options{}) {
-		return Defaults()
-	}
-	return o
 }
 
 // Validate refuses thresholds that cannot mean anything: percentages outside 1 to 100, a warn level
@@ -83,10 +77,10 @@ func (o Options) Validate() error {
 		return fmt.Errorf("--disk-warn (%d) must be below --disk-fail (%d)", o.DiskWarn, o.DiskFail)
 	}
 	if o.OtherUpdatesWarn < 0 {
-		return fmt.Errorf("--max-updates cannot be negative: got %d (0 turns the warning off)", o.OtherUpdatesWarn)
+		return fmt.Errorf("--max-updates cannot be negative: got %d", o.OtherUpdatesWarn)
 	}
 	if o.RestartWarn < 0 {
-		return fmt.Errorf("--max-restarts cannot be negative: got %d (0 turns the warning off)", o.RestartWarn)
+		return fmt.Errorf("--max-restarts cannot be negative: got %d", o.RestartWarn)
 	}
 	return nil
 }
@@ -410,7 +404,6 @@ func ParseUnattended(out string) (state, how string) {
 
 // DiskCheck judges one filesystem. extra is appended to the detail (docker's image and volume sizes).
 func DiskCheck(name, label string, d Disk, extra []string, o Options) Check {
-	o = o.withDefaults()
 	v := OK
 	switch {
 	case d.Percent >= o.DiskFail:
@@ -427,7 +420,6 @@ func DiskCheck(name, label string, d Disk, extra []string, o Options) Check {
 
 // UpdatesCheck judges the pending updates. Any security update is a fail.
 func UpdatesCheck(pm string, u Updates, o Options) Check {
-	o = o.withDefaults()
 	if u.Err != "" || !u.Have {
 		why := u.Err
 		if why == "" {
@@ -443,7 +435,7 @@ func UpdatesCheck(pm string, u Updates, o Options) Check {
 	switch {
 	case u.Security > 0:
 		v = Fail
-	case o.OtherUpdatesWarn > 0 && other >= o.OtherUpdatesWarn:
+	case other > o.OtherUpdatesWarn:
 		v = Warn
 	}
 	detail := fmt.Sprintf("%d security and %d other updates pending", u.Security, other)
@@ -476,7 +468,6 @@ func RebootCheck(required string, uptime int64) Check {
 // should be running (always), because a one-shot job that finished is not a problem. A high restart
 // count on a running container is a warning.
 func ContainersCheck(cs []Container, state string, o Options) Check {
-	o = o.withDefaults()
 	switch state {
 	case "none":
 		return Check{Name: CheckContainers, Verdict: Skip, Detail: "docker is not installed"}
@@ -496,7 +487,7 @@ func ContainersCheck(cs []Container, state string, o Options) Check {
 			bad = append(bad, c.Name+" exited but its restart policy is always")
 		case c.Health == "unhealthy":
 			bad = append(bad, c.Name+" is unhealthy")
-		case c.Status == "running" && o.RestartWarn > 0 && c.Restarts >= o.RestartWarn:
+		case c.Status == "running" && c.Restarts > o.RestartWarn:
 			warn = append(warn, fmt.Sprintf("%s has restarted %d times", c.Name, c.Restarts))
 		}
 	}
@@ -523,10 +514,13 @@ func UnattendedCheck(state, how string) Check {
 	return Check{Name: CheckUnattended, Verdict: Unknown, Detail: how}
 }
 
-// Run asks the VM every question and returns the report. It does not return an error: a check that
-// cannot be answered is reported as unknown with the reason, and the others still run.
-func Run(r sshx.Runner, vm string, o Options) Report {
-	o = o.withDefaults()
+// Run asks the VM every question and returns the report. It refuses Options that fail Validate
+// before sending anything. After that it does not return an error: a check that cannot be answered
+// is reported as unknown with the reason, and the others still run.
+func Run(r sshx.Runner, vm string, o Options) (Report, error) {
+	if err := o.Validate(); err != nil {
+		return Report{VM: vm}, err
+	}
 	rep := Report{VM: vm, Thresholds: o}
 
 	out, perr := r.Run(PMCmd())
@@ -587,7 +581,7 @@ func Run(r sshx.Runner, vm string, o Options) Report {
 		vs[i] = c.Verdict
 	}
 	rep.Verdict = Worst(vs...)
-	return rep
+	return rep, nil
 }
 
 func dockerDisk(r sshx.Runner, o Options) Check {

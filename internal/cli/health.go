@@ -16,7 +16,7 @@ import (
 
 func newVMHealthCmd() *cobra.Command {
 	var all bool
-	o := health.Defaults()
+	o := health.DefaultOptions()
 	cmd := &cobra.Command{
 		Use:   "health [name]",
 		Short: "Ask a VM the questions an owner should ask monthly (read only)",
@@ -49,8 +49,8 @@ func newVMHealthCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "check every registered VM")
 	cmd.Flags().IntVar(&o.DiskWarn, "disk-warn", o.DiskWarn, "disk percent used at which a filesystem warns (1-100, below --disk-fail)")
 	cmd.Flags().IntVar(&o.DiskFail, "disk-fail", o.DiskFail, "disk percent used at which a filesystem fails (1-100)")
-	cmd.Flags().IntVar(&o.OtherUpdatesWarn, "max-updates", o.OtherUpdatesWarn, "non-security updates pending at which updates warns (0 turns it off)")
-	cmd.Flags().IntVar(&o.RestartWarn, "max-restarts", o.RestartWarn, "restarts of a running container at which it warns (0 turns it off)")
+	cmd.Flags().IntVar(&o.OtherUpdatesWarn, "max-updates", o.OtherUpdatesWarn, "most non-security updates allowed pending before updates warns (0 warns on any)")
+	cmd.Flags().IntVar(&o.RestartWarn, "max-restarts", o.RestartWarn, "most restarts a running container may have before it warns (0 warns on any)")
 	return cmd
 }
 
@@ -101,7 +101,11 @@ func checkVM(vm fleet.VM, o health.Options) health.Report {
 			return nil
 		}
 		defer c.Close()
-		rep = health.Run(c, vm.Name, o)
+		var rerr error
+		rep, rerr = health.Run(c, vm.Name, o)
+		if rerr != nil {
+			rep = withThresholds(health.Unreachable(vm.Name, rerr), o)
+		}
 		return nil
 	})
 	return rep

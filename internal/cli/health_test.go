@@ -228,3 +228,41 @@ func TestVMHealthRefusesBadThresholdsBeforeDialling(t *testing.T) {
 		}
 	}
 }
+
+func TestVMHealthMaxUpdatesZeroWarnsOnOnePending(t *testing.T) {
+	healthFleet(t, "vm1")
+	// One non-security update pending.
+	host := healthHost(func(cmd string) string {
+		if strings.Contains(cmd, "check-update") {
+			return "ALL|1\nSEC|0\n"
+		}
+		return healthyHost("0")(cmd)
+	})
+	stubDial(t, map[string]sshx.Runner{"vm1": host})
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "ok"},
+		{[]string{"--max-updates", "0"}, "warn"},
+	} {
+		stdout, _, err := runCmdE(t, newVMHealthCmd(), nil, true, append([]string{"vm1"}, tc.args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, data := parseEnvelope(t, stdout)
+		var d healthData
+		if err := json.Unmarshal([]byte(data), &d); err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		for _, c := range d.Checks {
+			if c.Name == "updates" {
+				got = c.Verdict
+			}
+		}
+		if got != tc.want {
+			t.Errorf("%v: updates is %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}

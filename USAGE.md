@@ -269,9 +269,9 @@ Each line is a check with a verdict of `ok`, `warn`, `fail`, `unknown` or `skip`
 | --- | --- | --- |
 | `disk-root` | `df` on `/` | warn at 80% used, fail at 90% |
 | `disk-docker` | `df` on the docker root, plus image and volume sizes from `docker system df` | same thresholds |
-| `updates` | pending updates, security and other (`dnf check-update` and `--security`, or `apt list --upgradable`) | any security update fails, 25 or more others warn |
+| `updates` | pending updates, security and other (`dnf check-update` and `--security`, or `apt list --upgradable`) | any security update fails, more than 25 others warn |
 | `reboot` | `needs-restarting -r`, or `/var/run/reboot-required`; uptime in the detail | a required reboot warns |
-| `containers` | restarting, dead, unhealthy, or exited with a non-zero code or under `restart: always`; running ones that restarted 5 or more times warn | any problem fails |
+| `containers` | restarting, dead, unhealthy, or exited with a non-zero code or under `restart: always`; running ones that restarted more than 5 times warn | any problem fails |
 | `unattended-updates` | `APT::Periodic::Unattended-Upgrade`, or a dnf-automatic timer that applies updates | off warns |
 
 The limits are flags, shown here with their defaults:
@@ -281,9 +281,9 @@ baryovm vm health oracle --disk-warn 80 --disk-fail 90 --max-updates 25 --max-re
 ```
 
 `--disk-warn` and `--disk-fail` are percent used, both 1 to 100, with warn below fail.
-`--max-updates` is the count of non-security updates that makes `updates` warn, and
-`--max-restarts` is the restart count that makes a running container warn. A count of 0 turns that
-warning off; a negative count is refused. A bad value is refused before any connection is opened.
+`--max-updates` is how many non-security updates may be pending, and `--max-restarts` is how many
+restarts a running container may have; more than that warns. `--max-updates 0` warns on any
+pending update. A negative count is refused. A bad value is refused before any connection is opened.
 The limits used are echoed in `thresholds` in the JSON report.
 
 It needs `sudo -n` for docker and the package manager. A check it cannot answer (no docker, no
