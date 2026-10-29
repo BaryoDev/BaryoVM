@@ -122,3 +122,21 @@ func TestFleetFileIsOwnerOnly(t *testing.T) {
 		t.Errorf("fleet file perms = %o, want 600", perm)
 	}
 }
+
+func TestSitesSurviveARoundTrip(t *testing.T) {
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	s := &Store{}
+	s.UpsertSite(Site{Domain: "example.com", VM: "web1", Root: "/var/www/example.com"})
+	s.UpsertSite(Site{Domain: "example.com", VM: "web2", Root: "/var/www/x"}) // replaces
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := got.FindSite("example.com")
+	if site == nil || site.VM != "web2" || site.Root != "/var/www/x" || len(got.Sites) != 1 {
+		t.Errorf("site lost or duplicated: %+v", got.Sites)
+	}
+}

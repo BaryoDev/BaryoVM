@@ -824,6 +824,46 @@ means a broken config fails the release loudly instead of reloading nothing and 
 **No backup runs for a static stack**, because there is no database registered. The previous
 release is not kept, so the rollback is to rebuild the previous commit and release again.
 
+### Provisioning a static site (`site add`, `site deploy`)
+
+`site add` sets a static site up on a VM you already own, end to end. DNS is not part of it: the
+name must resolve to the VM before the certificate can be issued.
+
+```sh
+baryovm site add example.com --vm web1 --root /var/www/example.com --email ops@example.com --dry-run
+baryovm site add example.com --vm web1 --root /var/www/example.com --email ops@example.com
+npm run build                                   # produces out/
+baryovm site deploy example.com ./out
+```
+
+`site add` creates the webroot and the ACME challenge directory (`/var/www/letsencrypt`), writes
+`/etc/nginx/conf.d/<domain>.conf` from a template, gets the certificate with certbot in webroot
+mode, runs `nginx -t`, and reloads. The server block redirects HTTP to HTTPS, serves a static export
+with `try_files $uri $uri.html $uri/ =404`, gives `/_next/static/` and `/assets/` a year-long
+immutable cache, and sends `Cache-Control: no-cache` for everything else, HTML included. gzip is
+switched on inside those static locations only (JS, CSS, SVG, wasm, JSON), never in the `http`
+block, so a proxied location on the same host is not compressed. Where `selinuxenabled` says SELinux
+is on, the webroot is relabelled with `restorecon -R`. It is detected, never assumed.
+
+The order is fixed by the certificate: an HTTP-only block first so certbot's challenge is served,
+then the full block. Any failing step puts the previous server block back (or removes the new file),
+reloads nginx if it had already been reloaded with the new one, and names the step in the error and
+in `data.failedStep`. A site that already exists, in the local inventory or as a file on the VM, is
+refused unless you pass `--force`. `--email` sets the ACME contact; without it certbot registers
+with none.
+
+Every command that needs root runs as `sudo -n`, so the SSH user needs passwordless sudo, including for a
+shell. Domain and root are checked before any command is built: the domain is lowercase letters,
+digits, hyphens and dots, and the root is an absolute path with no `..` that is not `/` or a system
+directory. Like `stack tls`, `site add` needs no `--yes`: it acts on a VM you own and is undone by
+removing one file, which is not the billable, hard-to-reverse case `vm provision` guards.
+
+The site is recorded in `fleet.json` (`sites`), the way a stack is. `site deploy` reads the webroot
+from there, so it only knows sites added from this machine. It syncs the contents of `<dir>` with
+the same rsync as `stack release` (host key check, `sudo -n rsync` on the far side, `--delete`),
+then relabels, runs `nginx -t` and reloads. An empty or missing directory is refused, because
+syncing it would empty the webroot. Both commands take `--dry-run` and support `-o json`.
+
 ### Backups (pg_dump + config, over SSH)
 
 Register the DB + config once, then back up / restore with one command:
