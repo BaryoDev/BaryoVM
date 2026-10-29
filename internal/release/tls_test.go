@@ -129,7 +129,7 @@ func TestStaticVhostDeniesDotFiles(t *testing.T) {
 	wk := strings.Index(out, "location ^~ /.well-known/")
 	dot := strings.Index(out, `location ~ /\. {`)
 	root := strings.LastIndex(out, "location / {")
-	if wk < 0 || dot < 0 || !(wk < dot && dot < root) {
+	if wk < 0 || dot < 0 || (wk >= dot || dot >= root) {
 		t.Fatalf("want .well-known, then the dot rule, then location /:\n%s", out)
 	}
 	proxy := TLS{Hosts: []string{"example.com"}, Email: "ops@example.com", Proxy: &Proxy{Port: 80}}
@@ -283,7 +283,7 @@ func TestApplyTLSSequenceWhenNoCertificateYet(t *testing.T) {
 			break
 		}
 	}
-	if !(i1 < cb && cb < i2) {
+	if i1 >= cb || cb >= i2 {
 		t.Fatalf("certbot must sit between the ACME vhost and the real one: %v", h.seen)
 	}
 	last := h.seen[len(h.seen)-1]

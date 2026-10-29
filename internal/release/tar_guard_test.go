@@ -1,7 +1,6 @@
 package release
 
 import (
-	"archive/tar"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -267,7 +266,7 @@ func TestOwnersAreZeroed(t *testing.T) {
 	if _, err := writeTar(&buf, src, nil); err != nil {
 		t.Fatal(err)
 	}
-	var h *tar.Header = tarNames(t, buf.Bytes())["f"]
+	h := tarNames(t, buf.Bytes())["f"]
 	if h.Uid != 0 || h.Gid != 0 || h.Uname != "" || h.Gname != "" {
 		t.Errorf("owner leaked into the archive: %+v", h)
 	}

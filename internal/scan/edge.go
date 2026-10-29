@@ -305,8 +305,8 @@ func (e *edge) checkSecurityTxt(host string) {
 		problems++
 		e.add(CheckSecTxt, "security.txt has no Contact", SeverityLow, "RFC 9116 requires a Contact field")
 	}
-	switch {
-	case expires == "":
+	switch expires {
+	case "":
 		problems++
 		e.add(CheckSecTxt, "security.txt has no Expires", SeverityLow, "RFC 9116 requires an Expires field")
 	default:

@@ -111,7 +111,7 @@ func TestSetTightensAnExistingFileToOwnerOnly(t *testing.T) {
 
 func TestSetDoesNotTouchAKeyThatOnlySharesAPrefix(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
-	os.WriteFile(f, []byte("DB=x\nDB_PASSWORD=y\n# DB=z\n"), 0o600)
+	_ = os.WriteFile(f, []byte("DB=x\nDB_PASSWORD=y\n# DB=z\n"), 0o600)
 	sh(t, SetCmd(f, "DB", false), "new\n")
 	if got := read(t, f); got != "DB=new\nDB_PASSWORD=y\n# DB=z\n" {
 		t.Fatalf("got %q", got)
@@ -120,7 +120,7 @@ func TestSetDoesNotTouchAKeyThatOnlySharesAPrefix(t *testing.T) {
 
 func TestSetKeepsAnUnterminatedLastLine(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
-	os.WriteFile(f, []byte("A=1"), 0o600)
+	_ = os.WriteFile(f, []byte("A=1"), 0o600)
 	sh(t, SetCmd(f, "B", false), "2\n")
 	if got := read(t, f); got != "A=1\nB=2\n" {
 		t.Fatalf("got %q", got)
@@ -140,7 +140,7 @@ func TestSetStoresAwkwardValuesVerbatim(t *testing.T) {
 	}
 	for _, v := range values {
 		f := filepath.Join(t.TempDir(), ".env")
-		os.WriteFile(f, []byte("K=old\nOTHER=keep\n"), 0o600)
+		_ = os.WriteFile(f, []byte("K=old\nOTHER=keep\n"), 0o600)
 		sh(t, SetCmd(f, "K", false), v+"\n")
 		want := "K=" + v + "\nOTHER=keep\n"
 		if got := read(t, f); got != want {
@@ -156,7 +156,7 @@ func TestSetStoresAwkwardValuesVerbatim(t *testing.T) {
 
 func TestUnsetRemovesOnlyThatKey(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
-	os.WriteFile(f, []byte("A=1\nAB=2\nB=3\n"), 0o600)
+	_ = os.WriteFile(f, []byte("A=1\nAB=2\nB=3\n"), 0o600)
 	sh(t, UnsetCmd(f, "A", false), "")
 	if got := read(t, f); got != "AB=2\nB=3\n" {
 		t.Fatalf("got %q", got)
@@ -177,7 +177,7 @@ func TestUnsetOnAMissingFileIsNotAnError(t *testing.T) {
 
 func TestListPrintsKeysAndNeverValues(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
-	os.WriteFile(f, []byte("# comment\nA=secret-one\n\nB_2=a=b\nbad key=x\nexport C=3\n"), 0o600)
+	_ = os.WriteFile(f, []byte("# comment\nA=secret-one\n\nB_2=a=b\nbad key=x\nexport C=3\n"), 0o600)
 	out := sh(t, ListCmd(f, false), "")
 	if strings.Contains(out, "secret-one") || strings.Contains(out, "a=b") {
 		t.Fatalf("list leaked a value: %q", out)

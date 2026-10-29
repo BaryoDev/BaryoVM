@@ -330,7 +330,7 @@ func streamArchive(c sshx.StdinRunner, cmd string, write func(io.Writer) ([]stri
 	}()
 	_, runErr := c.RunStdin(cmd, pr)
 	if runErr != nil {
-		pr.CloseWithError(runErr)
+		_ = pr.CloseWithError(runErr)
 		res := <-done
 		if res.err != nil && !errors.Is(res.err, runErr) {
 			return nil, fmt.Errorf("writing archive: %w (host said: %v)", res.err, runErr)
@@ -465,7 +465,7 @@ func writeTarFile(w io.Writer, file string) error {
 }
 
 func copyFile(w io.Writer, file string) error {
-	f, err := os.Open(file)
+	f, err := os.Open(file) // #nosec G304 -- local file chosen by the user; the tar writer guards what it archives
 	if err != nil {
 		return err
 	}

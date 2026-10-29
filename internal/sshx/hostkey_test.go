@@ -82,7 +82,7 @@ func serveHostKeys(t *testing.T, keys ...ssh.Signer) (string, int) {
 				defer sc.Close()
 				go ssh.DiscardRequests(reqs)
 				for c := range chans {
-					c.Reject(ssh.Prohibited, "no sessions")
+					_ = c.Reject(ssh.Prohibited, "no sessions")
 				}
 			}()
 		}

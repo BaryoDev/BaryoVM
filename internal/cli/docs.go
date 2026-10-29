@@ -61,12 +61,12 @@ func compareCommandDocs(generatedDir, dest string) error {
 		if want.IsDir() || got.IsDir() || want.Name() != got.Name() {
 			return fmt.Errorf("command docs are stale; run go run ./cmd/gen-docs")
 		}
-		wantBody, err := os.ReadFile(filepath.Join(generatedDir, want.Name()))
+		wantBody, err := os.ReadFile(filepath.Join(generatedDir, want.Name())) // #nosec G304 -- fixed generated-docs directory
 		if err != nil {
 			return fmt.Errorf("read generated command doc %s: %w", want.Name(), err)
 		}
 		wantBody = normalizeCommandDoc(wantBody)
-		gotBody, err := os.ReadFile(filepath.Join(dest, got.Name()))
+		gotBody, err := os.ReadFile(filepath.Join(dest, got.Name())) // #nosec G304 -- destination is the docs directory flag
 		if err != nil {
 			return fmt.Errorf("read command doc %s: %w", got.Name(), err)
 		}
@@ -82,7 +82,7 @@ func writeCommandDocs(generatedDir, dest string) error {
 	if err != nil {
 		return fmt.Errorf("read generated command docs: %w", err)
 	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+	if err := os.MkdirAll(dest, 0o755); err != nil { // #nosec G301 -- published docs directory, meant to be world-readable
 		return fmt.Errorf("create command docs directory: %w", err)
 	}
 	current, err := os.ReadDir(dest)
@@ -107,12 +107,12 @@ func writeCommandDocs(generatedDir, dest string) error {
 		}
 	}
 	for _, entry := range generated {
-		body, err := os.ReadFile(filepath.Join(generatedDir, entry.Name()))
+		body, err := os.ReadFile(filepath.Join(generatedDir, entry.Name())) // #nosec G304 -- fixed generated-docs directory
 		if err != nil {
 			return fmt.Errorf("read generated command doc %s: %w", entry.Name(), err)
 		}
 		body = normalizeCommandDoc(body)
-		if err := os.WriteFile(filepath.Join(dest, entry.Name()), body, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dest, entry.Name()), body, 0o644); err != nil { // #nosec G306 G703 -- published docs, meant to be world-readable; dest is the docs directory flag
 			return fmt.Errorf("write command doc %s: %w", entry.Name(), err)
 		}
 	}

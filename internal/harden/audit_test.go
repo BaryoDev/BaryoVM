@@ -139,7 +139,7 @@ func TestUfwApplyDeletesBroadRuleAndRechecks(t *testing.T) {
 	if del < 0 || recheck < 0 || applied < 0 {
 		t.Fatalf("missing piece: delete=%d recheck=%d applied=%d", del, recheck, applied)
 	}
-	if !(del < recheck && recheck < applied) {
+	if del >= recheck || recheck >= applied {
 		t.Errorf("order wrong: delete=%d recheck=%d applied=%d", del, recheck, applied)
 	}
 	mustContain(t, s, "say ssh-firewall "+StateReport+` "ufw still has an allow rule`)
