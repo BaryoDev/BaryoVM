@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -167,14 +168,14 @@ func TestTLSAcceptsASubdirectoryOfASystemRoot(t *testing.T) {
 func TestLoadValidatesTLS(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.json")
-	body := `{"localRoot":"/a","remoteRoot":"/var/www/x","sync":["out/"],"tls":{"hosts":["bad host"],"email":"ops@example.com"}}`
+	body := `{"localRoot":` + strconv.Quote(dir) + `,"remoteRoot":"/var/www/x","sync":["out/"],"tls":{"hosts":["bad host"],"email":"ops@example.com"}}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(p, false); err == nil {
 		t.Fatal("manifest with an invalid tls host loaded")
 	}
-	body = `{"localRoot":"/a","remoteRoot":"/var/www/x","sync":["out/"],"tls":{"hosts":["example.com"],"email":"ops@example.com"}}`
+	body = `{"localRoot":` + strconv.Quote(dir) + `,"remoteRoot":"/var/www/x","sync":["out/"],"tls":{"hosts":["example.com"],"email":"ops@example.com"}}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

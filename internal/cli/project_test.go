@@ -361,7 +361,7 @@ func TestProjectExportProducesAFileProjectReleaseAccepts(t *testing.T) {
 
 	var stacks []fleet.Stack
 	for _, n := range []string{"api", "console"} {
-		src := filepath.Join(out, "src-"+n)
+		src := filepath.Join(out, "deploy", "src-"+n)
 		if err := os.MkdirAll(filepath.Join(src, "web"), 0o755); err != nil {
 			t.Fatal(err)
 		}

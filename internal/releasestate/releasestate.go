@@ -354,3 +354,26 @@ func RecordDeployed(r sshx.Runner, l Loc, stack, commit string) error {
 	_, err = r.Run(WriteCmd(l, l.DeployedFile(), append(b, '\n')))
 	return err
 }
+
+// ReadDeployedCmd prints the deployed record, or nothing when no release has finished.
+func (l Loc) ReadDeployedCmd() string {
+	f := sshx.Quote(l.DeployedFile())
+	return l.sh("if [ -f " + f + " ]; then cat " + f + "; fi")
+}
+
+// ReadDeployed returns the record of the last finished release, or nil when there is none. It takes
+// no lock and writes nothing, so `baryovm status` can call it while a release runs.
+func ReadDeployed(r sshx.Runner, l Loc) (*Deployed, error) {
+	out, err := r.Run(l.ReadDeployedCmd())
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	var d Deployed
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		return nil, fmt.Errorf("deployed record %s is not valid JSON: %w", l.DeployedFile(), err)
+	}
+	return &d, nil
+}

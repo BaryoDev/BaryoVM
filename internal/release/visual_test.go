@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -129,7 +130,7 @@ func TestVerifyVisualValidation(t *testing.T) {
 
 func TestLoadRefusesABadVerifyVisual(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "m.json")
-	body := `{"localRoot":"/a","remoteRoot":"/b","verifyVisual":{"url":"https://x.test/","widths":[0],"assertNoHorizontalOverflow":true}}`
+	body := `{"localRoot":` + strconv.Quote(filepath.Dir(p)) + `,"remoteRoot":"/b","verifyVisual":{"url":"https://x.test/","widths":[0],"assertNoHorizontalOverflow":true}}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

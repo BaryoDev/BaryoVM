@@ -20,6 +20,7 @@ baryovm stack add <name> [flags]
       --path string                  remote project directory, e.g. /opt/app (required)
       --recipe stack release         recipe file (or a directory holding baryovm.recipe.json) from the app repository; stack release then deploys its services
       --release-file stack release   local JSON release manifest for stack release
+      --release-root string          let this stack's release manifests reach inside <dir> as well as their own directory (absolute; empty clears it). See USAGE.md
       --runtime string               container runtime on the VM: docker (default) or podman. See USAGE.md for which commands podman covers
       --sudo                         run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is root-owned. See USAGE.md for what it covers and the three things that change with it
       --vm string                    VM the stack runs on (required)

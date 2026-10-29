@@ -60,7 +60,7 @@ func newStackTLSCmd() *cobra.Command {
 			if manifestPath == "" {
 				return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
 			}
-			m, err := release.Load(manifestPath, st.Sudo)
+			m, err := release.LoadRemoteOnly(manifestPath, st.Sudo)
 			if err != nil {
 				return err
 			}

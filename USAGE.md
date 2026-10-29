@@ -350,6 +350,45 @@ and `--all` puts a list of reports there. Each check has `name`, `verdict`, `det
 `items` (the containers at fault) and `metrics` (numbers such as `usedPercent`, `security`,
 `other`, `uptimeDays`).
 
+## The whole fleet on one screen
+
+`status` asks every registered VM once, over one SSH connection each, and prints a row per stack.
+It is read only: nothing is written, restarted or pulled on any host, and nothing runs on a VM
+beyond reads unless you pass `--verify`.
+
+```sh
+baryovm status
+baryovm status --vm oracle
+baryovm status --stack shop --timeout 10s -o json
+```
+
+| Column | Where it comes from |
+| --- | --- |
+| `STATE`, `UP` | `compose ps --format json`: `up`, `degraded` (a container stopped or unhealthy), `down` |
+| `DEPLOYED` | the commit and time of the last finished release, from the record `stack release` leaves beside the release root. This is BaryoVM's own record, so a stack deployed some other way shows `-` |
+| `RELEASE` | `idle`, or the release record still on the VM: `running`, `interrupted`, `FAILED <step>` |
+| `VERIFY` | with `--verify` only: the stack's verify assertions (or its `healthUrl`), run once now, `n/n` or `FAIL`. `-` when not asked |
+| `BACKUP` | the backups in the stack's backup directory, as `count, date of the newest` |
+
+A dash means the column is not configured for that stack, which is not a failure. A question mark
+means it is configured and could not be read, with the reason under the table and in `notes`. The
+human table goes to stderr.
+
+VMs are asked concurrently, `--concurrency` at a time (default 4), each within `--timeout` (default
+30s). A VM that does not connect is shown as `unreachable` with the reason, and every other row still
+prints. A VM that connects but runs out of time keeps the stacks it already answered, and the
+rest show `timed out`. The command exits zero whenever it produced a report; read `attention` in `-o json` for what
+needs a look. `--verify` runs each stack's verify assertions on the VM; it is off by default because a verify
+`command:` check is a shell command (with sudo when the stack uses it).
+
+A VM behind a forced command (`vm remote set <vm> forced`) is sent the `status` request and nothing
+else, so it shows the container list and `limited` in the other columns.
+
+With `-o json`, `data` holds `vms`, `stacks` and `summary`. Each stack has `name`, `vm`, `state`,
+`running`, `total`, `runtime`, `deployed`, `release`, `verify`, `backups` (each null when not
+configured or not readable), `limited`, `attention` and `notes`. The table is drawn from the same
+report.
+
 ## Patching and pruning a VM
 
 `vm patch` updates the OS packages and proves the stack came back.
@@ -584,6 +623,33 @@ manifest's own directory: no `~`, no leading `/`, no `..`, and after symlinks ar
 still be inside that directory. Anything else is refused when the manifest loads (so `--dry-run`
 reports it), naming the reference and the rule. References you type on the command line (`--env-ref`
 and similar) are not confined.
+
+`localRoot` and every `sync` entry are confined the same way. Each must resolve, after symlinks,
+inside the directory holding the manifest. A manifest with `"localRoot": "~"` and `"sync": [".ssh"]`
+is refused when it loads (so `--dry-run` refuses too), naming `localRoot` or the `sync` entry. A
+`sync` entry that is a symlink to somewhere outside is refused before rsync runs. A relative
+`localRoot` is read from the directory you run the command in, as before, so it must land inside the
+manifest's directory too.
+
+If a manifest has to live apart from the source it syncs (a sibling checkout, a manifest kept
+outside the repository), register the stack once with `--release-root`:
+
+```sh
+baryovm stack add site --vm oracle --path /var/www/site \
+  --release-file ~/ops/site.release.json --release-root ~/repos
+```
+
+Manifests for that stack may then reach anywhere inside `~/repos`, as well as inside their own
+directory. The value must be an absolute directory (`~` allowed). It is stored in `fleet.json`, so CI
+needs no flag, and a manifest or project file cannot set it: a project file that names `releaseRoot`
+is refused, and `project export` leaves it out. Re-adding the stack without the flag keeps it;
+`--release-root ""` clears it. The rsync trailing-slash rule and the compose dir rule are unchanged.
+
+`project release` reads no fleet.json, so it has its own operator flag: `baryovm project release
+--release-root ~/repos`. It applies to every stack in the run and, like the stack setting, comes from
+the command line and never from the file. `requireLocal` entries follow the same rule as `sync`, and
+`stack tls` syncs nothing, so it does not check the local paths. A relative `localRoot` is read from
+the current directory, not the manifest's, and the refusal says so.
 
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
@@ -1426,6 +1492,31 @@ cloudflare.com/ips-v4 and ips-v6 when the command runs. If the fetch fails or
 returns an empty list, the command stops before creating anything, and it never
 falls back to an empty or open list. The dry run prints how many ranges each
 port gets. The same flags work on `up`.
+
+## Moving a repository to another Git host
+
+```sh
+baryovm repo move app --to https://dev.azure.com/acme/proj/_git/app            # plan only
+baryovm repo move app --to https://dev.azure.com/acme/proj/_git/app --yes      # do it
+```
+
+`repo move <stack> --to <url>` moves the stack's source repository and repoints what pulls from it. Without `--yes`, or with `--dry-run`, it prints the plan and makes no call. `-o json` gives the same plan as data.
+
+The source is `--from`, then the stack's recorded source, then the `origin` of the local clone (`--local`, default `.`). In order, with `--yes`:
+
+1. Read the refs on both sides. A destination that already holds different commits is refused; nothing is ever force-pushed or deleted there. A missing destination is created only with `--create` (GitHub through `gh`, Azure Repos through `az`); on any other host create it by hand first.
+2. Export issues and pull requests, with their comments, from GitHub to `issues.json` and `pulls.json` in `--export-dir` (default `./<stack>-repo-export`). A rate-limit reply fails the export and nothing moves.
+3. Push every branch and tag to the new remote, then list the refs on both sides again. If any ref is missing or differs, the move stops with the old remote untouched.
+4. Find checkouts of the repository under the directories of the stacks registered on the VMs (`--vm` names one, repeatable; VMs behind a forced command are skipped unless named) and set their `origin` to the new URL. Before any git command a checkout and its `.git` must have the same owner, and that owner must be root or the VM's SSH user, or it is refused and reported as needing attention (paths with control characters or `..` are dropped); git then runs as that owner (`sudo -n -u <owner>` where the stack uses sudo, never as root), with `core.fsmonitor` and `core.hooksPath` blanked and the system git config ignored. A checkout with local changes is skipped and reported, and so is one whose origin carries a credential (`origin carries a credential: repoint by hand`; the URL is never printed). With `--read-cred <ref>` the token is read from a secretref reference and sent to the VM on stdin to `git credential approve`, with the helper list reset first so only that checkout's store gets it. It is stored by the checkout owner in a `0600` file inside that checkout's `.git` (a symlink there is refused, and so is a directory name outside `A-Za-z0-9._/-`). A token with a line break or NUL is refused. A token is never in argv, errors or the activity log. URLs that carry a user, password or token (a `user:token@host:path` scp form, `?` or `#`, `ext::` and `file:` included) are refused. If a later step fails, the undo also removes the credential file and unsets the helper.
+5. List crontab lines, `/etc/cron.d` entries and systemd units on the VMs that mention those checkouts. They are listed, not edited.
+6. Repoint the local clone: the old remote is kept as `old-origin` and `origin` points to the new URL. Branches that tracked `origin` are pointed at the new `origin`. A later failure restores the earlier repoints and the branch tracking.
+7. Record the new URL as the stack's source, but only when no checkout was skipped. A skipped checkout still pulls from the old remote, so the old source stays recorded and a rerun comes back to it.
+
+A destination that holds only some of the source's refs, with the same ids and nothing changed or extra (what a push cut off halfway leaves), is finished instead of refused. Each git, gh or az call has a deadline (2 minutes for reads, 15 for a clone or push) and runs with `GIT_TERMINAL_PROMPT=0`, so a credential prompt fails instead of hanging. With `--create`, a failed create re-reads the destination: if it is readable the move continues, else the error says it exists but is unreadable. The export is written to temporary names and renamed, a symlinked `issues.json` is replaced rather than followed, and a half-written export does not count as finished.
+
+The old repository is never deleted or archived. After the checks pass the command prints the `gh repo archive` and `gh repo delete` lines for you to run yourself. A rerun after a finished move changes nothing.
+
+Not covered: importing issues into Azure Boards, and rewriting CI workflow files.
 
 ## Guarding commits, pushes and PR text
 

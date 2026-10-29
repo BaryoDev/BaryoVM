@@ -7,6 +7,7 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,7 @@ import (
 func TestLoadDefaultsAndValidation(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "r.json")
-	_ = os.WriteFile(p, []byte(`{"localRoot":"~/src","remoteRoot":"/srv/app","sync":["api"],
+	_ = os.WriteFile(p, []byte(`{"localRoot":`+strconv.Quote(dir)+`,"remoteRoot":"/srv/app","sync":["api"],
 		"builds":[{"image":"app:1","dockerfile":"Dockerfile","context":"api"}]}`), 0o600)
 
 	m, err := Load(p, false)
@@ -226,7 +227,7 @@ func TestBuildCmdIsUntouchedWithoutSudo(t *testing.T) {
 func TestAStackRegisteredSudoReleasesAsRoot(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "r.json")
-	_ = os.WriteFile(p, []byte(`{"localRoot":"/src","remoteRoot":"/opt/app","sync":["api"],
+	_ = os.WriteFile(p, []byte(`{"localRoot":`+strconv.Quote(dir)+`,"remoteRoot":"/opt/app","sync":["api"],
 		"postDeploy":["restorecon -R /opt/app"]}`), 0o600)
 
 	m, err := Load(p, true)
@@ -419,7 +420,7 @@ func TestAReleaseWithoutSudoIsUnchangedEverywhere(t *testing.T) {
 func TestAManifestCannotTurnOffAStackRegisteredSudo(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "release.json")
-	if err := os.WriteFile(path, []byte(`{"localRoot":".","remoteRoot":"/opt/app","sudo":false}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"localRoot":`+strconv.Quote(dir)+`,"remoteRoot":"/opt/app","sudo":false}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -432,7 +433,7 @@ func TestAManifestCannotTurnOffAStackRegisteredSudo(t *testing.T) {
 	}
 
 	// And the other direction still holds: the manifest can ask for root on its own.
-	if err := os.WriteFile(path, []byte(`{"localRoot":".","remoteRoot":"/opt/app","sudo":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"localRoot":`+strconv.Quote(dir)+`,"remoteRoot":"/opt/app","sudo":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err = Load(path, false)

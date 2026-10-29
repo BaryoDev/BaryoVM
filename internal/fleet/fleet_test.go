@@ -30,7 +30,9 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		DBContainer: "pg", DBName: "appdb", DBUser: "postgres", EnvFile: ".env",
 		BackupDir: "/backups", Keep: 7,
 		Sudo:           true,
+		Source:         "https://dev.azure.com/org/proj/_git/app",
 		Runtime:        "podman",
+		ReleaseRoot:    "/repo/sites",
 		AutoUpdate:     true,
 		HealthURL:      "http://127.0.0.1:8080/health",
 		NoDatabase:     true,
@@ -60,6 +62,12 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 
 	if !got.Sudo {
 		t.Error("Sudo was lost: an elevated stack would silently run unelevated")
+	}
+	if got.ReleaseRoot != want.ReleaseRoot {
+		t.Errorf("ReleaseRoot was lost: a manifest outside its directory would be refused, got %q", got.ReleaseRoot)
+	}
+	if got.Source != want.Source {
+		t.Errorf("Source was lost: repo move would not know the old remote, got %q", got.Source)
 	}
 	if got.Runtime != "podman" {
 		t.Errorf("Runtime was lost: a podman stack would run docker commands, got %q", got.Runtime)

@@ -151,6 +151,7 @@ baryovm stack restore app --yes
 | **Single container** | `deploy` |
 | **Security** | **`scan`** (OWASP ZAP baseline, passive) |
 | **Provision** (experimental, billable) | `vm provision` · `up` (plan only without `--yes`) |
+| **Fleet** | **`status`** (every stack on one screen, read only) · `vm health` |
 | **Local** | `doctor [--fix]` · `version` |
 
 Generated command flags and examples: **[command reference](docs/commands/baryovm.md)**.

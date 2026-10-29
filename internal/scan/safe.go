@@ -37,6 +37,10 @@ func cleanText(s string) string {
 	return b.String()
 }
 
+// CleanText is cleanText for other packages that print text a remote host chose. There is one
+// rule for it, here.
+func CleanText(s string) string { return cleanText(s) }
+
 var nonGlobalNets = func() []*net.IPNet {
 	var out []*net.IPNet
 	for _, c := range []string{
