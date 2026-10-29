@@ -16,6 +16,7 @@ baryovm stack restore <name> [flags]
 ### Options
 
 ```
+      --dry-run       print the restore script and the backup it would use, without connecting (needs no --yes)
       --file string   backup to restore (name or path); default: newest
   -h, --help          help for restore
       --yes           confirm the destructive restore
