@@ -487,15 +487,35 @@ and the command that frees it:
 container name "umbraco-pwa-demo" is held by a container compose does not manage, probably started with docker run: check it is safe to remove, then run `docker rm -f 'umbraco-pwa-demo'` on the VM and try again
 ```
 
-BaryoVM never removes that container itself. Check first that its data lives in a volume, not in the
-container. If the old container used a named volume, declare it `external: true` in the compose file.
-Otherwise compose creates a new, empty, project-prefixed volume and the app starts with no data.
+Without `--adopt` BaryoVM never removes that container. Check first that its data lives in a volume,
+not in the container. If the old container used a named volume, declare it `external: true` in the
+compose file. Otherwise compose creates a new, empty, project-prefixed volume and the app starts
+with no data.
 
 ```yaml
 volumes:
   umbraco-pwa-demo-data:
     external: true
 ```
+
+The whole migration:
+
+1. Run `stack release` or `stack deploy`. It stops on the hand-run container.
+2. Add `external: true` for every named volume that container uses, as above.
+3. Run it again with `--adopt`:
+
+```sh
+baryovm stack release app --adopt
+baryovm stack deploy app --adopt
+```
+
+`--adopt` prints each container it will remove (name, image, created time), then runs `docker rm -f`
+on it and carries on. It never passes `-v`, so volumes stay. Before removing anything it reads the
+container's mounts with `docker inspect`. If a named volume is not declared `external: true`, it
+refuses, removes nothing, and prints the volume name and the YAML above. There is no flag to skip
+that check. Anonymous volumes and bind mounts are not checked. A container that belongs to another
+compose project is never adopted. On `stack release` the removal happens after the release record
+is written. `--adopt` on `stack release` also takes over a hand-written vhost (see above).
 
 #### Verifying a release
 

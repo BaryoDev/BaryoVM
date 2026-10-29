@@ -16,7 +16,7 @@ baryovm stack release <name> [flags]
 ### Options
 
 ```
-      --adopt           with a tls block: take over a vhost file BaryoVM did not write (backed up first)
+      --adopt           take over what BaryoVM did not create: a hand-run container holding a container_name (removed, refused if it has a named volume not declared external), and with a tls block a vhost file (backed up first)
       --clear           drop the record of an earlier release that stopped, without running anything
       --config string   release manifest path (overrides the stack's --release-file)
   -h, --help            help for release
