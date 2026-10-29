@@ -28,7 +28,7 @@ var (
 type osRunner struct{}
 
 func (osRunner) Git(globals []string, args ...string) (string, error) {
-	cmd := exec.Command("git", append(append([]string{}, globals...), args...)...)
+	cmd := exec.Command("git", append(append([]string{}, globals...), args...)...) // #nosec G204 -- fixed git binary; arguments come from the command line the user typed
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -41,12 +41,12 @@ func (osRunner) Git(globals []string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-func (osRunner) ReadFile(p string) ([]byte, error) { return os.ReadFile(p) }
+func (osRunner) ReadFile(p string) ([]byte, error) { return os.ReadFile(p) } // #nosec G304 -- path is a file the user named on the gh command line
 
 // runReal runs the real tool with this process's stdin, stdout and stderr, and returns its exit
 // code, so output and exit codes pass through unchanged.
 func runReal(name string, args []string) (int, error) {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- name is "git" or "gh", set by the wrapper commands
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err := cmd.Run()
 	var ee *exec.ExitError
@@ -143,28 +143,28 @@ func installHooks(force bool) ([]string, error) {
 		}
 		dir = filepath.Join(wd, dir)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 	// Check every hook before writing any, so a refusal leaves the repository as it was.
 	for _, name := range guard.HookNames {
 		path := filepath.Join(dir, name)
-		if b, err := os.ReadFile(path); err == nil && !guard.IsOurHook(string(b)) && !force {
+		if b, err := os.ReadFile(path); err == nil && !guard.IsOurHook(string(b)) && !force { // #nosec G304 -- hook path is the repository hooks dir plus a fixed name
 			return nil, fmt.Errorf("%s already has a %s hook that is not BaryoVM's: rerun with --force to keep it as %s.baryovm-old", dir, name, name)
 		}
 	}
 	var written []string
 	for _, name := range guard.HookNames {
 		path := filepath.Join(dir, name)
-		if b, err := os.ReadFile(path); err == nil && !guard.IsOurHook(string(b)) {
+		if b, err := os.ReadFile(path); err == nil && !guard.IsOurHook(string(b)) { // #nosec G304 -- hook path is the repository hooks dir plus a fixed name
 			if err := os.Rename(path, path+".baryovm-old"); err != nil {
 				return nil, err
 			}
 		}
-		if err := os.WriteFile(path, []byte(guard.HookScript(name)), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(guard.HookScript(name)), 0o755); err != nil { // #nosec G306 -- git hooks must be executable
 			return nil, err
 		}
-		if err := os.Chmod(path, 0o755); err != nil {
+		if err := os.Chmod(path, 0o755); err != nil { // #nosec G302 -- git hooks must be executable; the umask may have stripped the bit
 			return nil, err
 		}
 		written = append(written, name)
