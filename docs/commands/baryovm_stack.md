@@ -31,6 +31,7 @@ baryovm stack [flags]
 * [baryovm stack list](baryovm_stack_list.md)	 - List registered stacks
 * [baryovm stack logs](baryovm_stack_logs.md)	 - Show recent logs for the stack
 * [baryovm stack ps](baryovm_stack_ps.md)	 - Show the stack's containers
+* [baryovm stack publish](baryovm_stack_publish.md)	 - Run the release gate, then tag and push the tag
 * [baryovm stack pull](baryovm_stack_pull.md)	 - Pull the stack's images
 * [baryovm stack release](baryovm_stack_release.md)	 - Sync source to the VM, build images there, then compose up (config-driven)
 * [baryovm stack remove](baryovm_stack_remove.md)	 - Remove a stack registration (does not touch the VM)
@@ -38,6 +39,7 @@ baryovm stack [flags]
 * [baryovm stack rollback](baryovm_stack_rollback.md)	 - Put back the images the stack ran before its last release or update
 * [baryovm stack set-backup](baryovm_stack_set-backup.md)	 - Set a stack's backup strategies (database, remote database, command, files)
 * [baryovm stack set-managed](baryovm_stack_set-managed.md)	 - Name the managed database beside a stack and the AWS profile or Azure subscription that reaches it
+* [baryovm stack set-publish](baryovm_stack_set-publish.md)	 - Set a stack's publish spec read by ship and stack publish
 * [baryovm stack set-update](baryovm_stack_set-update.md)	 - Set a stack's update policy (autoUpdate, health URL)
 * [baryovm stack set-verify](baryovm_stack_set-verify.md)	 - Set a stack's verify spec (checks, attempts, delay) read by release, update and rollback
 * [baryovm stack tls](baryovm_stack_tls.md)	 - Write the nginx vhost and get the certificate from the release manifest's tls block
