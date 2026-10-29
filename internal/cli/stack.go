@@ -206,6 +206,24 @@ func syncTar(m *release.Manifest, vm *fleet.VM, sub string) error {
 	return m.TarSync(sr, sub)
 }
 
+// syncSub copies one sync entry to the VM with the chosen transport. Releases and `site deploy`
+// both go through it, so there is one rsync path and one answer to "is this the right machine".
+func syncSub(m *release.Manifest, vm *fleet.VM, sub string, transport release.Transport) error {
+	if transport == release.TransportTar {
+		return syncTar(m, vm, sub)
+	}
+	khFile, cleanup, e := knownHostsFileFor(vm)
+	if e != nil {
+		return e
+	}
+	defer cleanup()
+	out, e := runLocal(m.RsyncCmdKnownHosts(sub, vm.User, vm.Host, vm.Port, vm.KeyPath, khFile))
+	if e != nil {
+		return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 // remoteSession is what a release needs from a connection: run commands, then hang up.
 // knownHostsFileFor writes the host keys BaryoVM trusts for a VM to a private temp file, so rsync's
 // ssh checks the same keys the rest of the command does instead of ~/.ssh/known_hosts. A host with
@@ -458,19 +476,7 @@ func newStackReleaseCmd() *cobra.Command {
 				sub := sub
 				if err := rr.step("sync:"+sub, func() error {
 					return ui.Step("sync "+sub, func() error {
-						if transport == release.TransportTar {
-							return syncTar(m, vm, sub)
-						}
-						khFile, cleanup, e := knownHostsFileFor(vm)
-						if e != nil {
-							return e
-						}
-						defer cleanup()
-						out, e := runLocal(m.RsyncCmdKnownHosts(sub, vm.User, vm.Host, vm.Port, vm.KeyPath, khFile))
-						if e != nil {
-							return fmt.Errorf("%w: %s", e, strings.TrimSpace(out))
-						}
-						return nil
+						return syncSub(m, vm, sub, transport)
 					})
 				}); err != nil {
 					return fail(err)

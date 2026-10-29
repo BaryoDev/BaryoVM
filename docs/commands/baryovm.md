@@ -23,6 +23,7 @@ CLI-first: the MAUI app and MCP server drive this same CLI (with -o json).
 * [baryovm git](baryovm_git.md)	 - Run git, refusing a commit or push that carries a key or goes to the wrong host
 * [baryovm guard](baryovm_guard.md)	 - Key and remote checks that run before git and gh
 * [baryovm scan](baryovm_scan.md)	 - Run an OWASP ZAP baseline (passive) scan against a URL
+* [baryovm site](baryovm_site.md)	 - Provision and deploy a static site on a VM (nginx, TLS, webroot)
 * [baryovm stack](baryovm_stack.md)	 - Manage docker compose stacks on your VMs
 * [baryovm up](baryovm_up.md)	 - Provision (if new) → install Docker → deploy, in one command
 * [baryovm version](baryovm_version.md)	 - Print the BaryoVM version

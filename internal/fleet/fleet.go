@@ -98,10 +98,19 @@ type Stack struct {
 	rest unknownFields
 }
 
+// Site is a static site `baryovm site add` set up on one of the fleet's VMs. It is recorded here,
+// the way a stack is, so `site deploy` knows the webroot without parsing a root-owned nginx file.
+type Site struct {
+	Domain string `json:"domain"`
+	VM     string `json:"vm"`   // references a VM by name
+	Root   string `json:"root"` // remote webroot the site serves
+}
+
 // Store is the whole fleet.
 type Store struct {
 	VMs    []VM    `json:"vms"`
 	Stacks []Stack `json:"stacks,omitempty"`
+	Sites  []Site  `json:"sites,omitempty"`
 }
 
 func dir() string {
@@ -197,4 +206,23 @@ func (s *Store) RemoveStack(name string) bool {
 		}
 	}
 	return false
+}
+
+// FindSite returns the site with the given domain, or nil.
+func (s *Store) FindSite(domain string) *Site {
+	for i := range s.Sites {
+		if s.Sites[i].Domain == domain {
+			return &s.Sites[i]
+		}
+	}
+	return nil
+}
+
+// UpsertSite adds or replaces a site by domain.
+func (s *Store) UpsertSite(site Site) {
+	if existing := s.FindSite(site.Domain); existing != nil {
+		*existing = site
+		return
+	}
+	s.Sites = append(s.Sites, site)
 }
