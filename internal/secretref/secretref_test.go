@@ -120,7 +120,9 @@ func TestRealCmdRunsWithoutAShellAndHidesStderr(t *testing.T) {
 	if err != nil || got != "$HOME" {
 		t.Fatalf("no shell expected, got %q, %v", got, err)
 	}
-	_, err = r.Resolve("cmd:sh -c 'echo " + secret + " >&2; exit 3'")
+	// The value comes from the environment, so it is in stderr and not in the reference text.
+	t.Setenv("SECRETREF_TEST_STDERR", secret)
+	_, err = r.Resolve(`cmd:sh -c 'echo "$SECRETREF_TEST_STDERR" >&2; exit 3'`)
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("stderr must not reach the error: %v", err)
 	}

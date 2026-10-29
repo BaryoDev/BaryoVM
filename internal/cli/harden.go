@@ -176,7 +176,7 @@ func dialVM(name, command string) (fleet.VM, *sshx.Client, error) {
 	if err := requireLinux(&vm, command); err != nil {
 		return fleet.VM{}, nil, err
 	}
-	c, err := sshx.Dial(vm.Target())
+	c, err := dialChecked(&vm)
 	if err != nil {
 		return vm, nil, err
 	}

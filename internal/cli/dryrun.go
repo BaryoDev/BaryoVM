@@ -6,6 +6,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/backup"
@@ -229,7 +230,12 @@ func dryDeploy(vmName string, spec deploy.Spec) error {
 		p.add(step, c)
 	}
 	if len(masked) > 0 {
-		p.note("environment values are masked as *** in this output")
+		keys := make([]string, 0, len(masked))
+		for k := range masked {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		p.note("environment %s is sent on stdin to an owner-only file; values are not shown", strings.Join(keys, ", "))
 	}
 	emitDryRun("deploy", p)
 	return nil

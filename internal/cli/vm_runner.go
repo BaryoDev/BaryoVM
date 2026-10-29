@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/ghrunner"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -102,7 +101,7 @@ func runRunner(action string, o ghrunner.Options, remove bool) error {
 		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
 		return err
 	}
-	dial := func() (ghrunner.Remote, error) { return sshx.Dial(vm.Target()) }
+	dial := func() (ghrunner.Remote, error) { return dialChecked(&vm) }
 
 	var rep ghrunner.Report
 	verb := "installing a runner on"

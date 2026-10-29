@@ -53,6 +53,15 @@ down.
   line, never written to `fleet.json` or anywhere else by BaryoVM, and is scrubbed from any error
   or JSON output before it leaves the process.
 
+- **Forced-command wrapper**. `baryovm remote serve`, when pinned as an SSH forced command, parses
+  `SSH_ORIGINAL_COMMAND` with no shell and accepts only `baryovm-remote v1 <op> <stack>` for
+  `update`, `backup`, `status` and `logs`. No byte of the request reaches a command line: the
+  stack's directory, services, health URL and database settings come from `/etc/baryovm/remote.json`,
+  and each is quoted with `sshx.Quote`. The wrapper refuses to run if that file or its directory is
+  not owned by root, is writable by group or others, or is a symlink. `exec` and `release` are not
+  offered. On other VMs baryovm echoes a random token first and refuses if a forced command
+  swallowed it.
+
 ## Your responsibilities
 
 - `vm runner` is the one opt-in exception to the agentless design: it leaves GitHub's runner

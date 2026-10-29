@@ -156,7 +156,7 @@ process rather than this CLI (e.g. baryovm vm exec web1 -- df -h).
 				return err
 			}
 
-			c, err := sshx.Dial(vm.Target())
+			c, err := dialChecked(&vm)
 			if err != nil {
 				return err
 			}

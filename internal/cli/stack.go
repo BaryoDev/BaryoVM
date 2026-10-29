@@ -21,6 +21,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 	"github.com/BaryoDev/BaryoVM/internal/release"
 	"github.com/BaryoDev/BaryoVM/internal/releasestate"
+	"github.com/BaryoDev/BaryoVM/internal/remote"
 	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
@@ -339,7 +340,7 @@ type remoteSession interface {
 // dialRelease connects to a VM for a release. A variable for the same reason as runOnVM: so the whole
 // command, in its real order, can run against a fake VM.
 var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
-	c, err := sshx.Dial(vm.Target())
+	c, err := dialChecked(vm)
 	if err != nil {
 		return nil, err
 	}
@@ -893,15 +894,23 @@ func runStackBackup(name, action, step string, fn func(c sshx.Runner, st *fleet.
 	if st == nil {
 		return fmt.Errorf("no stack named %q", name)
 	}
-	if !hasBackupStrategies(st) {
-		return noBackupConfigError(st)
-	}
 	vm := store.Find(st.VM)
 	if vm == nil {
 		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
 	}
 	if err := requireLinux(vm, action); err != nil {
 		return err
+	}
+	// On a forced VM the database settings live in the VM's allowlist, not in this fleet, so the
+	// local check below does not apply and only `stack backup` is a request the VM understands.
+	if vm.Forced() {
+		if action != "stack backup" {
+			return forcedOnly(vm, action)
+		}
+		return forcedOp(vm, name, action, remote.OpBackup)
+	}
+	if !hasBackupStrategies(st) {
+		return noBackupConfigError(st)
 	}
 	var o opOutput
 	err = ui.Step(step, func() error {
@@ -1144,6 +1153,11 @@ func newStackLogsCmd() *cobra.Command {
 		Short: "Show recent logs for the stack",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("service") || cmd.Flags().Changed("tail") {
+				if err := refuseForcedFlags(args[0], "stack logs", "--service and --tail"); err != nil {
+					return err
+				}
+			}
 			return runStackOpDescribed(args[0], "stack logs", fmt.Sprintf("fetching logs for %s", args[0]),
 				func(c sshx.Runner, cs compose.Stack) (opOutput, error) {
 					r, err := compose.ReadLogs(c, cs, svcs, tail)
@@ -1183,7 +1197,7 @@ func bareOutput(out string, err error) (opOutput, error) {
 // app and the MCP server read, and pinning that in a test means running the command with no host to
 // dial. Tests replace this; nothing else should.
 var runOnVM = func(vm *fleet.VM, fn func(c sshx.Runner) (opOutput, error)) (opOutput, error) {
-	c, err := sshx.Dial(vm.Target())
+	c, err := dialChecked(vm)
 	if err != nil {
 		return opOutput{}, err
 	}
@@ -1216,6 +1230,15 @@ func runStackOpDescribed(name, action, step string, fn func(c sshx.Runner, cs co
 	}
 	if err := requireLinux(vm, action); err != nil {
 		return err
+	}
+	if vm.Forced() {
+		switch action {
+		case "stack ps":
+			return forcedOp(vm, name, action, remote.OpStatus)
+		case "stack logs":
+			return forcedOp(vm, name, action, remote.OpLogs)
+		}
+		return forcedOnly(vm, action)
 	}
 
 	var o opOutput

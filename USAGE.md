@@ -176,6 +176,55 @@ runner is not touched.
   page by hand. If that local removal fails too, the command fails and leaves the directory in place
   for another try.
 
+### Behind an SSH forced command (a restricted CI key)
+
+An owner can pin a CI key in `authorized_keys` with `command="..."`. sshd then throws away whatever the client sends and runs the pinned script. baryovm sends shell, so on such a key every command appears to succeed while baryovm runs nothing.
+
+baryovm now checks for this. Before it sends shell to a VM it echoes a random token and refuses unless the token comes back. A swallowed command is an error that names the cause, not a silent success.
+
+To run baryovm over a restricted key, the forced command is baryovm itself:
+
+```sh
+baryovm vm remote install <vm>          # run this with an unrestricted key
+baryovm vm remote install <vm> --public-key "ssh-ed25519 AAAA... ci"
+baryovm vm remote set <vm> forced       # on the machine that holds the restricted key
+```
+
+`vm remote install` uploads a linux binary to `/usr/local/bin/baryovm-remote` (root-owned), writes a template `/etc/baryovm/remote.json` if there is none (an existing file is kept), and prints the `authorized_keys` line to add:
+
+```text
+command="/usr/local/bin/baryovm-remote remote serve",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... ci
+```
+
+It never edits `authorized_keys`. Without `--binary` it uses the running binary when that is a linux build for the VM's architecture, otherwise pass `--binary <path>`. The binary is not downloaded for you.
+
+`/etc/baryovm/remote.json` is the VM's allowlist. The client sends only a stack name; everything else comes from this file:
+
+```json
+{
+  "stacks": {
+    "playground": {
+      "dir": "/opt/playground",
+      "sudo": true,
+      "services": ["api"],
+      "healthUrl": "http://127.0.0.1:8080/health",
+      "dbContainer": "pg",
+      "dbName": "app",
+      "envFile": ".env",
+      "backupDir": "/var/backups/app",
+      "keep": 7,
+      "ops": ["update", "backup", "status", "logs"]
+    }
+  }
+}
+```
+
+A stack with no `ops` allows nothing. `update` needs `healthUrl` (an update that cannot be verified cannot be rolled back) and backs up first when a database is set. `backup` needs `dbContainer` and `dbName`. Unknown keys are an error. The wrapper refuses to run if the file or `/etc/baryovm` is not owned by root, is writable by group or others, or is a symlink.
+
+The request is `baryovm-remote v1 <op> <stack>`, parsed without a shell. `<op>` is `update`, `backup`, `status` or `logs`, and `<stack>` matches `^[a-z0-9][a-z0-9-]{0,62}$` and must be a key in the file. `logs` returns the last 200 lines per service. `exec` and `release` are not available: exec is arbitrary shell and release uploads files.
+
+On a VM marked `forced` (`vm add --remote forced` or `vm remote set <vm> forced`) only `stack update`, `stack backup`, `stack ps` (the status op) and `stack logs` work, and they take no `--service`, `--tail`, `--dry-run` or `--no-backup`. `stack update --auto` is accepted so a scheduled run can use `--notify`; the backup and health settings come from the VM's allowlist. Every other command on that VM is refused before anything is sent. Replies come back as the usual `-o json` envelope.
+
 ## Hardening, and seeing what hits the box
 
 A VM with a public SSH port is found within minutes and guessed at continuously.

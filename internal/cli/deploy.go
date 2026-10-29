@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/BaryoDev/BaryoVM/internal/deploy"
-	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -44,7 +43,7 @@ func newDeployCmd() *cobra.Command {
 
 			var rep deploy.Report
 			err = ui.Step(fmt.Sprintf("deploying %s to %s", image, vm.Name), func() error {
-				c, err := sshx.Dial(vm.Target())
+				c, err := dialChecked(&vm)
 				if err != nil {
 					return err
 				}
