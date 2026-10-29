@@ -44,6 +44,12 @@ down.
   must be relative, with no `~` or `..`, and resolve inside the committed file's own directory after
   symlinks. Anything else is refused with the reference and the rule, never a value. References typed
   on the command line are not confined.
+- **Release manifest paths**. A manifest is a committed file and may come from someone else's branch,
+  so its `localRoot` and every `sync` entry must resolve, after symlinks, inside the manifest's own
+  directory. Otherwise a manifest naming `~` and `.ssh` would copy a private key to the VM. The
+  lexical check runs at load (so `--dry-run` refuses) and the symlink check runs before rsync. The
+  way out is `baryovm stack add --release-root <dir>`, stored in `fleet.json` on the operator's
+  machine. A manifest or project file cannot set it, and `project export` omits it.
 - **Cloud APIs**. Provider calls use the official Go SDKs, which read your
   standard `~/.aws` / `~/.oci` credentials directly. BaryoVM does not store cloud
   keys.

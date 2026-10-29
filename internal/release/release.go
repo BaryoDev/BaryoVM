@@ -40,12 +40,16 @@ type Build struct {
 
 // Manifest is the whole release recipe. Kept in the project (e.g. baryovm.release.json).
 type Manifest struct {
-	Dir        string   `json:"-"`                 // directory of the manifest file, set by Load; confines file: references
-	LocalRoot  string   `json:"localRoot"`         // local source root (~ ok)
-	RemoteRoot string   `json:"remoteRoot"`        // remote dest root (absolute)
-	Sync       []string `json:"sync"`              // paths under localRoot to rsync; a trailing "/" syncs CONTENTS
-	Exclude    []string `json:"exclude,omitempty"` // rsync excludes (bin, obj, node_modules, .next, .git…)
-	Builds     []Build  `json:"builds"`            // images to build after syncing
+	Dir string `json:"-"` // directory of the manifest file, set by Load; confines file: references
+	// ReleaseRoot is the directory the operator allowed this stack's manifests to reach beyond
+	// their own (`stack add --release-root`). Load sets it from the stack's registration and never
+	// from the file, so a committed manifest cannot widen itself (#158).
+	ReleaseRoot string   `json:"-"`
+	LocalRoot   string   `json:"localRoot"`         // local source root (~ ok)
+	RemoteRoot  string   `json:"remoteRoot"`        // remote dest root (absolute)
+	Sync        []string `json:"sync"`              // paths under localRoot to rsync; a trailing "/" syncs CONTENTS
+	Exclude     []string `json:"exclude,omitempty"` // rsync excludes (bin, obj, node_modules, .next, .git, and so on)
+	Builds      []Build  `json:"builds"`            // images to build after syncing
 
 	// TLS, when set, makes `stack release` (and `stack tls`) write the site's nginx vhost and get
 	// its certificate. See TLS.
@@ -145,7 +149,10 @@ type Manifest struct {
 // the manifest enters the program, and every step below reads the one field. That is what went
 // wrong before. The stack's setting reached the compose up and not the image build, and not the
 // hooks, so one missing thread was reported three times from three commands.
-func Load(path string, stackSudo bool) (*Manifest, error) {
+//
+// releaseRoot is the stack's `--release-root`, if it has one. Without it localRoot and every sync
+// entry must stay inside the manifest's own directory (#158).
+func Load(path string, stackSudo bool, releaseRoot ...string) (*Manifest, error) {
 	path = expand(path)
 	b, err := os.ReadFile(path) // #nosec G304 -- the manifest path the operator passed or registered
 	if err != nil {
@@ -162,8 +169,16 @@ func Load(path string, stackSudo bool) (*Manifest, error) {
 		path = abs
 	}
 	m.Dir = filepath.Dir(path)
+	for _, r := range releaseRoot {
+		if r != "" {
+			m.ReleaseRoot = r
+		}
+	}
 	if m.LocalRoot == "" || m.RemoteRoot == "" {
 		return nil, fmt.Errorf("%s: localRoot and remoteRoot are required", path)
+	}
+	if err := m.checkPathsLexical(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	for _, rel := range m.RequireLocal {
 		if strings.TrimSpace(rel) == "" {
@@ -419,7 +434,105 @@ func (m *Manifest) CheckRequireLocal() error {
 	return nil
 }
 
+// allowedRoots are the directories localRoot and the sync entries may resolve inside: the
+// manifest's own directory, and the operator's --release-root when the stack has one.
+func (m *Manifest) allowedRoots() []string {
+	var roots []string
+	if m.Dir != "" {
+		roots = append(roots, m.Dir)
+	}
+	if m.ReleaseRoot != "" {
+		if abs, err := filepath.Abs(expand(m.ReleaseRoot)); err == nil {
+			roots = append(roots, abs)
+		}
+	}
+	return roots
+}
+
+func insideAny(roots []string, p string) bool {
+	for _, r := range roots {
+		if secretref.Inside(r, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// escapeHint is the way out, in the words the operator needs.
+const escapeHint = "keep the manifest in the source tree, or register the stack with `baryovm stack add --release-root <dir>` to let its manifests reach inside <dir>"
+
+// checkPathsLexical refuses a localRoot or sync entry that, as written, lies outside the allowed
+// roots. It touches nothing, so it runs at Load and a --dry-run refuses too. A manifest is a
+// committed file: without this, one from another branch could name `~` and `.ssh` and have the
+// release copy a private key to the VM (#158). Symlinks are CheckConfined's job.
+func (m *Manifest) checkPathsLexical() error {
+	if m.Dir == "" {
+		return nil // a manifest built in code, not read from a file
+	}
+	roots := m.allowedRoots()
+	local, err := filepath.Abs(expand(m.LocalRoot))
+	if err != nil {
+		return fmt.Errorf("localRoot %q: %w", m.LocalRoot, err)
+	}
+	if !insideAny(roots, local) {
+		return fmt.Errorf("localRoot %q is outside the manifest's directory %s: %s", m.LocalRoot, m.Dir, escapeHint)
+	}
+	for _, sub := range m.Sync {
+		if !insideAny(roots, filepath.Join(local, filepath.FromSlash(sub))) {
+			return fmt.Errorf("sync entry %q reaches outside the manifest's directory %s: %s", sub, m.Dir, escapeHint)
+		}
+	}
+	return nil
+}
+
+// CheckConfined is checkPathsLexical with symlinks resolved. It runs before anything is synced:
+// a sync entry that is a link to ~/.ssh passes the lexical check and would copy the directory it
+// points at. A path that does not exist yet is skipped here, since the sync fails on it anyway.
+func (m *Manifest) CheckConfined() error {
+	if m.Dir == "" {
+		return nil
+	}
+	var roots []string
+	for _, r := range m.allowedRoots() {
+		if real, err := filepath.EvalSymlinks(r); err == nil {
+			roots = append(roots, real)
+		}
+	}
+	local, err := filepath.Abs(expand(m.LocalRoot))
+	if err != nil {
+		return fmt.Errorf("localRoot %q: %w", m.LocalRoot, err)
+	}
+	realLocal, err := filepath.EvalSymlinks(local)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("localRoot %q: %w", m.LocalRoot, err)
+	}
+	if !insideAny(roots, realLocal) {
+		return fmt.Errorf("localRoot %q resolves through a symlink to %s, outside the manifest's directory %s: %s", m.LocalRoot, realLocal, m.Dir, escapeHint)
+	}
+	for _, sub := range m.Sync {
+		real, err := filepath.EvalSymlinks(filepath.Join(realLocal, filepath.FromSlash(sub)))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("sync entry %q: %w", sub, err)
+		}
+		if !insideAny(roots, real) {
+			return fmt.Errorf("sync entry %q resolves through a symlink to %s, outside the manifest's directory %s: %s", sub, real, m.Dir, escapeHint)
+		}
+	}
+	return nil
+}
+
 func expand(p string) string {
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, p[2:])

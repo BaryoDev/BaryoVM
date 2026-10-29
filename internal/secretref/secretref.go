@@ -270,11 +270,21 @@ func (r Resolver) confinedPath(ref, loc string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("secret reference %q did not resolve: cannot read the file (%s)", ref, reason(err))
 	}
-	rel, err := filepath.Rel(root, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !Inside(root, target) {
 		return "", rule
 	}
 	return target, nil
+}
+
+// Inside reports whether target is root or lies below it. It compares the two paths as written, so
+// the caller resolves symlinks first when that matters. A release manifest's localRoot and sync
+// paths use it too (#158), so there is one rule for "stays inside the committed file's directory".
+func Inside(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // reason is the cause of err without any text that could hold a value: a path error keeps its

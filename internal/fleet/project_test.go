@@ -156,6 +156,7 @@ func TestProjectValidation(t *testing.T) {
 		"order unknown":    {func(m map[string]any) { m["order"] = []any{"nope"} }, "order[0]"},
 		"order twice":      {func(m map[string]any) { m["order"] = []any{"s", "s"} }, "order[1]"},
 		"no release file":  {func(m map[string]any) { delete(m["stacks"].([]any)[0].(map[string]any), "releaseFile") }, "releaseFile"},
+		"widens itself":    {func(m map[string]any) { m["stacks"].([]any)[0].(map[string]any)["releaseRoot"] = "/" }, "stacks[0].releaseRoot"},
 		"bad runtime":      {func(m map[string]any) { m["stacks"].([]any)[0].(map[string]any)["runtime"] = "rkt" }, "stacks[0].runtime"},
 		"bad managed": {func(m map[string]any) {
 			m["stacks"].([]any)[0].(map[string]any)["managed"] = map[string]any{"provider": "aws", "region": "us-east-1", "database": "db;ls"}

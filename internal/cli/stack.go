@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -60,7 +61,7 @@ func validStackName(name string) error {
 type stackAddInput struct {
 	Name, VM, Path, File                            string
 	DBContainer, DBName, DBUser, EnvFile, BackupDir string
-	ReleaseFile, Recipe                             string
+	ReleaseFile, Recipe, ReleaseRoot                string
 	Keep                                            int
 	Sudo                                            bool
 	Runtime                                         string
@@ -101,6 +102,18 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 			return fleet.Stack{}, "", err
 		}
 	}
+	if in.Changed("release-root") && in.ReleaseRoot != "" {
+		root := in.ReleaseRoot
+		if root == "~" || strings.HasPrefix(root, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				root = filepath.Join(home, strings.TrimPrefix(root, "~"))
+			}
+		}
+		if !filepath.IsAbs(root) {
+			return fleet.Stack{}, "", fmt.Errorf("--release-root %q must be an absolute directory", in.ReleaseRoot)
+		}
+		in.ReleaseRoot = filepath.Clean(root)
+	}
 	if err := backup.ValidateEnvFile(in.EnvFile); err != nil {
 		return fleet.Stack{}, "", err
 	}
@@ -135,6 +148,7 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 		"backup-dir":   func() { st.BackupDir = in.BackupDir },
 		"keep":         func() { st.Keep = in.Keep },
 		"release-file": func() { st.ReleaseFile = in.ReleaseFile },
+		"release-root": func() { st.ReleaseRoot = in.ReleaseRoot },
 		"recipe":       func() { st.RecipeFile = in.Recipe },
 		"sudo":         func() { st.Sudo = in.Sudo },
 		"runtime":      func() { st.Runtime = in.Runtime },
@@ -161,7 +175,7 @@ func registerStack(store *fleet.Store, in stackAddInput) (fleet.Stack, string, e
 
 func newStackAddCmd() *cobra.Command {
 	var vm, path, file string
-	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile, recipePath string
+	var dbContainer, dbName, dbUser, envFile, backupDir, releaseFile, recipePath, releaseRoot string
 	var keep int
 	var useSudo bool
 	var runtimeName string
@@ -178,7 +192,7 @@ func newStackAddCmd() *cobra.Command {
 			st, verb, err := registerStack(store, stackAddInput{
 				Name: args[0], VM: vm, Path: path, File: file,
 				DBContainer: dbContainer, DBName: dbName, DBUser: dbUser, EnvFile: envFile,
-				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, Keep: keep, Sudo: useSudo, Runtime: runtimeName,
+				BackupDir: backupDir, ReleaseFile: releaseFile, Recipe: recipePath, ReleaseRoot: releaseRoot, Keep: keep, Sudo: useSudo, Runtime: runtimeName,
 				Changed: f.Changed,
 			})
 			if err != nil {
@@ -201,6 +215,7 @@ func newStackAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "remote dir for backups (default: ~/<name>-backups)")
 	cmd.Flags().IntVar(&keep, "keep", 0, "backups to retain per kind (default 14)")
 	cmd.Flags().StringVar(&releaseFile, "release-file", "", "local JSON release manifest for `stack release`")
+	cmd.Flags().StringVar(&releaseRoot, "release-root", "", "let this stack's release manifests reach inside <dir> as well as their own directory (absolute; empty clears it). See USAGE.md")
 	cmd.Flags().StringVar(&recipePath, "recipe", "", "recipe file (or a directory holding baryovm.recipe.json) from the app repository; `stack release` then deploys its services")
 	cmd.Flags().BoolVar(&useSudo, "sudo", false,
 		"run this stack's remote commands via sudo -n, for a stack whose .env or deploy root is "+
@@ -407,7 +422,7 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	if manifestPath == "" {
 		return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
 	}
-	m, err := release.Load(manifestPath, st.Sudo)
+	m, err := release.Load(manifestPath, st.Sudo, st.ReleaseRoot)
 	if err != nil {
 		return err
 	}
@@ -455,6 +470,9 @@ func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.R
 	// Local checks first, so a refusal that needs no host never touches the state file.
 	// A static site's artifact is built outside the release. Refuse before anything is
 	// backed up, synced or run if it is not there (#68).
+	if err := m.CheckConfined(); err != nil {
+		return fail(err)
+	}
 	if err := m.CheckRequireLocal(); err != nil {
 		return fail(err)
 	}

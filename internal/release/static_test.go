@@ -7,6 +7,7 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestStaticFieldsDefaultToComposeBehaviour(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "r.json")
 	if err := os.WriteFile(path, []byte(`{
-	  "localRoot": "/tmp/src",
+	  "localRoot": `+strconv.Quote(dir)+`,
 	  "remoteRoot": "/opt/app",
 	  "sync": ["api"],
 	  "builds": []
@@ -60,7 +61,7 @@ func TestStaticManifestRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "r.json")
 	if err := os.WriteFile(path, []byte(`{
-	  "localRoot": "~/repos/site",
+	  "localRoot": `+strconv.Quote(dir)+`,
 	  "remoteRoot": "/var/www/site",
 	  "sync": ["out"],
 	  "builds": [],

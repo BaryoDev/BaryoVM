@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 func tlsManifestFile(t *testing.T, tlsBlock string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "m.json")
-	body := `{"localRoot":"/a","remoteRoot":"/var/www/app","sync":["out/"],"noCompose":true` + tlsBlock + `}`
+	body := `{"localRoot":` + strconv.Quote(filepath.Dir(p)) + `,"remoteRoot":"/var/www/app","sync":["out/"],"noCompose":true` + tlsBlock + `}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

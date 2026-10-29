@@ -151,6 +151,9 @@ func (p *Project) Validate() error {
 		if s.ReleaseFile != "" && (filepath.IsAbs(s.ReleaseFile) || strings.HasPrefix(s.ReleaseFile, "~")) {
 			return fmt.Errorf("%s.releaseFile: %q is not relative to the project file, so it cannot be shared: write it relative to the directory holding the project file", f, s.ReleaseFile)
 		}
+		if s.ReleaseRoot != "" {
+			return fmt.Errorf("%s.releaseRoot: a project file cannot widen where its own manifests may reach: register that on the machine with `baryovm stack add --release-root`", f)
+		}
 		if err := ctr.Valid(s.Runtime); err != nil {
 			return fmt.Errorf("%s.runtime: stack %q: %w", f, s.Name, err)
 		}

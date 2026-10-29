@@ -89,6 +89,12 @@ type Stack struct {
 	// ReleaseFile is a local JSON manifest (sync + build recipe) used by `stack release`.
 	ReleaseFile string `json:"releaseFile,omitempty"`
 
+	// ReleaseRoot is an absolute local directory this stack's release manifests may reach inside,
+	// in addition to the manifest's own directory. Without it a manifest's localRoot and sync
+	// entries must stay in the manifest's directory (#158). It lives here, set once by the
+	// operator, because a committed manifest must not be able to widen its own reach.
+	ReleaseRoot string `json:"releaseRoot,omitempty"`
+
 	// RecipeFile is a local recipe (a file, or a directory holding baryovm.recipe.json) that the
 	// app's repository owns. When set, `stack release` deploys the recipe's services. A stack
 	// without one releases exactly as before.

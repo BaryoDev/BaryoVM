@@ -585,6 +585,27 @@ still be inside that directory. Anything else is refused when the manifest loads
 reports it), naming the reference and the rule. References you type on the command line (`--env-ref`
 and similar) are not confined.
 
+`localRoot` and every `sync` entry are confined the same way. Each must resolve, after symlinks,
+inside the directory holding the manifest. A manifest with `"localRoot": "~"` and `"sync": [".ssh"]`
+is refused when it loads (so `--dry-run` refuses too), naming `localRoot` or the `sync` entry. A
+`sync` entry that is a symlink to somewhere outside is refused before rsync runs. A relative
+`localRoot` is read from the directory you run the command in, as before, so it must land inside the
+manifest's directory too.
+
+If a manifest has to live apart from the source it syncs (a sibling checkout, a manifest kept
+outside the repository), register the stack once with `--release-root`:
+
+```sh
+baryovm stack add site --vm oracle --path /var/www/site \
+  --release-file ~/ops/site.release.json --release-root ~/repos
+```
+
+Manifests for that stack may then reach anywhere inside `~/repos`, as well as inside their own
+directory. The value must be an absolute directory (`~` allowed). It is stored in `fleet.json`, so CI
+needs no flag, and a manifest or project file cannot set it: a project file that names `releaseRoot`
+is refused, and `project export` leaves it out. Re-adding the stack without the flag keeps it;
+`--release-root ""` clears it. The rsync trailing-slash rule and the compose dir rule are unchanged.
+
 ```sh
 baryovm stack add baryoclub --vm oracle --path …/deploy \
   --release-file ~/repos/BaryoClub/baryovm.release.json \

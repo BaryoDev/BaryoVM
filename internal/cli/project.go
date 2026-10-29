@@ -243,6 +243,7 @@ func exportProject(store *fleet.Store, outDir, name, keyEnv string, only []strin
 			return nil, nil, fmt.Errorf("stacks[%d].releaseFile: %s is outside %s, so it cannot be made relative: move the manifest under that directory or write the file higher up with --out", i, st.ReleaseFile, outDir)
 		}
 		st.ReleaseFile = filepath.ToSlash(rel)
+		st.ReleaseRoot = "" // the widening stays on the operator's machine, never in a shared file (#158)
 		p.Stacks = append(p.Stacks, st)
 		p.Order = append(p.Order, st.Name)
 		needed[st.VM] = true

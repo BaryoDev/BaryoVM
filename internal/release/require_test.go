@@ -7,6 +7,7 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestCheckRequireLocalNamesTheMissingPath(t *testing.T) {
 
 func TestLoadRejectsAnEmptyRequireLocalEntry(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "r.json")
-	if err := os.WriteFile(p, []byte(`{"localRoot":"/src","remoteRoot":"/srv/app","requireLocal":["dist"," "]}`), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(`{"localRoot":`+strconv.Quote(filepath.Dir(p))+`,"remoteRoot":"/srv/app","requireLocal":["dist"," "]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(p, false); err == nil || !strings.Contains(err.Error(), "requireLocal") {

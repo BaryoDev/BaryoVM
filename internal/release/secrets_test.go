@@ -7,6 +7,7 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -81,7 +82,7 @@ func TestLoadRefusesBadReferenceAndKeepsLiteralArgs(t *testing.T) {
 	dir := t.TempDir()
 	write := func(args string) string {
 		p := filepath.Join(dir, "r.json")
-		_ = os.WriteFile(p, []byte(`{"localRoot":"/s","remoteRoot":"/srv/app","sync":["api"],
+		_ = os.WriteFile(p, []byte(`{"localRoot":`+strconv.Quote(dir)+`,"remoteRoot":"/srv/app","sync":["api"],
 		"builds":[{"image":"app:1","dockerfile":"Dockerfile","context":"api","args":`+args+`}]}`), 0o600)
 		return p
 	}
