@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# This workflow runs on pull requests, including from forks, and writes nothing back.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The required status check in branch protection is this name. Renaming it here without
+    # changing the protection leaves every pull request waiting on a check that never reports.
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - run: npm run build --if-present
+
+      - run: npm test --if-present

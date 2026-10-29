@@ -1,0 +1,116 @@
+name: Publish to NuGet
+
+# The version comes from the project file, never from a hand-typed input, so the published
+# version is always recorded in git. A tag has to match it.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and pack without publishing"
+        type: boolean
+        default: true
+
+# Deny by default for the whole file. The job below grants itself exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the runner mint the OIDC token nuget.org exchanges for a short-lived API key.
+      # No long-lived secret is involved.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          # Edit to the SDKs the repository builds with.
+          dotnet-version: 10.0.x
+
+      - run: dotnet restore
+
+      - run: dotnet build --configuration Release --no-restore
+
+      # A package must never ship without its tests having run.
+      - name: Test
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack --configuration Release --no-build --output ./nupkgs
+
+      - name: Confirm tag matches the packed version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          COUNT=$(ls ./nupkgs/*.nupkg | wc -l)
+          test "$COUNT" -gt 0 || { echo "::error::dotnet pack produced no package"; exit 1; }
+          for f in ./nupkgs/*.nupkg; do
+            NAME=$(basename "$f" .nupkg)
+            case "$NAME" in
+              *".${TAG#v}") ;;
+              *) echo "::error::$NAME does not end with the version in tag $TAG"; exit 1 ;;
+            esac
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nupkgs
+          path: ./nupkgs/*
+
+      # Requested here rather than earlier because the key expires after an hour and each OIDC
+      # token buys exactly one key.
+      # Runs on dry runs too, so a dry run actually verifies the trusted publishing policy.
+      # Obtaining a key publishes nothing. `baryovm repo verify` reads the result of this step.
+      - name: Exchange OIDC token for a short-lived NuGet key
+        id: nuget_login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Confirm the key was issued
+        env:
+          # Through the environment rather than interpolated into the script, so a value with
+          # shell syntax is compared and not executed.
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::No API key returned. Check the trusted publishing policy on nuget.org." && exit 1
+          fi
+          echo "Trusted publishing OK: short-lived key issued."
+
+      # Publication requires a tag push, and only a tag push.
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
+        env:
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        run: |
+          # --skip-duplicate stays for transport retries, but must not pass silently: a version that
+          # already exists keeps ITS bytes. A version is spent the moment it is accepted, so a
+          # duplicate means the version needs bumping, not retrying.
+          set -o pipefail
+          dotnet nuget push ./nupkgs/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate 2>&1 | tee push.log
+
+          if grep -qiE "already exists|conflict" push.log; then
+            echo "::error::This version is already on nuget.org. Bump the version rather than re-running." && exit 1
+          fi
+
+          grep -q "Your package was pushed" push.log || {
+            echo "::error::push reported no failure and no success." && exit 1
+          }
