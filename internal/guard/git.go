@@ -5,6 +5,7 @@
 package guard
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,13 @@ type Verdict struct {
 	Action   string    `json:"action"`
 	Reason   string    `json:"reason,omitempty"`
 	Findings []Finding `json:"findings,omitempty"`
+	// Rule names the rule that refused, so the audit log can say which one.
+	Rule string `json:"rule,omitempty"`
+	// Target, Audit and Args are for the wrapper: what the command acts on, whether it goes in the
+	// activity log, and the arguments to run (--confirm removed, --yes added after a confirmation).
+	Target string   `json:"-"`
+	Audit  bool     `json:"-"`
+	Args   []string `json:"-"`
 }
 
 func allow(action string) Verdict { return Verdict{Allowed: true, Action: action} }
@@ -60,16 +68,134 @@ func SplitGit(args []string) (globals []string, sub string, rest []string) {
 }
 
 // CheckGit plans the checks for a git command. Only commit and push are checked; every other
-// subcommand is allowed straight through.
+// subcommand is allowed straight through, except an alias, which is expanded and checked as the
+// command it stands for.
 func CheckGit(r Runner, args []string, pol Policy) Verdict {
+	return checkGit(r, args, pol, 0)
+}
+
+// gitBuiltins are git subcommands an alias cannot shadow, so they need no alias lookup.
+var gitBuiltins = map[string]bool{}
+
+func init() {
+	for _, b := range strings.Fields(`add am archive bisect blame branch bundle checkout cherry-pick clean clone commit config
+		describe diff fetch format-patch gc grep init log merge mv notes pull push range-diff rebase reflog remote reset restore
+		revert rm shortlog show sparse-checkout stash status submodule switch tag worktree rev-parse rev-list ls-files ls-remote
+		ls-tree cat-file symbolic-ref show-ref update-ref apply bugreport count-objects fsck help maintenance mergetool prune
+		repack version whatchanged cherry difftool request-pull send-email citool gui`) {
+		gitBuiltins[b] = true
+	}
+}
+
+func checkGit(r Runner, args []string, pol Policy, depth int) Verdict {
 	globals, sub, rest := SplitGit(args)
+	if v, bad := refuseConfigGlobals(globals); bad {
+		return v
+	}
 	switch sub {
 	case "commit":
 		return checkCommit(r, globals, rest)
 	case "push":
 		return checkPush(r, globals, rest, pol)
 	}
-	return allow("git " + sub)
+	if sub == "" || gitBuiltins[sub] || strings.HasPrefix(sub, "-") {
+		return allow("git " + sub)
+	}
+	action := "git " + sub
+	if depth >= 5 {
+		return refuse(action, action+" refused: the alias "+sub+" expands through too many aliases. Run the real command instead of the alias", nil)
+	}
+	out, err := r.Git(globals, "config", "--get", "alias."+sub)
+	if err != nil {
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) && coded.ExitCode() == 1 {
+			return allow(action) // not an alias
+		}
+		return refuse(action, fmt.Sprintf("%s refused: cannot tell whether %s is an alias (%v). Run the real command instead", action, sub, err), nil)
+	}
+	exp := strings.TrimSpace(out)
+	if exp == "" {
+		return allow(action)
+	}
+	if strings.HasPrefix(exp, "!") {
+		if containsStr(pol.AllowShellAliases, sub) {
+			return allow(action)
+		}
+		return refuse(action, fmt.Sprintf("%s refused: %s is a shell alias, and the guard cannot tell what a shell command runs. Run baryovm git commit or push directly, or allow the alias with: git config --add %s %s", action, sub, ShellAliasKey, sub), nil)
+	}
+	next := append(append(append([]string{}, globals...), aliasWords(exp)...), rest...)
+	return checkGit(r, next, pol, depth+1)
+}
+
+// configKeyRefused reports whether a lowercase -c key could change what the guard reads: an alias,
+// a policy key, or an include that loads a file with either.
+func configKeyRefused(k string) bool {
+	for _, p := range []string{"alias.", "baryovm.", "include.", "includeif."} {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// StripConfigGlobals drops the -c settings from the global options, so the guard reads policy,
+// rules and aliases from the config files only. Other globals (-C, --git-dir) stay.
+func StripConfigGlobals(globals []string) []string {
+	var out []string
+	for i := 0; i < len(globals); i++ {
+		g := globals[i]
+		switch {
+		case g == "-c":
+			i++
+		case strings.HasPrefix(g, "-c") && len(g) > 2:
+		default:
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// ConfigEnvSet returns the name of an environment variable that sets git config for a command
+// without a -c flag (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, GIT_CONFIG_VALUE_n), or "".
+func ConfigEnvSet(environ []string) string {
+	for _, e := range environ {
+		name, _, _ := strings.Cut(e, "=")
+		if IsConfigEnv(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// IsConfigEnv reports whether an environment variable name injects git config.
+func IsConfigEnv(name string) bool {
+	return name == "GIT_CONFIG" || name == "GIT_CONFIG_PARAMETERS" || name == "GIT_CONFIG_COUNT" ||
+		strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_")
+}
+
+// refuseConfigGlobals refuses the global options that can define an alias or change config for
+// one run, because the guard cannot see what they do to the command that follows.
+func refuseConfigGlobals(globals []string) (Verdict, bool) {
+	for i := 0; i < len(globals); i++ {
+		g := globals[i]
+		bad := ""
+		switch {
+		case g == "--config-env" || strings.HasPrefix(g, "--config-env="):
+			bad = g
+		case g == "-c" && i+1 < len(globals):
+			i++
+			if k := strings.ToLower(globals[i]); configKeyRefused(k) {
+				bad = "-c " + globals[i]
+			}
+		case strings.HasPrefix(g, "-c") && len(g) > 2 && configKeyRefused(strings.ToLower(g[2:])):
+			bad = g
+		}
+		if bad != "" {
+			name, _, _ := strings.Cut(bad, "=")
+			return refuse("git", fmt.Sprintf("git refused: %s can define an alias, set a baryovm.* policy key or load a config file for one command, which the guard cannot check. Set it with git config instead", name), nil), true
+		}
+	}
+	return Verdict{}, false
 }
 
 var (
@@ -144,6 +270,9 @@ func checkCommit(r Runner, globals, rest []string) Verdict {
 			}
 			if name == "--all" {
 				all = true
+			}
+			if name == "--pathspec-from-file" {
+				return refuse(action, action+" refused: --pathspec-from-file (also -, for stdin) names paths the guard cannot see. Pass the paths as arguments after --", nil)
 			}
 			if !hasVal && commitValueLong[name] && i+1 < len(rest) {
 				i++

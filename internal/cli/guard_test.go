@@ -381,7 +381,8 @@ func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
 	} {
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		err := runGroup(t, args...)
-		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
+		// --config-env is refused earlier, by the alias rule, with its own message.
+		if err == nil || len(*ran) != 0 || (!strings.Contains(err.Error(), "absolute path") && !strings.Contains(err.Error(), "--config-env") && !strings.Contains(err.Error(), "load a config file")) {
 			t.Fatalf("%v: err=%v ran=%v", args, err, *ran)
 		}
 	}
@@ -389,7 +390,8 @@ func TestGitCommitRelativeFileRefusedForEveryRedirect(t *testing.T) {
 		t.Setenv(env, "1")
 		ran := withGuardSeams(t, &fakeGuardRunner{files: files}, 0)
 		err := runGroup(t, "git", "commit", "-F", "m.txt")
-		if err == nil || len(*ran) != 0 || !strings.Contains(err.Error(), "absolute path") {
+		// GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT are refused earlier, by name.
+		if err == nil || len(*ran) != 0 || (!strings.Contains(err.Error(), "absolute path") && !strings.Contains(err.Error(), env)) {
 			t.Fatalf("%s: err=%v ran=%v", env, err, *ran)
 		}
 		if err := os.Unsetenv(env); err != nil {

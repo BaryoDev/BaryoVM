@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/BaryoDev/BaryoVM/internal/activity"
 	"github.com/BaryoDev/BaryoVM/internal/guard"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
 	"github.com/spf13/cobra"
@@ -29,6 +32,7 @@ type osRunner struct{}
 
 func (osRunner) Git(globals []string, args ...string) (string, error) {
 	cmd := exec.Command("git", append(append([]string{}, globals...), args...)...) // #nosec G204 -- fixed git binary; arguments come from the command line the user typed
+	cmd.Env = cleanGitEnv(os.Environ())
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -39,6 +43,18 @@ func (osRunner) Git(globals []string, args ...string) (string, error) {
 		return string(out), err
 	}
 	return string(out), nil
+}
+
+// cleanGitEnv removes the variables that inject git config, so the guard's own reads (policy,
+// rules, aliases) see the config files and nothing a caller put in the environment.
+func cleanGitEnv(environ []string) []string {
+	var out []string
+	for _, e := range environ {
+		if name, _, _ := strings.Cut(e, "="); !guard.IsConfigEnv(name) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // gitFailure carries git's stderr as the message and keeps the underlying error, so the exit code
@@ -74,16 +90,26 @@ func runReal(name string, args []string) (int, error) {
 // broken config file, git missing) is returned: reading the policy wrong must not turn into
 // "everything is allowed".
 func loadPolicy(globals []string) (guard.Policy, error) {
+	globals = guard.StripConfigGlobals(globals)
 	values, err := gitConfigValues(globals, guard.PolicyKey, "BARYOVM_ALLOWED_HOSTS")
 	if err != nil {
 		return guard.Policy{}, err
 	}
-	return guard.ParsePolicy(values), nil
+	pol := guard.ParsePolicy(values)
+	aliases, err := gitConfigValues(globals, guard.ShellAliasKey, "BARYOVM_ALLOWED_SHELL_ALIASES")
+	if err != nil {
+		return guard.Policy{}, err
+	}
+	for _, a := range aliases {
+		pol.AllowShellAliases = append(pol.AllowShellAliases, strings.Fields(a)...)
+	}
+	return pol, nil
 }
 
 // loadRegistryPolicy reads the allowed registries from git config and BARYOVM_ALLOWED_REGISTRIES,
 // with the same rule: unset means no restriction, an unreadable config refuses.
 func loadRegistryPolicy(globals []string) (guard.Policy, error) {
+	globals = guard.StripConfigGlobals(globals)
 	values, err := gitConfigValues(globals, guard.RegistryPolicyKey, "BARYOVM_ALLOWED_REGISTRIES")
 	if err != nil {
 		return guard.Policy{}, err
@@ -123,19 +149,94 @@ func finishGuard(v guard.Verdict, tool string, args []string) error {
 	if os.Getenv("BARYOVM_OUTPUT") == "json" {
 		ui.SetJSON(true)
 	}
+	if v.Args != nil {
+		args = v.Args // --confirm removed, --yes added after a confirmed delete
+	}
 	if !v.Allowed {
+		auditGuard(v, false, "refused by "+ruleOrKeys(v), 0)
 		ui.Emit(ui.Result{OK: false, Action: v.Action, Error: v.Reason, Data: v.Findings})
 		return &exitError{code: 1, msg: v.Reason, silent: true}
 	}
+	start := time.Now()
 	code, err := passthrough(tool, args)
 	if err != nil {
+		auditGuard(v, false, "could not run "+tool, time.Since(start))
 		ui.Emit(ui.Result{OK: false, Action: v.Action, Error: err.Error()})
 		return &exitError{code: 127, msg: err.Error(), silent: true}
 	}
 	if code != 0 {
+		auditGuard(v, false, fmt.Sprintf("%s exited with status %d", tool, code), time.Since(start))
 		return &exitError{code: code, msg: fmt.Sprintf("%s exited with status %d", tool, code), silent: true}
 	}
+	auditGuard(v, true, "", time.Since(start))
 	return nil
+}
+
+func ruleOrKeys(v guard.Verdict) string {
+	if v.Rule != "" {
+		return v.Rule
+	}
+	return "key scan or host check"
+}
+
+// auditGuard records a guarded command in the activity log: the action, its target and the
+// result. The error is a fixed string and the target went through guard.SafeTarget, so no secret
+// value reaches the file.
+func auditGuard(v guard.Verdict, ok bool, errText string, took time.Duration) {
+	if !v.Audit {
+		return
+	}
+	e := activity.Entry{Version: Version, Action: v.Action, Target: v.Target, OK: ok, DurationMS: took.Milliseconds(), Error: errText}
+	if werr := activity.Record(e); werr != nil {
+		fmt.Fprintf(os.Stderr, "! could not write the activity log: %v\n", werr)
+	}
+}
+
+// guardEnv builds what the rules need from the terminal. A prompt is offered only on a terminal
+// and never under -o json; anywhere else a destructive command needs --confirm.
+var guardEnv = func(confirm string) guard.Env {
+	return guard.Env{
+		Interactive: ui.IsTTY() && !ui.JSON(),
+		Confirm:     confirm,
+		Prompt: func(q string) (string, error) {
+			fmt.Fprint(os.Stderr, q)
+			line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+			return strings.TrimSpace(line), err
+		},
+		Show: func(lines []string) {
+			for _, l := range lines {
+				fmt.Fprintln(os.Stderr, l)
+			}
+		},
+		RunGate: func(script string) (int, error) {
+			cmd := exec.Command("sh", "-c", script) // #nosec G204 -- the gate script is named in the repository's own git config
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+			err := cmd.Run()
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				return ee.ExitCode(), nil
+			}
+			return 0, err
+		},
+	}
+}
+
+// loadRules reads the rule settings from git config (one call) and BARYOVM_RULES_OFF. git config
+// exits 1 when no key is set, which means every rule on with its defaults; any other failure is
+// returned so an unreadable config never turns into "no rules".
+func loadRules(globals []string) (guard.Rules, error) {
+	globals = guard.StripConfigGlobals(globals)
+	var lines []string
+	out, err := guardRunner.Git(globals, "config", "--get-regexp", `^baryovm\.`)
+	if err == nil {
+		lines = strings.Split(out, "\n")
+	} else {
+		var coded interface{ ExitCode() int }
+		if !errors.As(err, &coded) || coded.ExitCode() != 1 {
+			return guard.Rules{}, fmt.Errorf("cannot read the baryovm rules from git config (%v): fix the config or run inside a git repository", err)
+		}
+	}
+	return guard.ParseRules(lines, os.Getenv("BARYOVM_RULES_OFF")), nil
 }
 
 func newGuardCmd() *cobra.Command {
@@ -224,7 +325,14 @@ func newGuardCheckCmd() *cobra.Command {
 		Short: "Scan the staged diff for keys",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return hookResult(guard.CheckPreCommit(guardRunner))
+			if v := guard.CheckPreCommit(guardRunner); !v.Allowed {
+				return hookResult(v)
+			}
+			ru, rerr := loadRules(nil)
+			if rerr != nil {
+				return hookResult(policyRefusal("pre-commit", rerr))
+			}
+			return hookResult(guard.CheckPreCommitFiles(guardRunner, ru))
 		},
 	}, &cobra.Command{
 		Use:   "pre-push <remote> <url>",
@@ -246,7 +354,14 @@ func newGuardCheckCmd() *cobra.Command {
 		Short: "Scan the commit message file for keys",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return hookResult(guard.CheckCommitMsg(guardRunner, args[0]))
+			if v := guard.CheckCommitMsg(guardRunner, args[0]); !v.Allowed {
+				return hookResult(v)
+			}
+			ru, rerr := loadRules(nil)
+			if rerr != nil {
+				return hookResult(policyRefusal("commit-msg", rerr))
+			}
+			return hookResult(guard.CheckCommitMsgText(guardRunner, args[0], ru))
 		},
 	})
 	return check

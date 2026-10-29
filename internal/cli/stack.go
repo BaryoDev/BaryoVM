@@ -24,6 +24,7 @@ import (
 	"github.com/BaryoDev/BaryoVM/internal/rollback"
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"github.com/BaryoDev/BaryoVM/internal/ui"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +34,7 @@ func newStackCmd() *cobra.Command {
 		newStackAddCmd(), newStackListCmd(), newStackRemoveCmd(),
 		newStackDeployCmd(), newStackReleaseCmd(), newStackPsCmd(), newStackPullCmd(), newStackLogsCmd(),
 		newStackBackupCmd(), newStackRestoreCmd(), newStackBackupsCmd(),
-		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackTLSCmd(), newStackEnvCmd(),
+		newStackUpdateCmd(), newStackSetUpdateCmd(), newStackSetVerifyCmd(), newStackTLSCmd(), newStackEnvCmd(),
 		newStackRollbackCmd(), newStackDiscoverCmd(),
 	)
 	return cmd
@@ -311,6 +312,376 @@ var dialRelease = func(vm *fleet.VM) (remoteSession, error) {
 	return c, nil
 }
 
+// stackReleaseOpts are the flags of a release. `stack release` and `project release` share one code
+// path, so a safeguard added to the first is in the second.
+type stackReleaseOpts struct {
+	Config                                          string
+	NoBuild, NoBackup, Adopt, Resume, Clear, DryRun bool
+}
+
+// releaseStack releases one stack of store. It does not emit: the result the caller should emit is
+// written to out (left empty when the command stopped before it had anything to report, so the error
+// speaks for itself). `project release` collects these into one document.
+func releaseStack(store *fleet.Store, name string, o stackReleaseOpts, out *ui.Result) error {
+	config, noBuild, noBackup, adopt, resume, clearState, dryRun := o.Config, o.NoBuild, o.NoBackup, o.Adopt, o.Resume, o.Clear, o.DryRun
+	st := store.FindStack(name)
+	if st == nil {
+		return fmt.Errorf("no stack named %q", name)
+	}
+	vm := store.Find(st.VM)
+	if vm == nil {
+		return fmt.Errorf("stack %q references unknown VM %q", name, st.VM)
+	}
+	if err := requireLinux(vm, "stack release"); err != nil {
+		return err
+	}
+	manifestPath := config
+	if manifestPath == "" {
+		manifestPath = st.ReleaseFile
+	}
+	if manifestPath == "" {
+		return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
+	}
+	m, err := release.Load(manifestPath, st.Sudo)
+	if err != nil {
+		return err
+	}
+
+	// rr is the progress record once a release has begun one. Until then a failure has
+	// nothing on the host to report or clean up.
+	var rr *relRun
+	fail := func(e error) error {
+		res := ui.Result{OK: false, Action: "stack release", Error: e.Error()}
+		if rr != nil && rr.st != nil {
+			if len(rr.st.Steps) == 0 {
+				_ = releasestate.Remove(rr.sc, rr.loc)
+			} else {
+				res.Data = stateData(rr.loc, rr.st, name)
+				ui.Notef("release state kept at %s: %s", rr.loc.File, stateHint(name, rr.st))
+			}
+		}
+		*out = res
+		return e
+	}
+
+	if resume && clearState {
+		return fail(fmt.Errorf("--resume and --clear cannot be used together: resume continues the earlier release, clear drops its record"))
+	}
+	loc := releasestate.For(m.RemoteRoot, name, m.Sudo)
+	if clearState {
+		if dryRun {
+			return fail(fmt.Errorf("--dry-run and --clear cannot be used together: clear changes the release record"))
+		}
+		return runReleaseClear(vm, loc, releaseBackupConfig(st, m), name)
+	}
+
+	// Local checks first, so a refusal that needs no host never touches the state file.
+	// A static site's artifact is built outside the release. Refuse before anything is
+	// backed up, synced or run if it is not there (#68).
+	if err := m.CheckRequireLocal(); err != nil {
+		return fail(err)
+	}
+
+	// The compose dir holds a root-owned .env. Refuse before anything is transferred, rather
+	// than documenting the exclusion and hoping: rsync --delete removes whatever is on the
+	// VM and not in the local source, and a database password is exactly such a file.
+	if err := m.CheckComposeDir(st.Dir); err != nil {
+		return fail(err)
+	}
+
+	// A spec that cannot be built (a mistyped key, a path that is not a route) is refused now,
+	// not after the sync landed.
+	if _, err := releaseVerification(m, st); err != nil {
+		return fail(err)
+	}
+
+	// A dry run stops here: it has read only local files and fleet.json, and opens no
+	// connection, takes no lock and writes no record.
+	if dryRun {
+		emitDryRun("stack release", planRelease(name, st, vm, m, releaseDryOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt, Resume: resume}))
+		return nil
+	}
+
+	// The progress record. It is written under the host lock before the first step that
+	// changes anything, so two releases cannot both read "nothing in progress" (#136).
+	sc, err := dialRelease(vm)
+	if err != nil {
+		return fail(err)
+	}
+	defer sc.Close()
+	commit := gitHead(m.LocalPath())
+	rr = &relRun{sc: sc, loc: loc}
+	if resume {
+		prev, err := releasestate.Open(sc, loc)
+		if err != nil {
+			rr = nil
+			return fail(err)
+		}
+		if prev == nil {
+			rr = nil
+			return fail(fmt.Errorf("nothing to resume: no release record at %s", loc.File))
+		}
+		// Resuming while the first release is still running would start a second one over the
+		// same build and containers. The record's last write is the only sign of life we have.
+		if prev.Active(time.Now()) {
+			rr = nil
+			return fail(fmt.Errorf("the earlier release of %s wrote its record at %s and may still be running: wait about %d minutes with no new write, or drop the record with `baryovm stack release %s --clear` if you know it is dead",
+				name, prev.Updated, int(releasestate.ActiveWindow/time.Minute), name))
+		}
+		if _, bad := prev.Unsafe(); bad {
+			rr = nil
+			return refuseState(loc, prev, name)
+		}
+		if commit != "" && prev.Commit != "" && commit != prev.Commit {
+			rr = nil
+			return fail(fmt.Errorf("the earlier release was at commit %s and the source is now at %s: check out the earlier commit to resume, or drop the record with `baryovm stack release %s --clear`",
+				prev.Commit, commit, name))
+		}
+		rr.st, rr.resume = prev, true
+		ui.Notef("resuming the earlier release of %s", name)
+	} else {
+		cur, existing, err := releasestate.Begin(sc, loc, releasestate.New(name, commit))
+		if err != nil {
+			rr = nil
+			return fail(err)
+		}
+		if existing != nil {
+			rr = nil
+			return refuseState(loc, existing, name)
+		}
+		rr.st = cur
+	}
+
+	// Safety first: back up before releasing (unless opted out / no DB configured).
+	if !noBackup && st.DBContainer != "" && st.DBName != "" {
+		// A first release has no database container yet, so there is nothing to dump. That is
+		// skipped with one line. A container that exists and fails to dump still stops the
+		// release, and so does a probe that cannot tell (it falls through to the backup).
+		bcfg := releaseBackupConfig(st, m)
+		if err := rr.step("backup", func() error {
+			skip := false
+			if err := ui.Step("check database container", func() error {
+				c, err := dialRelease(vm)
+				if err != nil {
+					return err
+				}
+				defer c.Close()
+				if ok, e := backup.ContainerExists(c, bcfg); e == nil && !ok {
+					skip = true
+				}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("pre-release backup failed: %w", err)
+			}
+			if skip {
+				ui.Notef("no database container named %s yet, skipping the pre-release backup", st.DBContainer)
+				return nil
+			}
+			if err := ui.Step("backup", func() error {
+				c, err := dialRelease(vm)
+				if err != nil {
+					return err
+				}
+				defer c.Close()
+				out, err := backup.Backup(c, bcfg)
+				if err == nil {
+					// Recorded at once, so a failure further on names the backup to restore.
+					rr.st.Backup, rr.st.BackupFile = bcfg.DirNote(), releasestate.ParseBackupFile(out)
+					_ = releasestate.Write(rr.sc, rr.loc, rr.st)
+				}
+				return err
+			}); err != nil {
+				return fmt.Errorf("pre-release backup failed: %s", backupCause(err, st.DBContainer))
+			}
+			return nil
+		}); err != nil {
+			return fail(err)
+		}
+	}
+
+	// 1. Sync each source subdir. The compose dir (with .env) is never synced. rsync when the
+	// operator's machine has it, otherwise a tar stream over the SSH session.
+	transport := release.PickTransport(lookPath)
+	ui.Notef("sync transport: %s", transport)
+	for _, sub := range m.Sync {
+		sub := sub
+		if err := rr.step("sync:"+sub, func() error {
+			return ui.Step("sync "+sub, func() error {
+				return syncSub(m, vm, sub, transport)
+			})
+		}); err != nil {
+			return fail(err)
+		}
+	}
+
+	// 2 + 3: build images on the VM, then compose up.
+	c := sc
+
+	// A container_name held by a container this project does not own, typically one started
+	// by hand with docker run, fails compose up at the very end. It is checked here, after
+	// the sync, because compose reads the compose file from the VM and on a first release
+	// that file is not there until the sync has put it there (#150). It still comes before
+	// the image builds and compose up, which are the expensive and disruptive steps.
+	if !m.NoCompose {
+		if err := rr.step("check-names", func() error {
+			return ui.Step("check container names", func() error {
+				return checkContainerNames(c, releaseComposeStack(st, m), adopt)
+			})
+		}); err != nil {
+			return fail(err)
+		}
+		// The images the stack runs now, saved next to the backups for `stack rollback`
+		// (#37). After the name check because that is the first `compose config`. Not on
+		// a resume past deploy, where "now" is already the new release.
+		if !rr.st.Done("deploy") {
+			recordRollback(c, st, m, name)
+		}
+	}
+
+	if !noBuild {
+		for _, b := range m.Builds {
+			b := b
+			if err := rr.step("build:"+b.Image, func() error {
+				return ui.Step("build "+b.Image, func() error {
+					out, e := c.Run(m.BuildCmd(b))
+					if e != nil {
+						return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+					}
+					return nil
+				})
+			}); err != nil {
+				return fail(err)
+			}
+		}
+	}
+
+	// Guards run before compose up, not after. A check that runs afterwards can only report
+	// that the stack is now running something it should have refused, which is a post-mortem
+	// wearing a gate's clothes.
+	preCmds := m.PreDeployCmds()
+	for i, cmdStr := range preCmds {
+		cmdStr := cmdStr
+		label := fmt.Sprintf("pre %d/%d", i+1, len(preCmds))
+		if err := rr.step(fmt.Sprintf("pre:%d", i+1), func() error {
+			return ui.Step(label, func() error {
+				out, e := c.Run(cmdStr)
+				if e != nil {
+					return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+				}
+				return nil
+			})
+		}); err != nil {
+			return fail(err)
+		}
+	}
+
+	// A static site has no compose file: it is files the host's own web server serves.
+	// Running compose up there fails after the sync has already landed, which is the
+	// worst place to fail, so the manifest says up front that there is nothing to bring up.
+	if !m.NoCompose {
+		if err := rr.step("deploy", func() error {
+			return ui.Step("deploy", func() error {
+				_, e := compose.Up(c, releaseComposeStack(st, m), compose.UpOptions{})
+				return e
+			})
+		}); err != nil {
+			return fail(err)
+		}
+	}
+
+	// The vhost and certificate, when the manifest declares them. After compose up so the
+	// upstream exists, before postDeploy so a hook that reloads nginx sees the new vhost.
+	if m.TLS != nil {
+		if err := rr.step("tls", func() error { return m.ApplyTLS(c, tlsOptions(adopt), ui.Step) }); err != nil {
+			return fail(err)
+		}
+	}
+
+	// Whatever has to happen on the VM once the files are in place: restore an SELinux
+	// context, reload nginx, warm a cache. Ordered, and the first failure stops the release
+	// rather than reporting success over a half-applied deploy.
+	postCmds := m.PostDeployCmds()
+	for i, cmdStr := range postCmds {
+		cmdStr := cmdStr
+		label := fmt.Sprintf("post %d/%d", i+1, len(postCmds))
+		if err := rr.step(fmt.Sprintf("post:%d", i+1), func() error {
+			return ui.Step(label, func() error {
+				out, e := c.Run(cmdStr)
+				if e != nil {
+					return fmt.Errorf("%w: %s", e, lastLines(out, 8))
+				}
+				return nil
+			})
+		}); err != nil {
+			return fail(err)
+		}
+	}
+
+	// Ask the running site whether the deploy worked, rather than inferring it from the
+	// fact that nothing errored on the way here. A sync can land, compose can come up, and
+	// the site can still serve the wrong thing: that is how the umbraco-pwa demo served
+	// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
+	// every listing pointed at.
+	m.ReleaseTag = commit
+	if m.ReleaseTag == "" {
+		m.ReleaseTag = time.Now().UTC().Format("20060102T150405Z")
+	}
+	plan, err := releaseVerification(m, st)
+	if err != nil {
+		return fail(err)
+	}
+	attemptsUsed := 0
+	if len(plan.Commands) == 0 {
+		ui.Warnf("nothing to verify: set verify in the manifest, a verify spec or healthUrl on the stack")
+	} else {
+		if err := rr.step("verify", func() error {
+			return ui.Step("verify", func() error {
+				out := verify.Retry(plan.Budget(), releaseClock, func() (bool, string) {
+					return verify.Pass(c, plan.Steps)
+				})
+				attemptsUsed = out.Attempts
+				// A timeout is a failure with its own words, never a quiet end to the loop.
+				return out.Err()
+			})
+		}); err != nil {
+			return fail(fmt.Errorf("released but failed verification, the stack may need attention: %w", err))
+		}
+	}
+
+	// Finished: drop the progress record and note which commit is deployed.
+	if err := releasestate.Remove(sc, loc); err != nil {
+		ui.Warnf("release done but the record at %s could not be removed, clear it with `baryovm stack release %s --clear`: %v", loc.File, name, err)
+	}
+	// A finished release is a good state again, so the next one may record over it. Not only
+	// for compose manifests: a clear protects whatever the manifest, so the finish lifts it the same way.
+	if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
+		ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
+	}
+	if commit != "" {
+		if err := releasestate.RecordDeployed(sc, loc, name, commit); err != nil {
+			ui.Warnf("could not record the deployed commit: %v", err)
+		}
+	}
+
+	// Say which check ran, so a release that verified nothing cannot read as one that did.
+	*out = ui.Result{OK: true, Action: "stack release", Message: name + " released",
+		Data: map[string]any{
+			"transport": string(transport),
+			"commit":    commit,
+			"verify": map[string]any{
+				"source":   plan.Source,
+				"checks":   len(plan.Commands),
+				"attempts": attemptsUsed,
+			},
+		}}
+	if len(plan.Commands) > 0 {
+		ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", name,
+			verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)
+	}
+	ui.Successf("%s: release done", name)
+	return nil
+}
+
 func newStackReleaseCmd() *cobra.Command {
 	var config string
 	var noBuild, noBackup, adopt, resume, clearState, dryRun bool
@@ -325,367 +696,13 @@ func newStackReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			st := store.FindStack(args[0])
-			if st == nil {
-				return fmt.Errorf("no stack named %q", args[0])
-			}
-			vm := store.Find(st.VM)
-			if vm == nil {
-				return fmt.Errorf("stack %q references unknown VM %q", args[0], st.VM)
-			}
-			if err := requireLinux(vm, "stack release"); err != nil {
-				return err
-			}
-			manifestPath := config
-			if manifestPath == "" {
-				manifestPath = st.ReleaseFile
-			}
-			if manifestPath == "" {
-				return fmt.Errorf("no release manifest: pass --config <file> or set --release-file on `stack add`")
-			}
-			m, err := release.Load(manifestPath, st.Sudo)
-			if err != nil {
-				return err
-			}
-
-			// rr is the progress record once a release has begun one. Until then a failure has
-			// nothing on the host to report or clean up.
-			var rr *relRun
-			fail := func(e error) error {
-				res := ui.Result{OK: false, Action: "stack release", Error: e.Error()}
-				if rr != nil && rr.st != nil {
-					if len(rr.st.Steps) == 0 {
-						_ = releasestate.Remove(rr.sc, rr.loc)
-					} else {
-						res.Data = stateData(rr.loc, rr.st, args[0])
-						ui.Notef("release state kept at %s: %s", rr.loc.File, stateHint(args[0], rr.st))
-					}
-				}
+			var res ui.Result
+			err = releaseStack(store, args[0], stackReleaseOpts{Config: config, NoBuild: noBuild, NoBackup: noBackup,
+				Adopt: adopt, Resume: resume, Clear: clearState, DryRun: dryRun}, &res)
+			if res.Action != "" {
 				ui.Emit(res)
-				return e
 			}
-
-			if resume && clearState {
-				return fail(fmt.Errorf("--resume and --clear cannot be used together: resume continues the earlier release, clear drops its record"))
-			}
-			loc := releasestate.For(m.RemoteRoot, args[0], m.Sudo)
-			if clearState {
-				if dryRun {
-					return fail(fmt.Errorf("--dry-run and --clear cannot be used together: clear changes the release record"))
-				}
-				return runReleaseClear(vm, loc, releaseBackupConfig(st, m), args[0])
-			}
-
-			// Local checks first, so a refusal that needs no host never touches the state file.
-			// A static site's artifact is built outside the release. Refuse before anything is
-			// backed up, synced or run if it is not there (#68).
-			if err := m.CheckRequireLocal(); err != nil {
-				return fail(err)
-			}
-
-			// The compose dir holds a root-owned .env. Refuse before anything is transferred, rather
-			// than documenting the exclusion and hoping: rsync --delete removes whatever is on the
-			// VM and not in the local source, and a database password is exactly such a file.
-			if err := m.CheckComposeDir(st.Dir); err != nil {
-				return fail(err)
-			}
-
-			// A dry run stops here: it has read only local files and fleet.json, and opens no
-			// connection, takes no lock and writes no record.
-			if dryRun {
-				emitDryRun("stack release", planRelease(args[0], st, vm, m, releaseDryOpts{NoBuild: noBuild, NoBackup: noBackup, Adopt: adopt, Resume: resume}))
-				return nil
-			}
-
-			// The progress record. It is written under the host lock before the first step that
-			// changes anything, so two releases cannot both read "nothing in progress" (#136).
-			sc, err := dialRelease(vm)
-			if err != nil {
-				return fail(err)
-			}
-			defer sc.Close()
-			commit := gitHead(m.LocalPath())
-			rr = &relRun{sc: sc, loc: loc}
-			if resume {
-				prev, err := releasestate.Open(sc, loc)
-				if err != nil {
-					rr = nil
-					return fail(err)
-				}
-				if prev == nil {
-					rr = nil
-					return fail(fmt.Errorf("nothing to resume: no release record at %s", loc.File))
-				}
-				// Resuming while the first release is still running would start a second one over the
-				// same build and containers. The record's last write is the only sign of life we have.
-				if prev.Active(time.Now()) {
-					rr = nil
-					return fail(fmt.Errorf("the earlier release of %s wrote its record at %s and may still be running: wait about %d minutes with no new write, or drop the record with `baryovm stack release %s --clear` if you know it is dead",
-						args[0], prev.Updated, int(releasestate.ActiveWindow/time.Minute), args[0]))
-				}
-				if _, bad := prev.Unsafe(); bad {
-					rr = nil
-					return refuseState(loc, prev, args[0])
-				}
-				if commit != "" && prev.Commit != "" && commit != prev.Commit {
-					rr = nil
-					return fail(fmt.Errorf("the earlier release was at commit %s and the source is now at %s: check out the earlier commit to resume, or drop the record with `baryovm stack release %s --clear`",
-						prev.Commit, commit, args[0]))
-				}
-				rr.st, rr.resume = prev, true
-				ui.Notef("resuming the earlier release of %s", args[0])
-			} else {
-				cur, existing, err := releasestate.Begin(sc, loc, releasestate.New(args[0], commit))
-				if err != nil {
-					rr = nil
-					return fail(err)
-				}
-				if existing != nil {
-					rr = nil
-					return refuseState(loc, existing, args[0])
-				}
-				rr.st = cur
-			}
-
-			// Safety first: back up before releasing (unless opted out / no DB configured).
-			if !noBackup && st.DBContainer != "" && st.DBName != "" {
-				// A first release has no database container yet, so there is nothing to dump. That is
-				// skipped with one line. A container that exists and fails to dump still stops the
-				// release, and so does a probe that cannot tell (it falls through to the backup).
-				bcfg := releaseBackupConfig(st, m)
-				if err := rr.step("backup", func() error {
-					skip := false
-					if err := ui.Step("check database container", func() error {
-						c, err := dialRelease(vm)
-						if err != nil {
-							return err
-						}
-						defer c.Close()
-						if ok, e := backup.ContainerExists(c, bcfg); e == nil && !ok {
-							skip = true
-						}
-						return nil
-					}); err != nil {
-						return fmt.Errorf("pre-release backup failed: %w", err)
-					}
-					if skip {
-						ui.Notef("no database container named %s yet, skipping the pre-release backup", st.DBContainer)
-						return nil
-					}
-					if err := ui.Step("backup", func() error {
-						c, err := dialRelease(vm)
-						if err != nil {
-							return err
-						}
-						defer c.Close()
-						out, err := backup.Backup(c, bcfg)
-						if err == nil {
-							// Recorded at once, so a failure further on names the backup to restore.
-							rr.st.Backup, rr.st.BackupFile = bcfg.DirNote(), releasestate.ParseBackupFile(out)
-							_ = releasestate.Write(rr.sc, rr.loc, rr.st)
-						}
-						return err
-					}); err != nil {
-						return fmt.Errorf("pre-release backup failed: %s", backupCause(err, st.DBContainer))
-					}
-					return nil
-				}); err != nil {
-					return fail(err)
-				}
-			}
-
-			// 1. Sync each source subdir. The compose dir (with .env) is never synced. rsync when the
-			// operator's machine has it, otherwise a tar stream over the SSH session.
-			transport := release.PickTransport(lookPath)
-			ui.Notef("sync transport: %s", transport)
-			for _, sub := range m.Sync {
-				sub := sub
-				if err := rr.step("sync:"+sub, func() error {
-					return ui.Step("sync "+sub, func() error {
-						return syncSub(m, vm, sub, transport)
-					})
-				}); err != nil {
-					return fail(err)
-				}
-			}
-
-			// 2 + 3: build images on the VM, then compose up.
-			c := sc
-
-			// A container_name held by a container this project does not own, typically one started
-			// by hand with docker run, fails compose up at the very end. It is checked here, after
-			// the sync, because compose reads the compose file from the VM and on a first release
-			// that file is not there until the sync has put it there (#150). It still comes before
-			// the image builds and compose up, which are the expensive and disruptive steps.
-			if !m.NoCompose {
-				if err := rr.step("check-names", func() error {
-					return ui.Step("check container names", func() error {
-						return checkContainerNames(c, releaseComposeStack(st, m), adopt)
-					})
-				}); err != nil {
-					return fail(err)
-				}
-				// The images the stack runs now, saved next to the backups for `stack rollback`
-				// (#37). After the name check because that is the first `compose config`. Not on
-				// a resume past deploy, where "now" is already the new release.
-				if !rr.st.Done("deploy") {
-					recordRollback(c, st, m, args[0])
-				}
-			}
-
-			if !noBuild {
-				for _, b := range m.Builds {
-					b := b
-					if err := rr.step("build:"+b.Image, func() error {
-						return ui.Step("build "+b.Image, func() error {
-							out, e := c.Run(m.BuildCmd(b))
-							if e != nil {
-								return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-							}
-							return nil
-						})
-					}); err != nil {
-						return fail(err)
-					}
-				}
-			}
-
-			// Guards run before compose up, not after. A check that runs afterwards can only report
-			// that the stack is now running something it should have refused, which is a post-mortem
-			// wearing a gate's clothes.
-			preCmds := m.PreDeployCmds()
-			for i, cmdStr := range preCmds {
-				cmdStr := cmdStr
-				label := fmt.Sprintf("pre %d/%d", i+1, len(preCmds))
-				if err := rr.step(fmt.Sprintf("pre:%d", i+1), func() error {
-					return ui.Step(label, func() error {
-						out, e := c.Run(cmdStr)
-						if e != nil {
-							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-						}
-						return nil
-					})
-				}); err != nil {
-					return fail(err)
-				}
-			}
-
-			// A static site has no compose file: it is files the host's own web server serves.
-			// Running compose up there fails after the sync has already landed, which is the
-			// worst place to fail, so the manifest says up front that there is nothing to bring up.
-			if !m.NoCompose {
-				if err := rr.step("deploy", func() error {
-					return ui.Step("deploy", func() error {
-						_, e := compose.Up(c, releaseComposeStack(st, m), compose.UpOptions{})
-						return e
-					})
-				}); err != nil {
-					return fail(err)
-				}
-			}
-
-			// The vhost and certificate, when the manifest declares them. After compose up so the
-			// upstream exists, before postDeploy so a hook that reloads nginx sees the new vhost.
-			if m.TLS != nil {
-				if err := rr.step("tls", func() error { return m.ApplyTLS(c, tlsOptions(adopt), ui.Step) }); err != nil {
-					return fail(err)
-				}
-			}
-
-			// Whatever has to happen on the VM once the files are in place: restore an SELinux
-			// context, reload nginx, warm a cache. Ordered, and the first failure stops the release
-			// rather than reporting success over a half-applied deploy.
-			postCmds := m.PostDeployCmds()
-			for i, cmdStr := range postCmds {
-				cmdStr := cmdStr
-				label := fmt.Sprintf("post %d/%d", i+1, len(postCmds))
-				if err := rr.step(fmt.Sprintf("post:%d", i+1), func() error {
-					return ui.Step(label, func() error {
-						out, e := c.Run(cmdStr)
-						if e != nil {
-							return fmt.Errorf("%w: %s", e, lastLines(out, 8))
-						}
-						return nil
-					})
-				}); err != nil {
-					return fail(err)
-				}
-			}
-
-			// Ask the running site whether the deploy worked, rather than inferring it from the
-			// fact that nothing errored on the way here. A sync can land, compose can come up, and
-			// the site can still serve the wrong thing: that is how the umbraco-pwa demo served
-			// Umbraco's install screen through two releases, a perfectly valid 200 at the exact URL
-			// every listing pointed at.
-			m.ReleaseTag = commit
-			if m.ReleaseTag == "" {
-				m.ReleaseTag = time.Now().UTC().Format("20060102T150405Z")
-			}
-			plan := m.Verification(st.HealthURL)
-			attemptsUsed := 0
-			if len(plan.Commands) == 0 {
-				ui.Warnf("nothing to verify: set verify in the manifest or healthUrl on the stack")
-			} else {
-				if err := rr.step("verify", func() error {
-					return ui.Step("verify", func() error {
-						var last error
-						for attempt := 1; attempt <= plan.Attempts; attempt++ {
-							attemptsUsed = attempt
-							last = nil
-							for _, cmdStr := range plan.Commands {
-								out, e := c.Run(cmdStr)
-								if e != nil {
-									last = fmt.Errorf("%w: %s", e, lastLines(out, 8))
-									break
-								}
-							}
-							if last == nil {
-								return nil
-							}
-							// A service that restarts is normal; one that never answers is not.
-							if attempt < plan.Attempts {
-								time.Sleep(plan.Delay)
-							}
-						}
-						return last
-					})
-				}); err != nil {
-					return fail(fmt.Errorf("released but failed verification, the stack may need attention: %w", err))
-				}
-			}
-
-			// Finished: drop the progress record and note which commit is deployed.
-			if err := releasestate.Remove(sc, loc); err != nil {
-				ui.Warnf("release done but the record at %s could not be removed, clear it with `baryovm stack release %s --clear`: %v", loc.File, args[0], err)
-			}
-			// A finished release is a good state again, so the next one may record over it. Not only
-			// for compose manifests: a clear protects whatever the manifest, so the finish lifts it the same way.
-			if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
-				ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
-			}
-			if commit != "" {
-				if err := releasestate.RecordDeployed(sc, loc, args[0], commit); err != nil {
-					ui.Warnf("could not record the deployed commit: %v", err)
-				}
-			}
-
-			// Say which check ran, so a release that verified nothing cannot read as one that did.
-			ui.Emit(ui.Result{OK: true, Action: "stack release", Message: args[0] + " released",
-				Data: map[string]any{
-					"transport": string(transport),
-					"commit":    commit,
-					"verify": map[string]any{
-						"source":   plan.Source,
-						"checks":   len(plan.Commands),
-						"attempts": attemptsUsed,
-					},
-				}})
-			if len(plan.Commands) > 0 {
-				ui.Successf("%s: verified by %s, %d check(s) passed on attempt %d", args[0],
-					verifyLabel(plan.Source), len(plan.Commands), attemptsUsed)
-			}
-			ui.Successf("%s: release done", args[0])
-			return nil
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&config, "config", "", "release manifest path (overrides the stack's --release-file)")
@@ -698,6 +715,16 @@ func newStackReleaseCmd() *cobra.Command {
 	return cmd
 }
 
+// releaseClock is the retry clock of the release verify. A test replaces it so a failing check does
+// not sleep through its delays.
+var releaseClock = verify.RealClock()
+
+// releaseVerification is the verify plan of a release: the manifest's verify commands, else the
+// stack's verify spec, else its healthUrl. Run builds the same spec through the same package.
+func releaseVerification(m *release.Manifest, st *fleet.Stack) (release.VerifyPlan, error) {
+	return m.VerificationFor(st.Verify, verify.Context{HealthURL: st.HealthURL, Dir: st.Dir, Sudo: st.Sudo})
+}
+
 // verifyLabel names a verify plan's source for the success line.
 func verifyLabel(source string) string {
 	switch source {
@@ -705,6 +732,8 @@ func verifyLabel(source string) string {
 		return "the manifest verify list"
 	case "healthUrl":
 		return "the stack healthUrl"
+	case "verify":
+		return "the stack verify spec"
 	case "verifyVisual":
 		return "the manifest verifyVisual block"
 	}

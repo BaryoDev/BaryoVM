@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
 // VM is a registered machine BaryoVM can drive over SSH.
@@ -25,6 +26,11 @@ type VM struct {
 	KeyPath  string `json:"keyPath"`
 	Provider string `json:"provider"`     // "ssh" (registered) | "lightsail" | "oci"
 	ID       string `json:"id,omitempty"` // cloud instance id, when provisioned
+
+	// HostKey pins the machine's public host key ("ssh-ed25519 AAAA...") in a project file, so a
+	// runner with no memory checks a key it was given instead of learning one. It is public, so it
+	// may be committed. `vm add` does not set it; a hand-registered fleet keeps keys in known_hosts.
+	HostKey string `json:"hostKey,omitempty"`
 
 	// OS is detected once, when the VM is added. Empty (an entry written before this field) means
 	// linux: use HostOS rather than reading it directly.
@@ -82,6 +88,13 @@ type Stack struct {
 	// back either, and --auto refuses to run: an unattended update that cannot tell success from a
 	// crash loop is worse than no update at all.
 	HealthURL string `json:"healthUrl,omitempty"`
+
+	// Verify is the one spec of what "the deploy worked" means for this stack: checks (a route with
+	// assertions on what it serves, or a command) plus how long to keep trying. `stack release`,
+	// `stack update` and `stack rollback` all read it. Without one, HealthURL is the single check, so
+	// a stack that only has a healthUrl verifies as it always did. A release manifest's own `verify`
+	// commands still win for a release.
+	Verify *verify.Spec `json:"verify,omitempty"`
 
 	// NoDatabase records that this stack has no database, as a static site does. An unattended
 	// update otherwise refuses a stack with no dbContainer or dbName, since recreating containers

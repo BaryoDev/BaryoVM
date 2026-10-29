@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
 // A stack's settings only matter if they survive being written and read back. `--sudo` was bound to
@@ -31,6 +33,10 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 		HealthURL:      "http://127.0.0.1:8080/health",
 		NoDatabase:     true,
 		UpdateServices: []string{"app", "admin"},
+		Verify: &verify.Spec{
+			Checks:   []verify.Check{{Path: "/", Contains: []string{"marker"}}, {Command: "true"}},
+			Attempts: 7,
+		},
 	}
 
 	s := &Store{}
@@ -71,6 +77,10 @@ func TestStackSettingsSurviveARoundTrip(t *testing.T) {
 	}
 	if got.File != want.File {
 		t.Errorf("File: got %q", got.File)
+	}
+	if got.Verify == nil || got.Verify.Attempts != 7 || len(got.Verify.Checks) != 2 ||
+		got.Verify.Checks[0].Contains[0] != "marker" || got.Verify.Checks[1].Command != "true" {
+		t.Errorf("Verify was lost or changed: %+v", got.Verify)
 	}
 }
 

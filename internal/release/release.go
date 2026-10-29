@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BaryoDev/BaryoVM/internal/sshx"
+	"github.com/BaryoDev/BaryoVM/internal/verify"
 )
 
 // Build describes one image to build on the VM.
@@ -296,14 +297,30 @@ func sortedKeys(m map[string]string) []string {
 // VerifyPlan is what a release should run to satisfy itself that the deploy worked, and how long to
 // keep trying.
 type VerifyPlan struct {
-	// Source says where the commands came from: "manifest", "healthUrl" or "none".
+	// Source says where the commands came from: "manifest", "verify" (the stack's spec),
+	// "healthUrl" or "none".
 	Source string
 	// Commands run on the VM, in order. Empty means nothing was configured.
 	Commands []string
+	// Steps are Commands with the verdict on each one's output. A manifest command passes on exit
+	// zero; a stack spec's URL check also asserts on what it served.
+	Steps []verify.Step
 	// Attempts is how many times the whole plan may be retried before the release is failed.
 	Attempts int
 	// Delay is how long to wait between attempts.
 	Delay time.Duration
+	// Timeout is the total time across attempts. A release that runs out is failed, never passed.
+	Timeout time.Duration
+}
+
+// Budget is the plan's retry limits as the shared runner takes them.
+func (p VerifyPlan) Budget() verify.Budget {
+	return verify.Budget{Attempts: p.Attempts, Delay: p.Delay, Timeout: p.Timeout}
+}
+
+func (p *VerifyPlan) addExit(label, cmd string) {
+	p.Steps = append(p.Steps, verify.ExitStep(label, cmd))
+	p.Commands = append(p.Commands, cmd)
 }
 
 // Verification builds the plan for a release. The manifest's own verify commands win; otherwise a
@@ -366,46 +383,75 @@ func (m *Manifest) hook(cmd string) string {
 	return sshx.SudoShell(m.Sudo, m.inRemoteRoot(cmd))
 }
 
+// Verification is VerificationFor with no stack spec: the manifest's verify, else the healthUrl.
 func (m *Manifest) Verification(healthURL string) VerifyPlan {
-	p := m.baseVerification(healthURL)
+	p, _ := m.VerificationFor(nil, verify.Context{HealthURL: healthURL})
+	return p
+}
+
+// VerificationFor builds the plan from the manifest and the stack's verify spec.
+//
+// The manifest's own verify commands still win: a repository that ships a check script knows more
+// about healthy than the stack record does. Otherwise the stack's spec is the plan, and otherwise
+// the healthUrl is its single check. update reads the same spec through the same builder, which is
+// what keeps a release and a later update from judging one site by two rules.
+func (m *Manifest) VerificationFor(spec *verify.Spec, ctx verify.Context) (VerifyPlan, error) {
+	p, err := m.baseVerification(spec, ctx)
+	if err != nil {
+		return VerifyPlan{}, err
+	}
 	if m.VerifyVisual != nil {
 		if len(p.Commands) == 0 {
 			p.Source = "verifyVisual"
 		}
 		// After the curl checks: no point opening a browser on a site that is not answering.
-		p.Commands = append(p.Commands, m.VerifyVisual.Commands(m.ReleaseTag, m.Sudo)...)
+		for _, c := range m.VerifyVisual.Commands(m.ReleaseTag, m.Sudo) {
+			p.addExit("verifyVisual", c)
+		}
 	}
-	return p
+	return p, nil
 }
 
-func (m *Manifest) baseVerification(healthURL string) VerifyPlan {
+func (m *Manifest) baseVerification(spec *verify.Spec, ctx verify.Context) (VerifyPlan, error) {
+	ctx.Mode = verify.ForRelease
+	ctx.DefaultAttempts = m.VerifyAttempts
+	if ctx.DefaultAttempts <= 0 {
+		ctx.DefaultAttempts = 5
+	}
+	ctx.DefaultDelay = time.Duration(m.VerifyDelaySeconds) * time.Second
+	if ctx.DefaultDelay <= 0 {
+		ctx.DefaultDelay = 3 * time.Second
+	}
+
+	sp, err := spec.Plan(ctx)
+	if err != nil {
+		return VerifyPlan{}, err
+	}
 	p := VerifyPlan{
-		Attempts: m.VerifyAttempts,
-		Delay:    time.Duration(m.VerifyDelaySeconds) * time.Second,
-	}
-	if p.Attempts <= 0 {
-		p.Attempts = 5
-	}
-	if p.Delay <= 0 {
-		p.Delay = 3 * time.Second
+		Source:   sp.Source,
+		Steps:    sp.Steps,
+		Commands: sp.Commands(),
+		Attempts: sp.Budget.Attempts,
+		Delay:    sp.Budget.Delay,
+		Timeout:  sp.Budget.Timeout,
 	}
 
 	if len(m.Verify) > 0 {
+		p.Steps, p.Commands = nil, nil
 		for _, c := range m.Verify {
-			p.Commands = append(p.Commands, m.inRemoteRoot(c))
+			p.addExit(c, m.inRemoteRoot(c))
 		}
 		p.Source = "manifest"
-		return p
+		// The manifest's own patience wins over the stack's when the manifest's commands run.
+		b := verify.Budget{Attempts: ctx.DefaultAttempts, Delay: ctx.DefaultDelay}.Bounded()
+		if m.VerifyAttempts > 0 {
+			p.Attempts = b.Attempts
+		}
+		if m.VerifyDelaySeconds > 0 {
+			p.Delay = b.Delay
+		}
 	}
-
-	p.Source = "none"
-	if strings.TrimSpace(healthURL) != "" {
-		p.Source = "healthUrl"
-		p.Commands = append(p.Commands,
-			fmt.Sprintf("curl --fail --silent --show-error --max-time 10 -o /dev/null %s",
-				sshx.Quote(healthURL)))
-	}
-	return p
+	return p, nil
 }
 
 // SyncDest is where one sync entry lands on the VM.
