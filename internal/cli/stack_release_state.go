@@ -127,7 +127,7 @@ func runReleaseClear(vm *fleet.VM, l releasestate.Loc, bcfg backup.Config, name 
 	if err == nil && prev != nil {
 		if _, bad := prev.Unsafe(); bad {
 			if protected, err = rollback.SetProtected(sc, bcfg, true); err != nil {
-				err = fmt.Errorf("the record was not cleared because the rollback record could not be protected: %w", err)
+				err = fmt.Errorf("the release record was not cleared because the rollback record could not be protected: %w; fix or delete %s in the stack's backup directory, then clear again", err, rollback.File)
 			}
 		}
 	}
@@ -160,7 +160,7 @@ func recordRollback(c sshx.Runner, st *fleet.Stack, m *release.Manifest, name st
 	imgs, err := compose.Images(c, releaseComposeStack(st, m), nil)
 	kept := false
 	if err == nil {
-		kept, err = rollback.SaveUnlessProtected(c, releaseBackupConfig(st, m), rollback.FromCompose(name, "release", imgs))
+		kept, err = rollback.Save(c, releaseBackupConfig(st, m), rollback.FromCompose(name, "release", imgs))
 	}
 	if kept {
 		ui.Notef("keeping the rollback record from before the half-applied release that was cleared")

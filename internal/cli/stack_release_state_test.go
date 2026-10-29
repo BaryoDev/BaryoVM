@@ -667,3 +667,13 @@ func TestClearOfAResumableReleaseDoesNotProtect(t *testing.T) {
 		t.Errorf("record: %s", host.files["images-before.json"])
 	}
 }
+
+// A rollback puts the recorded images back, so it lifts the protection a clear set.
+func TestRollbackLiftsTheProtection(t *testing.T) {
+	host, _ := rollbackFixtureWithRecord(t)
+	host.files["images-before.json"] = `{"stack":"app","at":"t","source":"release","images":[{"service":"web","ref":"app-web:1","id":"sha256:aaa"}],"protected":true}`
+	runCmd(t, newStackRollbackCmd(), host, true, "app")
+	if strings.Contains(host.files["images-before.json"], "protected") {
+		t.Errorf("record still protected: %s", host.files["images-before.json"])
+	}
+}

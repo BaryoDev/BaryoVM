@@ -587,7 +587,7 @@ release reports `data.commit`.
 Clearing a record that cannot be resumed also protects `images-before.json`: the images in it are
 the last good set, and the next release or update would otherwise record over them with what the
 half-applied release left running. The clear reports `data.rollbackProtected`. A release that
-finishes lifts the protection.
+finishes, or a `stack rollback` that puts the images back, lifts the protection.
 
 #### Rolling back the images
 

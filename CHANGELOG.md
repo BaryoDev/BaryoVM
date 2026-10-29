@@ -27,7 +27,8 @@ previously accepted is called out here rather than left to be discovered.
   <name>` retags them and brings the stack up, and `--list` shows what is recorded. It never touches
   the database: it prints the matching backups and leaves `stack restore --yes` as the explicit
   step. ([#37]) Clearing a half-applied release with `stack release --clear` protects that record
-  until a release finishes, so the next release cannot replace the last good images.
+  until a release finishes or `stack rollback` runs, so the next release or update cannot replace the
+  last good images.
 - **Adopt a hand-run container.** `stack release --adopt` and `stack deploy --adopt` remove a
   hand-run container that holds a `container_name` the compose file wants, after printing its name,
   image and created time. If it uses a named volume the compose file does not declare `external:

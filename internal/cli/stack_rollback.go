@@ -97,6 +97,11 @@ func runStackRollback(name string, list bool) error {
 			if e := rollback.Apply(c, composeStack(st), rec); e != nil {
 				return opOutput{}, e
 			}
+			// The stack runs the recorded images again, so the next release or update may record
+			// over them.
+			if _, e := rollback.SetProtected(c, backupConfig(st), false); e != nil {
+				ui.Warnf("could not unprotect the rollback record, the next release or update will keep it: %v", e)
+			}
 			if st.HealthURL != "" {
 				out, perr := c.Run("curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + sshx.Quote(st.HealthURL))
 				data["healthy"] = perr == nil && strings.HasPrefix(strings.TrimSpace(out), "2")

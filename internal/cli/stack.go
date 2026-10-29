@@ -626,11 +626,10 @@ func newStackReleaseCmd() *cobra.Command {
 			if err := releasestate.Remove(sc, loc); err != nil {
 				ui.Warnf("release done but the record at %s could not be removed, clear it with `baryovm stack release %s --clear`: %v", loc.File, args[0], err)
 			}
-			// A finished release is a good state again, so the next one may record over it.
-			if !m.NoCompose {
-				if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
-					ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
-				}
+			// A finished release is a good state again, so the next one may record over it. Not only
+			// for compose manifests: a clear protects whatever the manifest, so the finish lifts it the same way.
+			if _, err := rollback.SetProtected(sc, releaseBackupConfig(st, m), false); err != nil {
+				ui.Warnf("could not unprotect the rollback record, the next release will keep it: %v", err)
 			}
 			if commit != "" {
 				if err := releasestate.RecordDeployed(sc, loc, args[0], commit); err != nil {

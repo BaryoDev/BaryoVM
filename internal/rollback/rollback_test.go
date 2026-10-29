@@ -42,10 +42,11 @@ func TestFromComposeSkipsWhatHasNothingToGoBackTo(t *testing.T) {
 func TestSaveWritesIntoTheBackupDirAndLoadReadsItBack(t *testing.T) {
 	cfg := backup.Config{}
 	r := &rec{}
-	if err := Save(r, cfg, FromCompose("app", "update", nil)); err != nil {
+	if _, err := Save(r, cfg, FromCompose("app", "update", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.seen) != 1 || !strings.Contains(r.seen[0], File) || !strings.Contains(r.seen[0], "base64 -d") {
+	// One read for the protected check, then the write.
+	if len(r.seen) != 2 || !strings.Contains(r.seen[1], File) || !strings.Contains(r.seen[1], "base64 -d") {
 		t.Errorf("save command: %v", r.seen)
 	}
 	r.out = ""
@@ -139,13 +140,13 @@ var b64 = regexp.MustCompile(`printf %s '([A-Za-z0-9+/=]+)'`)
 func TestAProtectedRecordIsNotReplaced(t *testing.T) {
 	cfg := backup.Config{}
 	s := &store{}
-	if kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "good"}}}); err != nil || kept {
+	if kept, err := Save(s, cfg, Record{Stack: "app", Images: []Image{{ID: "good"}}}); err != nil || kept {
 		t.Fatalf("first save: kept=%v err=%v", kept, err)
 	}
 	if ok, err := SetProtected(s, cfg, true); err != nil || !ok {
 		t.Fatalf("protect: %v %v", ok, err)
 	}
-	kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "half"}}})
+	kept, err := Save(s, cfg, Record{Stack: "app", Images: []Image{{ID: "half"}}})
 	if err != nil || !kept {
 		t.Fatalf("protected save: kept=%v err=%v", kept, err)
 	}
@@ -155,7 +156,7 @@ func TestAProtectedRecordIsNotReplaced(t *testing.T) {
 	if _, err := SetProtected(s, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if kept, err := SaveUnlessProtected(s, cfg, Record{Stack: "app", Images: []Image{{ID: "next"}}}); err != nil || kept {
+	if kept, err := Save(s, cfg, Record{Stack: "app", Images: []Image{{ID: "next"}}}); err != nil || kept {
 		t.Fatalf("unprotected save: kept=%v err=%v", kept, err)
 	}
 	if got, _ := Load(s, cfg); got.Images[0].ID != "next" {

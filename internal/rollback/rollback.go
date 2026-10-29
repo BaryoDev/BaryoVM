@@ -55,19 +55,10 @@ func FromCompose(stack, source string, imgs []compose.Image) Record {
 	return r
 }
 
-// Save writes the record next to the backups.
-func Save(c sshx.Runner, cfg backup.Config, r Record) error {
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	_, err = c.Run(cfg.WriteFileCmd(File, append(b, '\n')))
-	return err
-}
-
-// SaveUnlessProtected writes the record unless the one on the host is protected, and says which
-// happened. A record it cannot read is not overwritten either, since it may be the protected one.
-func SaveUnlessProtected(c sshx.Runner, cfg backup.Config, r Record) (kept bool, err error) {
+// Save writes the record next to the backups, unless the one there is protected, and says which
+// happened. Every writer goes through here, so no path can record over a protected set. A record it
+// cannot read is not overwritten either, since it may be the protected one.
+func Save(c sshx.Runner, cfg backup.Config, r Record) (kept bool, err error) {
 	cur, err := Load(c, cfg)
 	if err != nil {
 		return false, err
@@ -75,7 +66,16 @@ func SaveUnlessProtected(c sshx.Runner, cfg backup.Config, r Record) (kept bool,
 	if cur != nil && cur.Protected {
 		return true, nil
 	}
-	return false, Save(c, cfg, r)
+	return false, write(c, cfg, r)
+}
+
+func write(c sshx.Runner, cfg backup.Config, r Record) error {
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = c.Run(cfg.WriteFileCmd(File, append(b, '\n')))
+	return err
 }
 
 // SetProtected marks the record on the host protected or not. False when there is no record.
@@ -88,7 +88,7 @@ func SetProtected(c sshx.Runner, cfg backup.Config, on bool) (bool, error) {
 		return true, nil
 	}
 	cur.Protected = on
-	return true, Save(c, cfg, *cur)
+	return true, write(c, cfg, *cur)
 }
 
 // Load reads the record. Nil when nothing was recorded yet.

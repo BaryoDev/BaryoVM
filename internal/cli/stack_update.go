@@ -130,7 +130,7 @@ func runStackUpdate(name string, svcs []string, auto, dryRun, noBackup bool, att
 		var rec update.Runner = runner
 		if !dryRun {
 			rec = &recordingRunner{Runner: runner, save: func(imgs []compose.Image) {
-				kept, e := rollback.SaveUnlessProtected(c, backupConfig(st), rollback.FromCompose(name, "update", imgs))
+				kept, e := rollback.Save(c, backupConfig(st), rollback.FromCompose(name, "update", imgs))
 				if e != nil {
 					ui.Warnf("could not record the images to roll back to: %v", e)
 				} else if kept {
