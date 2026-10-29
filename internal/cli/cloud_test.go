@@ -417,6 +417,8 @@ func TestCloudWranglerConfigSpellings(t *testing.T) {
 		"one bucket of two unreadable":   "[site]\nbucket = \"./pub\"\n[env.x.site]\nbucket = 5\n",
 		"assets directory not a string":  "assets = { directory = 5 }\n",
 		"dotted assets without a string": "assets.directory = dir\n",
+		"escaped assets table and key":   "\"\\u0061ssets\" = { \"\\u0064irectory\" = \"./pub\" }\n",
+		"escaped site table and key":     "[\"\\U00000073ite\"]\n\"\\u0062ucket\" = \"./pub\"\n",
 	}
 	for name, cfg := range unreadable {
 		t.Run(name, func(t *testing.T) {

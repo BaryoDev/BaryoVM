@@ -290,6 +290,10 @@ func wranglerAssetDirs(args []string, cfg wranglerCfg) ([]string, string) {
 		return dirs, ""
 	}
 	base := filepath.Dir(cfg.path)
+	// A \u or \U escape can spell a key the patterns below cannot see, so the config is refused.
+	if strings.Contains(cfg.text, `\u`) || strings.Contains(cfg.text, `\U`) {
+		return nil, "the config has a \\u or \\U escape, so its assets and site keys cannot be read and cannot be scanned"
+	}
 	// Every directory or bucket key must resolve to a quoted string. One that does not (a variable,
 	// a number, a spelling the pattern misses) is a refusal, not a skip.
 	if assetsMention.MatchString(cfg.text) || assetsDirectoryKey.MatchString(cfg.text) {
