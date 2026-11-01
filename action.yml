@@ -6,14 +6,22 @@
 # the scan-before-release example. `scan` needs Docker on the runner.
 name: BaryoVM
 description: Download BaryoVM and run a command (deploy, release, or a passive ZAP scan)
+author: BaryoDev
+branding:
+  icon: shield
+  color: blue
 inputs:
   command:
     description: The baryovm command and flags to run, e.g. "scan --url https://staging.example.com --fail-on medium". It is split on whitespace and not evaluated by a shell, so quotes and $vars in it are literal.
     required: true
   version:
-    description: BaryoVM release to use, e.g. "1.2.0". Defaults to the latest release.
+    description: BaryoVM release to use, e.g. "1.2.0" or "v1.2.0". Defaults to the latest release.
     required: false
     default: latest
+  token:
+    description: GitHub token used to look up the latest release (avoids API rate limits). Defaults to the workflow's token.
+    required: false
+    default: ${{ github.token }}
 runs:
   using: composite
   steps:
@@ -21,24 +29,55 @@ runs:
       shell: bash
       env:
         BVM_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
+
+        if [ "$RUNNER_OS" != "Linux" ]; then
+          echo "::error::BaryoVM action only supports Linux runners (got $RUNNER_OS)."
+          exit 1
+        fi
+        os=linux
+
+        arch=$(uname -m)
+        case "$arch" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "::error::Unsupported CPU architecture: $arch"; exit 1 ;;
+        esac
+
+        if [ "$BVM_VERSION" = "latest" ]; then
+          auth=()
+          if [ -n "${GH_TOKEN:-}" ]; then auth=(-H "Authorization: Bearer $GH_TOKEN"); fi
+          BVM_VERSION=$(curl -fsSL "${auth[@]}" https://api.github.com/repos/BaryoDev/BaryoVM/releases/latest \
+            | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+          if [ -z "$BVM_VERSION" ]; then
+            echo "::error::Could not find the latest BaryoVM release. Publish a release first, or set 'version'."
+            exit 1
+          fi
+        fi
+        # Accept "1.2.0" or "v1.2.0".
+        BVM_VERSION="${BVM_VERSION#v}"
+        echo "Using BaryoVM v${BVM_VERSION} (${os}/${arch})"
+
         work=$(mktemp -d "$RUNNER_TEMP/baryovm.XXXXXX")
         cd "$work"
-        os=linux
-        arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
-        if [ "$BVM_VERSION" = "latest" ]; then
-          BVM_VERSION=$(curl -fsSL https://api.github.com/repos/BaryoDev/BaryoVM/releases/latest \
-            | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
-        fi
+        archive="baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz"
         base="https://github.com/BaryoDev/BaryoVM/releases/download/v${BVM_VERSION}"
-        curl -fsSLO "${base}/baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz"
+        curl -fsSLO "${base}/${archive}"
         curl -fsSLO "${base}/checksums.txt"
+
         # Verify against the published checksum before trusting the archive.
-        grep " baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz\$" checksums.txt | sha256sum -c -
-        tar -xzf "baryovm_${BVM_VERSION}_${os}_${arch}.tar.gz" baryovm
+        if ! grep " ${archive}\$" checksums.txt | sha256sum -c -; then
+          echo "::error::Checksum check failed for ${archive}."
+          exit 1
+        fi
+
+        tar -xzf "$archive" baryovm
         install -m 0755 baryovm "$RUNNER_TEMP/baryovm"
         echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        cd - >/dev/null
+        rm -rf "$work"
     - name: Run BaryoVM
       shell: bash
       env:
@@ -46,4 +85,8 @@ runs:
       run: |
         set -euo pipefail
         read -r -a bvm_args <<< "$BVM_COMMAND"
+        if [ "${#bvm_args[@]}" -eq 0 ]; then
+          echo "::error::The 'command' input is empty."
+          exit 1
+        fi
         baryovm "${bvm_args[@]}"
