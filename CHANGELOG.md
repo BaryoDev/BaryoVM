@@ -8,6 +8,16 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
+Ship, prove and repo commands, guarded `git`, `gh`, publish and cloud wrappers, static sites, podman,
+backup strategies, verify specs, project files, and a GitHub Action.
+
+This release refuses things earlier versions accepted. `vm provision` and `up --provider` need
+`--yes` to create anything. A release manifest's paths and `file:` references must stay inside its
+own directory, and `env:` references must start with `BARYOVM_` (the default project key variable
+is now `BARYOVM_DEPLOY_KEY_PATH`). An unknown subcommand now exits non-zero.
+
 ### Added
 
 - **`--dry-run` on `stack release`, `stack deploy`, `stack backup`, `stack restore`, `vm bootstrap`
@@ -77,6 +87,65 @@ previously accepted is called out here rather than left to be discovered.
   from a no-echo prompt or piped stdin and travels on the ssh session's stdin, never on a command
   line. The file is created if missing and kept at mode 600. `--recreate` runs
   `compose up -d --force-recreate` after a write. `-o json` carries keys, never values. ([#147])
+- **`baryovm site add <domain> --vm <vm> --root <dir>` and `baryovm site deploy <domain> <dir>` provision and update a static site.** `site add` creates the webroot and the ACME challenge directory, writes an nginx server block from a template (HTTP to HTTPS redirect, TLS, `try_files` for a static export, a year-long cache on hashed assets, `no-cache` on HTML, gzip scoped to the static locations), gets a certificate with certbot in webroot mode, runs `nginx -t` and reloads, and relabels the webroot with `restorecon` where SELinux is on. The order is HTTP-only block, certificate, full block; a failing step puts the previous server block back, and the error and `data.failedStep` name the step. An existing site is refused without `--force`; with `--force` on a live HTTPS site the HTTP-only stage is skipped so HTTPS stays up, and a leftover `.baryovm-prev` from an interrupted run stops the command so the original is never overwritten. `site deploy` syncs a directory into the recorded webroot with the same rsync as `stack release`, then runs `nginx -t` and reloads. Sites are recorded in `fleet.json`. DNS is not handled. Tested with fakes through the cobra commands, never against a real VM. ([#18])
+- **`baryovm status`.** One read-only screen for every registered stack: whether its containers are up, the commit of the last finished release, a release that failed or stopped part way, and the backups on the VM, plus the verify assertions with `--verify`. Each VM is asked once over one SSH connection, VMs are queried concurrently (`--concurrency`) with a per-VM `--timeout`, and a VM that does not connect shows as unreachable with the reason while the other rows still print, and one that runs out of time keeps the stacks it already answered. A column that is not configured shows `-`, one that could not be read shows `?` with the reason. A forced-command VM is sent its `status` request only and shows as limited. `-o json` carries the same report. `--vm` and `--stack` scope it. ([#27])
+- **Ship.** `baryovm ship <name>` runs the release gate, tags and pushes, watches the workflow run, asserts the publish step ran and was not skipped, polls the registry (NuGet or npm) until every package resolves, checks the published artifact's metadata against the spec's assertions, then creates the GitHub release. BaryoVM never publishes and holds no registry credential; the GitHub token comes from `--token-ref`. `--dry-run` runs every check and changes nothing. A rerun after an interrupted watch finds the tag at HEAD and does not tag again. The assertions and the values seen are saved under `$BARYOVM_HOME/ship/` and returned by `-o json`. ([#28], [#51])
+- **Prove.** `baryovm prove <name>` prints the release record `ship` saved as one page: what shipped, what was published with each artifact assertion and the value seen, and whether the deployment was verified. It reads only the local record, prints anything missing as not checked, exits non-zero on a failed assertion or step, and refuses a dry run or a missing record. `--version` picks a release, the default is the highest by semver. ([#29])
+- **A stack can run on podman, and `vm bootstrap` no longer assumes systemd.** `stack add --runtime
+  podman` (also on `deploy`, `up`, `stack discover` and `vm bootstrap`, and as `runtime` in
+  `remote.json`) makes deploy, update, release builds, ps, logs, backup, restore and the drill run
+  `podman` and `podman compose`. The runtime is a fixed set (`docker` or `podman`); anything else is
+  refused. Bootstrap detects apt-get, dnf, yum, apk or pacman, installs podman from the distro
+  package, and skips the systemctl step with a `NO_SYSTEMD` line on a host without systemd.
+  `USAGE.md` lists which compose commands are covered and which are unverified on podman-compose.
+  The TLS helpers, health, patch, prune, scan and runner stay on docker. ([#35])
+- **`stack restore --drill` proves a backup restores.** It loads the newest dump (or `--file`) into a
+  throwaway postgres container on the VM, checks the restore had no errors and the table count is
+  above zero, and removes the container, also when the drill fails. The live database and its
+  container are only read for their image name, so `--drill` needs no `--yes`. In `-o json` the
+  result is in `data`. ([#38])
+- **`stack backup --pull` keeps a copy off the VM.** After the backup it copies that run's files (the dumps and the config copy, never a `.partial`) over the same SSH connection to `~/.baryovm/backups/<stack>/`. The directory is `0700`, files are `0600`, and an existing directory that group or others can write is refused. `-o json` lists the pulled paths and sizes in `data.pulled`. Refused on a forced-command VM. Object storage is not part of this. ([#39])
+- **`stack update --auto` can tell someone when it fails.** `--notify <url>`, or `BARYOVM_NOTIFY_URL`
+  so the URL can be a CI secret, posts the JSON result envelope to a webhook when an unattended run
+  fails or rolls back. `--notify-on always` posts every run. https only (http for localhost), 10 second
+  timeout, one retry, bounded body. A failed notification makes the exit non-zero and shows in
+  `data.notify`, but never hides the update result. The URL is never printed, only scheme and host.
+  `docs/examples/scheduled-update.yml` is a GitHub Actions cron workflow to copy, and USAGE.md has an
+  "Unattended updates" section. ([#40])
+- **`vm health` reports the monthly questions about a machine.** Read only, over SSH with `sudo -n`.
+  Checks disk use on `/` and the docker root, pending updates split into security and other, whether
+  a reboot is required, containers that are restarting or exited unexpectedly, and whether automatic
+  security updates are enabled, each with an ok, warn, fail, unknown or skip verdict. `--all` covers
+  every registered VM. Exits non-zero on any fail, and any pending security update is one. In `-o
+  json` the reports are in `data`. The limits are flags: `--disk-warn` (80), `--disk-fail` (90),
+  `--max-updates` (25) and `--max-restarts` (5). Bad values are refused before any connection, and
+  the limits used are in `thresholds` in the JSON report. ([#41])
+- **`baryovm stack discover <vm>` inventories a VM that already runs compose projects.** It reads `docker compose ls` and each project's config, then prints the directory, service count, a postgres container guess (first service whose image name contains postgres, marked as a guess) and the `stack add` command per project, every value quoted for a shell. Read-only by default. `--adopt` registers the projects through the same code as `stack add`, asking per project on a terminal and needing `--yes` without one or under `-o json`; projects already registered are skipped and reported. `--sudo` runs docker through `sudo -n`. `-o json` returns one result with a list of projects. ([#47])
+- **`baryovm repo init <owner/repo> --template <name>` scaffolds release CI, and `baryovm repo verify <owner/repo>` checks that trusted publishing works.** `init` writes the workflows and furniture (CODEOWNERS, issue templates, CONTRIBUTING) into a local checkout, applies branch protection with the required checks through the GitHub API, and prints the owner, repository, workflow file and environment to enter on nuget.org or npmjs.com. It prints a plan and does nothing without `--yes`, never overwrites a file without `--force`, and leaves branch protection that already exists alone unless `--replace-protection` is given. It refuses any path that leaves the checkout through a symlinked folder. It does not create the registry policy, which has no API on either registry; the output spells out the order (push the workflow, create the policy by hand, then verify). `verify` runs the workflow's dry run and reports whether the OIDC exchange step succeeded, reading only the run it started. Two templates are built in, `dotnet-nuget` and `node-npm`, based on the umbraco-pwa and dopaminejs workflows, with every action pinned to a commit sha. `--templates-dir` adds or replaces templates. The token comes from `--token-ref`, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. ([#52])
+- **Release gate.** `baryovm stack publish <name>` refuses to tag unless the tree is clean on the default branch and synced, the version is not tagged or published, the changelog has a section for that exact version, the NuGet release notes mention it, and the `requireDeployed` stack released this commit. Each refusal names its cause. Then it tags and pushes the tag. `stack set-publish` stores the spec on the stack, and a project file carries it too. ([#51], [#28])
+- **A stack can name a managed database and snapshot it before a release, through the AWS or Azure CLI you are signed into.** `baryovm stack set-managed <name>` stores an AWS profile and region, or an Azure subscription and resource group, plus the database identifier. Names only: the CLI's own sign-in authenticates and nothing secret reaches `fleet.json`. `stack release` then runs `aws rds create-db-snapshot` and `aws rds wait db-snapshot-available`, or `az postgres flexible-server backup create`, before the VM backup, and a failed call stops the release. `--no-backup` skips it, `--dry-run` lists the calls. Calls run as an argv with every name checked. `-o json` carries each call's argv, exit code and output in `data.cloud`. `baryovm doctor` reports a missing or signed-out `aws` or `az` for any stack that uses one and names the command to run. The reachability check and the `vm ping` and `stack ps` display are not built. ([#81])
+- **Project files.** `baryovm project release` releases the stacks of a committed, secret-free `baryovm.project.json` in order, with no `vm add` or `stack add`, and stops at the first failed release or verify. The file uses `fleet.json`'s own field names and structs (plus `project` and `order`), so a team or a CI job shares one definition. A literal key, token or password in any field is refused with the field named, a VM needs a pinned `hostKey` or `--strict-host-keys`, and unknown fields round-trip. `baryovm project export` writes the file from a registered fleet. The project file is not merged with `fleet.json`. ([#84], [#26], [#91], [#43])
+- **Stacks can deploy from a recipe in the app's own repository.** `baryovm stack add NAME --recipe PATH` (or `stack release NAME --recipe PATH`) reads a versioned `baryovm.recipe.json` and `stack release` brings its services up one at a time, waiting on each `healthUrl`. If a service fails, every service touched so far goes back to the previous compose file; a service the previous recipe did not have is removed. Names, images, ports and paths from a recipe are checked against a strict shape and quoted on every remote command, and a recipe with an unknown `schema` is refused. Inputs are bound with `--input NAME=env:VAR` or `file:PATH`; a secret input takes a reference only and never a default, and `cmd:` is refused. A stack without a recipe releases as before. Not built yet: `files`, `routes`, `backup` and service `build` in a recipe release, `--dry-run`, `--resume`, and a generic `stack domain add`. A recipe release takes the managed snapshot and the VM backup first, holds the host lock, and uses the stack's container runtime. The barako examples in the help text and code comments are now generic. ([#88])
+- **A stack can store one verify spec that release, update and rollback all read.** `verify` in `fleet.json` is a list of checks (a path on the stack's own origin with `status`, `minBytes`, `contains`, `absent`, `jsonMatch`, or a `command`) plus attempts, delay and a total timeout. `absent` is judged only after status and size pass, so a placeholder page that answers 200 fails when a marker is missing, and a 502 is reported as a 502. Redirects are not followed and a check cannot name another host. Attempts and time are capped, and a timeout fails with its own message. Unknown keys are refused. `baryovm stack set-verify <name> --file spec.json` stores it (`--clear` removes it) after checking it. A stack with only `healthUrl` verifies as before, and a manifest `verify` still wins for a release. `stack update --auto` accepts a spec in place of a `healthUrl`. ([#89])
+- **A stack backs up a list of strategies, each with its dump and its restore.** `backup` in `fleet.json` takes `postgres-container` (today's behaviour), `postgres-remote` (`pg_dump` against a managed database from a throwaway client container, password only from the stack's env file or a password file on the VM, never on a command line), `command` (dump and restore shell lines) and `files` (a tar). A release runs every strategy before anything changes and stops at the first failure. `"backup": []` means nothing to back up and replaces `noDatabase`; `stack update --auto` accepts it and refuses a stack that declared nothing. Existing `dbContainer`, `dbName`, `dbUser` and `noDatabase` still load and behave as before, and `stack add --db-container` now writes the list form. `baryovm stack set-backup <name> --file backup.json` stores and checks a list. `provider-snapshot` and `volume` kinds are not built. ([#90], [#80])
+- **Secrets reach a deploy by reference, never on a command line.** One reference type (`env:NAME`, `file:PATH`, `cmd:<command>` for a signed-in CLI such as `op read ...` or `gh auth token`) is resolved on your machine at use time and never stored. `deploy` and `up` gain `--env-ref KEY=<reference>`. `deploy -e KEY=value` still works, but values now travel on the SSH session's stdin into an owner-only (0600) env file that `docker run --env-file` reads and the VM removes afterwards, so they no longer show in `ps` on the VM. Release manifest build `args` are sent the same way (the command carries `--build-arg NAME` only), accept `env:` and `file:` references, and a build can declare BuildKit `secrets`. The project file's `env:` key references use the same type, and `cmd:` is refused in any committed file. A reference that does not resolve stops the command before anything is provisioned or contacted, and no value appears in errors, JSON output or dry-run output. ([#93], [#14], [#84])
+- **baryovm can run behind an SSH forced command, and no longer looks like it worked when a forced command swallowed it.** `baryovm vm remote install <vm>` puts a root-owned wrapper on the VM and prints the `authorized_keys` line (it never edits that file). The wrapper, `baryovm remote serve`, reads `baryovm-remote v1 <op> <stack>` with no shell and accepts only `update`, `backup`, `status` and `logs` for stacks listed in the VM's root-owned `/etc/baryovm/remote.json`; it refuses to run if that file or its directory is writable by group or others. `exec` and `release` are not offered. A VM marked `remote: "forced"` (`vm add --remote forced`, `vm remote set <vm> forced`) sends those requests for `stack update`, `backup`, `ps` and `logs` and refuses every other command. For any other VM, baryovm now echoes a random token before sending shell and fails with the cause if it does not come back. ([#98])
+- **`baryovm repo move <stack> --to <url>` moves a stack's repository to another Git host.** It prints a plan and does nothing without `--yes`. With `--yes` it checks the destination is empty or identical, exports issues and pull requests with comments to JSON, pushes every branch and tag without force, compares both ref lists and stops if they differ, then repoints `origin` on checkouts found on the registered VMs (a read-only token only through `--read-cred`, sent on stdin) and on the local clone, which keeps the old remote as `old-origin`. Crontab lines and systemd units that run from those checkouts are listed, not edited. The old repository is never deleted or archived; the commands for that are printed last. ([#137])
+- **`baryovm git` and `baryovm gh` refuse keys and pushes to the wrong host.** `git commit` scans the staged diff (and the working diff with `-a` or paths), the message and any `-F` message file. `git push` checks every push URL of the remote against `baryovm.allowedHosts` in git config (or `BARYOVM_ALLOWED_HOSTS`) before any network call, then scans every commit not on the remote; deletes skip the commit scan. A policy that cannot be read refuses instead of allowing. `gh pr`, `gh issue` and `gh release` (create, edit, comment, review) scan `--title`, `--body`, `--body-file`, `--notes` and `--notes-file`. The scanner knows Anthropic and OpenAI keys and PGP private key blocks. A refusal names file and line, never the value, and exits 1. Everything else passes through with the tool's own output and exit code. `guard install-hooks` writes pre-commit, commit-msg and pre-push hooks that run the same checks. ([#140])
+- **`baryovm publish npm` and `baryovm publish nuget` refuse a package that holds a key or goes to the wrong registry.** `publish npm` reads `npm pack --dry-run --json`, scans every file it would ship, resolves the registry (publishConfig, `--registry`, `.npmrc`, npm default) and checks it against `baryovm.allowedRegistries` in git config (or `BARYOVM_ALLOWED_REGISTRIES`); a `private` package resolving to the public registry is refused with the registry named. `publish nuget` scans every entry of the `.nupkg` and checks `--source` (default nuget.org). Oversized files are refused, not skipped, and an unreadable policy refuses. Otherwise npm and dotnet run with your arguments unchanged. ([#141])
+- **`baryovm cloud wrangler`, `baryovm cloud firebase` and `baryovm cloud gcloud` check a deploy before the real CLI runs.** `wrangler deploy` is bundled with `--dry-run --outdir` and the bundle, `wrangler.toml` and `--var` arguments are scanned; a key in `vars` is refused and `wrangler secret put` is named. `firebase deploy` prints the project id, refuses one not in `baryovm.allowedCloudProjects` (or `BARYOVM_ALLOWED_CLOUD_PROJECTS`) before it runs, and scans the files `firebase.json` deploys. `gcloud` passes through but refuses `iam service-accounts keys create` and similar commands whose output file lands inside a git working tree. A target that cannot be determined refuses. ([#142])
+- **`baryovm git` and `baryovm gh` apply seven more rules, each off per repository.** Protected branches (no direct or force push to the default branch or listed branches), destructive commands (`gh repo delete`, `gh release delete`, tag delete, `git reset --hard` with uncommitted work, `git clean -fdx` need the name typed back or `--confirm <name>`), files that never go in git (`.env`, key files, service account JSON, oversized files), no AI attribution in commit and PR text, explicit repository visibility, a gate script before push, and an audit log entry with a `target` for each guarded command. Git aliases are expanded and checked, `-c alias.*` and `--config-env` are refused, and `git commit --pathspec-from-file` is refused. Switch a rule off with `git config --add baryovm.rules.off <rule>`. ([#144])
+
+  Review fixes: a push whose destination cannot be told (glob or empty refspec, detached HEAD, remote.<name>.push, push.default=matching) is refused while protected-branches is on. The gate needs a recorded pass for every commit pushed, not only HEAD. Every shell alias (`!...`) is refused unless listed in `baryovm.allowShellAliases`. Audit targets drop credentials even when the URL does not parse.
+- **More typed `data` in `-o json`, fields added only.** `stack ps` adds `containers` (name, service,
+  state, health, image, ports) read from `docker compose ps --format json`, `stack logs` adds
+  `entries` (service, line), `stack backups` adds `entries` (path, file, taken) and `stack update`
+  adds `result` with real booleans and arrays beside its existing string fields. ([#11])
+- **Docs for three readers.** `docs/indie.md` (a five-minute quickstart), `docs/sme.md` (a server that already runs things: discover, backups, restore drill, updates), `docs/agency.md` (client VMs, project file, what to hand a client) and `docs/troubleshooting.md` (by symptom, with the tool's own error text), linked from the README. None has been run on a fresh VM yet. ([#46])
+- **Contributor terms.** `CLA.md` states that contributions ship under MPL-2.0 with the MPL patent grant, contributors keep their copyright, and there is nothing to sign. Every Go file now carries the MPL-2.0 notice, and a test keeps it that way. ([#86])
+- **A GitHub Action in this repository.** `uses: BaryoDev/BaryoVM@v0.6.0` installs a release on a Linux
+  runner, verifies its archive against `checksums.txt`, and runs the arguments in `command`.
+  `version` picks the release and defaults to the latest.
 
 ### Changed
 
@@ -99,6 +168,23 @@ previously accepted is called out here rather than left to be discovered.
   json`, instead of printing help and exiting 0. ([#120])
 - `vm bootstrap` now runs its Docker install with `sudo -n`, so a host that wants a sudo password
   fails fast instead of hanging on a prompt.
+- **`-o json` prints exactly one document, always naming the command.** A failing command used to
+  print its own failure and then a second one under the action `baryovm`; now the second is dropped
+  and a failure raised before the handler wrote anything keeps the command name. A bad flag
+  (`vm list --bogus -o json`) answers in JSON instead of styled text on stderr, and `--help` or a
+  group with no subcommand puts the help text in `data.usage` instead of bare text on stdout.
+  `docs/JSON.md` writes the envelope down. ([#10])
+- **`vm provision` and `up --provider` print a plan by default and need `--yes` to create anything.**
+  Without `--yes` they show the provider, region, size, ports, the cost where BaryoVM knows it
+  (Lightsail's default bundle) and the result of the hostname check, and change nothing. A real
+  create needs `--yes` and a passing hostname check: when `--http-from` or `--https-from` limits a
+  web port, every hostname named with `--host` must resolve inside the allowed ranges, and a limit
+  with no `--host` is refused. This refuses something earlier versions accepted: `vm provision`
+  without `--dry-run` used to create the VM at once, so scripts must add `--yes`. README, USAGE.md
+  and SECURITY.md now say what the code does. Tested with fakes through the cobra commands, never
+  against a real cloud. ([#16], [#106])
+- **A release manifest's `localRoot` and `sync` paths are confined to its directory.** Each must resolve, after symlinks, inside the folder holding the manifest, so a manifest from another branch can no longer name `~` and `.ssh` and copy a private key to the VM. Refused at load (so `--dry-run` refuses too), and a `sync` entry that is a symlink pointing out is refused before rsync runs. A manifest that has to sit apart from its source needs `baryovm stack add --release-root <dir>`, set once by the operator and stored on the stack, or passed to `project release --release-root`. A manifest or project file cannot set it. The rsync trailing-slash rule is unchanged. ([#158])
+- **Committed secret references are confined.** An `env:` reference in a release manifest or project file must name a variable starting with `BARYOVM_`, and a `file:` reference must be a relative path that stays inside the file's own directory, symlinks included. A manifest from another branch can no longer make a release read `~/.ssh/id_ed25519` or `AWS_SECRET_ACCESS_KEY` and send it to the build. Refused at load, so `--dry-run` reports it. The default project key variable is now `BARYOVM_DEPLOY_KEY_PATH`. References typed on the command line are unchanged.
 
 ### Fixed
 
@@ -407,7 +493,8 @@ decision made in one place so a new call site cannot quietly skip it.
 First tagged release. Registers VMs you already own and drives their Docker Compose stacks over
 plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on every command.
 
-[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/BaryoDev/BaryoVM/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/BaryoDev/BaryoVM/compare/v0.2.1...v0.3.0
@@ -447,3 +534,38 @@ plain SSH, agentless: deploy, release, backup, restore, logs, with `-o json` on 
 [#138]: https://github.com/BaryoDev/BaryoVM/issues/138
 [#146]: https://github.com/BaryoDev/BaryoVM/issues/146
 [#150]: https://github.com/BaryoDev/BaryoVM/issues/150
+[#10]: https://github.com/BaryoDev/BaryoVM/issues/10
+[#11]: https://github.com/BaryoDev/BaryoVM/issues/11
+[#14]: https://github.com/BaryoDev/BaryoVM/issues/14
+[#16]: https://github.com/BaryoDev/BaryoVM/issues/16
+[#18]: https://github.com/BaryoDev/BaryoVM/issues/18
+[#26]: https://github.com/BaryoDev/BaryoVM/issues/26
+[#27]: https://github.com/BaryoDev/BaryoVM/issues/27
+[#28]: https://github.com/BaryoDev/BaryoVM/issues/28
+[#29]: https://github.com/BaryoDev/BaryoVM/issues/29
+[#35]: https://github.com/BaryoDev/BaryoVM/issues/35
+[#38]: https://github.com/BaryoDev/BaryoVM/issues/38
+[#39]: https://github.com/BaryoDev/BaryoVM/issues/39
+[#40]: https://github.com/BaryoDev/BaryoVM/issues/40
+[#41]: https://github.com/BaryoDev/BaryoVM/issues/41
+[#43]: https://github.com/BaryoDev/BaryoVM/issues/43
+[#46]: https://github.com/BaryoDev/BaryoVM/issues/46
+[#47]: https://github.com/BaryoDev/BaryoVM/issues/47
+[#51]: https://github.com/BaryoDev/BaryoVM/issues/51
+[#52]: https://github.com/BaryoDev/BaryoVM/issues/52
+[#80]: https://github.com/BaryoDev/BaryoVM/issues/80
+[#81]: https://github.com/BaryoDev/BaryoVM/issues/81
+[#84]: https://github.com/BaryoDev/BaryoVM/issues/84
+[#86]: https://github.com/BaryoDev/BaryoVM/issues/86
+[#88]: https://github.com/BaryoDev/BaryoVM/issues/88
+[#89]: https://github.com/BaryoDev/BaryoVM/issues/89
+[#90]: https://github.com/BaryoDev/BaryoVM/issues/90
+[#91]: https://github.com/BaryoDev/BaryoVM/issues/91
+[#93]: https://github.com/BaryoDev/BaryoVM/issues/93
+[#98]: https://github.com/BaryoDev/BaryoVM/issues/98
+[#137]: https://github.com/BaryoDev/BaryoVM/issues/137
+[#140]: https://github.com/BaryoDev/BaryoVM/issues/140
+[#141]: https://github.com/BaryoDev/BaryoVM/issues/141
+[#142]: https://github.com/BaryoDev/BaryoVM/issues/142
+[#144]: https://github.com/BaryoDev/BaryoVM/issues/144
+[#158]: https://github.com/BaryoDev/BaryoVM/issues/158
