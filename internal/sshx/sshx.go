@@ -333,7 +333,7 @@ func agentSigner(pubPath string) (ssh.Signer, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse %s: %w", pubPath, err)
 	}
-	conn, err := net.Dial("unix", sock)
+	conn, err := net.Dial("unix", sock) // #nosec G704 -- the operator's own ssh-agent socket, a local unix path
 	if err != nil {
 		return nil, nil, err
 	}
