@@ -139,7 +139,8 @@ is empty, so run the `ssh-add` line again.
 A security key works the same way: load it into the agent, and give `--key` the path of its handle
 file.
 
-The rsync transport does not use the agent key yet. For the errors, see
+`stack release` and `site deploy` give rsync's ssh the same path with `-i`. OpenSSH matches it to
+the key in the agent and signs there, so rsync needs nothing more. For the errors, see
 [docs/troubleshooting.md](docs/troubleshooting.md).
 
 `vm exec` runs an arbitrary command on one named VM with the SSH key already in

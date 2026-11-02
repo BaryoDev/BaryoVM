@@ -16,7 +16,9 @@ previously accepted is called out here rather than left to be discovered.
   `ssh-add`, a FIDO security key, and a macOS Touch ID (Secure Enclave) key handle. `fleet.json`
   still holds only the path. A key that parses is used directly, as before. If the agent does not
   hold the key, the error says `run ssh-add`. Provisioning, which reads the public half of the same
-  key, takes the same path. The rsync transport does not use the agent key yet.
+  key, takes the same path. rsync's ssh gets the same path with `-i`, and OpenSSH signs through the
+  agent, so `stack release` and `site deploy` work with these keys too (checked with a Touch ID key
+  against an Oracle Linux 9 VM).
 - **`--dry-run` on `stack release`, `stack deploy`, `stack backup`, `stack restore`, `vm bootstrap`
   and `deploy`.** Each prints the commands it would run and opens no connection. `stack release
   --dry-run` shows the rsync invocations (with `--delete` and the trailing slash), builds, hooks,
