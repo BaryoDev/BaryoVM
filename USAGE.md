@@ -100,6 +100,48 @@ at deploy time trusts whatever answers; a committed file does not.
 The flag beats the environment, so `--strict-host-keys=false` is how a human
 turns it off for one command on a machine where the workflow sets it globally.
 
+### Keys held by ssh-agent
+
+A key BaryoVM cannot read itself can still be used if ssh-agent holds it. That covers a passphrase
+key, a FIDO security key, and a Touch ID key on macOS. Register the VM with the path of the key
+file as usual:
+
+```sh
+baryovm vm add mac-box --host <your-vm-ip> --user deploy --key ~/.ssh/<handle file>
+```
+
+BaryoVM first tries to parse the file. If that fails, it reads the `.pub` next to it (the key path
+plus `.pub`), connects to the agent on `SSH_AUTH_SOCK`, and uses the key whose public half matches.
+The agent does the signing. `fleet.json` still holds the path and nothing else.
+
+Two things must be true:
+
+- `SSH_AUTH_SOCK` is set, and the agent holds the key.
+- The `.pub` file sits next to the key file.
+
+Passphrase key:
+
+```sh
+ssh-add ~/.ssh/id_ed25519
+```
+
+Touch ID on macOS (Secure Enclave):
+
+```sh
+sc_auth create-ctk-identity -l <label> -k p-256-ne -t bio
+ssh-keygen -w /usr/lib/ssh-keychain.dylib -K -N ""
+ssh-add -S /usr/lib/ssh-keychain.dylib <handle file>
+```
+
+Use the handle file as `--key`. Every connection asks for a fingerprint. After a reboot the agent
+is empty, so run the `ssh-add` line again.
+
+A security key works the same way: load it into the agent, and give `--key` the path of its handle
+file.
+
+The rsync transport does not use the agent key yet. For the errors, see
+[docs/troubleshooting.md](docs/troubleshooting.md).
+
 `vm exec` runs an arbitrary command on one named VM with the SSH key already in
 `fleet.json`. Everything after `--` is the remote command, so its own flags reach
 the VM. Put `sudo -n` in the remote command when you need root; there is no

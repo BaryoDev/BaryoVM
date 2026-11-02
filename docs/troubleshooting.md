@@ -3,7 +3,7 @@
 Organised by what you see. Error text marked "from sudo" or "from the Go SSH library" is not
 BaryoVM's own and can vary by version.
 
-> Not yet run against a fresh VM. The `read key`, `parse key` and `connection refused` outputs were
+> Not yet run against a fresh VM. The `read key`, `parse key`, `run ssh-add` and `connection refused` outputs were
 > produced by running the binary locally. The host key texts are quoted from the source
 > (`internal/hostkeys/hostkeys.go`).
 
@@ -34,12 +34,36 @@ saves a bad path without complaint. Run `vm add` again with the right `--key`.
 ## `parse key ...`
 
 ```text
-vm ping: parse key /tmp/badkey: ssh: no key found
+vm ping: parse key /tmp/badkey: ssh: no key found (ssh-agent: open /tmp/badkey.pub: no such file or directory)
 ```
 
-The file is not a private key (a `.pub` file, or an empty one). A key with a passphrase fails here
-too, with `ssh: this private key is passphrase protected` (from the Go SSH library). BaryoVM does
-not use `ssh-agent`, so use a key without a passphrase, such as a dedicated deploy key.
+The file is not a private key (a `.pub` file, or an empty one), and the ssh-agent fallback did not
+work either. The text in parentheses says why. A key with a passphrase, a security key handle or a
+Touch ID handle fails the first parse (`ssh: this private key is passphrase protected`, from the Go
+SSH library) and goes to the agent; see [Keys held by ssh-agent](../USAGE.md#keys-held-by-ssh-agent).
+The reasons in the parentheses are:
+
+- `SSH_AUTH_SOCK is not set`: no agent is running in this shell. Start one, or export the variable.
+- `open <key>.pub: no such file or directory`: the `.pub` is missing next to the key file.
+- `<key>.pub is not loaded, run ssh-add`: see below.
+
+## `<key>.pub is not loaded, run ssh-add`
+
+```text
+vm ping: parse key /tmp/pwkey: ssh: this private key is passphrase protected (ssh-agent: /tmp/pwkey.pub is not loaded, run ssh-add)
+```
+
+The key file could not be parsed, so BaryoVM asked ssh-agent, and the agent does not hold a key
+with the public key in that `.pub`. The agent may be empty (a reboot clears it), or it may hold
+other keys only. Load the key:
+
+```sh
+ssh-add ~/.ssh/id_ed25519                              # passphrase key
+ssh-add -S /usr/lib/ssh-keychain.dylib <handle file>   # Touch ID key on macOS
+```
+
+Then check that the key is there with `ssh-add -l`. BaryoVM matches on the public key in the
+`.pub`, so a `.pub` that belongs to a different key gives the same message.
 
 ## `ssh dial host:port: ... connection refused`, or a timeout
 

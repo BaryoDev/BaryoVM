@@ -8,7 +8,16 @@ down.
 
 - **SSH keys**. BaryoVM stores only the **path** to your private key
   (`keyPath`), never the key contents. Authentication uses your existing key
-  files (and any `ssh-agent`), exactly as your normal `ssh` does.
+  files, exactly as your normal `ssh` does.
+- **Keys in ssh-agent**. If the file at `keyPath` cannot be parsed as a private
+  key, BaryoVM reads `keyPath.pub`, opens the unix socket named by
+  `SSH_AUTH_SOCK`, lists the agent's keys, and uses the one whose public key
+  matches. The agent signs, so for these keys the private key never enters
+  BaryoVM. It still stores only the path, and the agent connection is closed
+  once the SSH handshake is done. A key file that parses is used directly and
+  the agent is not asked. If `SSH_AUTH_SOCK` is unset, the `.pub` is missing,
+  or the agent does not hold the key, the connection fails. It does not fall
+  back to another key.
 - **Fleet state**. VM and stack registrations live in `~/.baryovm/fleet.json`
   (override with `BARYOVM_HOME`), written **owner-only (`0600`)**. It contains
   hostnames, users, key paths and stack config, and **no passwords, tokens, or key
