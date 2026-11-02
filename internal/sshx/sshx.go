@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
 )
@@ -85,14 +86,11 @@ func Dial(t Target) (*Client, error) {
 	if t.Port == 0 {
 		t.Port = 22
 	}
-	key, err := os.ReadFile(expand(t.KeyPath))
+	signer, closeAgent, err := loadSigner(t.KeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("read key %s: %w", t.KeyPath, err)
+		return nil, err
 	}
-	signer, err := ssh.ParsePrivateKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("parse key %s: %w", t.KeyPath, err)
-	}
+	defer closeAgent() // signing happens during the handshake, so the agent is done once Dial returns
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	store := hostkeys.New(home()).Strict(StrictHostKeys())
 	cfg := &ssh.ClientConfig{
@@ -294,15 +292,65 @@ func SudoShell(sudo bool, cmd string) string {
 // line (authorized_keys form), so a provisioner can authorize the same key it
 // will later connect with.
 func PublicKeyFromPrivate(keyPath string) (string, error) {
+	signer, closeAgent, err := loadSigner(keyPath)
+	if err != nil {
+		return "", err
+	}
+	defer closeAgent()
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), nil
+}
+
+// loadSigner returns a signer for the key at keyPath. A key this library cannot read itself (one with
+// a passphrase, or a hardware key whose file is only a handle) is used through ssh-agent instead,
+// matched by the public key in keyPath.pub. The returned func releases the agent connection.
+func loadSigner(keyPath string) (ssh.Signer, func(), error) {
 	b, err := os.ReadFile(expand(keyPath))
 	if err != nil {
-		return "", fmt.Errorf("read key %s: %w", keyPath, err)
+		return nil, nil, fmt.Errorf("read key %s: %w", keyPath, err)
 	}
-	signer, err := ssh.ParsePrivateKey(b)
+	signer, parseErr := ssh.ParsePrivateKey(b)
+	if parseErr == nil {
+		return signer, func() {}, nil
+	}
+	signer, closeAgent, agentErr := agentSigner(expand(keyPath) + ".pub")
+	if agentErr != nil {
+		return nil, nil, fmt.Errorf("parse key %s: %w (ssh-agent: %v)", keyPath, parseErr, agentErr)
+	}
+	return signer, closeAgent, nil
+}
+
+// agentSigner finds the key named by a .pub file in the running ssh-agent.
+func agentSigner(pubPath string) (ssh.Signer, func(), error) {
+	sock := os.Getenv("SSH_AUTH_SOCK")
+	if sock == "" {
+		return nil, nil, errors.New("SSH_AUTH_SOCK is not set")
+	}
+	pubLine, err := os.ReadFile(pubPath) // #nosec G304 -- the .pub beside the key the operator configured
 	if err != nil {
-		return "", fmt.Errorf("parse key %s: %w", keyPath, err)
+		return nil, nil, err
 	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), nil
+	pub, _, _, _, err := ssh.ParseAuthorizedKey(pubLine)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", pubPath, err)
+	}
+	conn, err := net.Dial("unix", sock) // #nosec G704 -- the operator's own ssh-agent socket, a local unix path
+	if err != nil {
+		return nil, nil, err
+	}
+	closeConn := func() { _ = conn.Close() }
+	signers, err := agent.NewClient(conn).Signers()
+	if err != nil {
+		closeConn()
+		return nil, nil, err
+	}
+	want := pub.Marshal()
+	for _, s := range signers {
+		if bytes.Equal(s.PublicKey().Marshal(), want) {
+			return s, closeConn, nil
+		}
+	}
+	closeConn()
+	return nil, nil, fmt.Errorf("%s is not loaded, run ssh-add", pubPath)
 }
 
 func expand(p string) string {

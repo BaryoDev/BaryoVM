@@ -20,6 +20,15 @@ is now `BARYOVM_DEPLOY_KEY_PATH`). An unknown subcommand now exits non-zero.
 
 ### Added
 
+- **Keys held by ssh-agent.** When the file at a VM's key path cannot be parsed as a private key,
+  BaryoVM reads the `.pub` beside it, asks the agent on `SSH_AUTH_SOCK` for the key with the same
+  public key, and signs through the agent. This covers a passphrase-protected key loaded with
+  `ssh-add`, a FIDO security key, and a macOS Touch ID (Secure Enclave) key handle. `fleet.json`
+  still holds only the path. A key that parses is used directly, as before. If the agent does not
+  hold the key, the error says `run ssh-add`. Provisioning, which reads the public half of the same
+  key, takes the same path. rsync's ssh gets the same path with `-i`, and OpenSSH signs through the
+  agent, so `stack release` and `site deploy` work with these keys too (checked with a Touch ID key
+  against an Oracle Linux 9 VM).
 - **`--dry-run` on `stack release`, `stack deploy`, `stack backup`, `stack restore`, `vm bootstrap`
   and `deploy`.** Each prints the commands it would run and opens no connection. `stack release
   --dry-run` shows the rsync invocations (with `--delete` and the trailing slash), builds, hooks,
