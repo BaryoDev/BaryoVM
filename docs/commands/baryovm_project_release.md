@@ -6,8 +6,8 @@ Release every stack of a project file, in order, with no vm add or stack add
 
 Reads the project file and nothing else: not fleet.json, so a person and a CI job release the same
 thing. Stacks are released in the file's order, and the first failed release or verify stops the
-rest. Every VM needs a pinned hostKey in the file, or --strict-host-keys with its key already
-known: a project release never trusts a host on first use.
+rest. Every VM needs a pinned hostKey in the file, or its key already known: a project release
+never trusts a host on first use, and --trust-new-host does not change that.
 
 ```
 baryovm project release [flags]
@@ -35,7 +35,8 @@ baryovm project release [flags]
 
 ```
   -o, --output string      output format: human | json (default "human")
-      --strict-host-keys   refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)
+      --strict-host-keys   accepted for compatibility and does nothing: unknown hosts are refused by default (BARYOVM_STRICT_HOST_KEYS is likewise ignored)
+      --trust-new-host     learn the key of a host not seen before, on this run only (also BARYOVM_TRUST_NEW_HOST=1); a changed key is always refused
 ```
 
 ### SEE ALSO
