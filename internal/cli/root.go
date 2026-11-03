@@ -21,7 +21,8 @@ import (
 )
 
 var outputFormat string
-var strictHostKeys bool
+var strictHostKeys bool // bound so the old flag parses; never read
+var trustNewHost bool
 
 // errDryRun signals that a command stopped early because --dry-run was set.
 var errDryRun = errors.New("dry run")
@@ -38,16 +39,19 @@ func newRoot() *cobra.Command {
 			lastRun = &ranCommand{cmd: cmd, args: args, before: before}
 			ui.SetJSON(outputFormat == "json")
 			// Only apply the flag when it was actually given, so it overrides the environment
-			// rather than a default false switching strict mode off for a CI job that set it.
-			if cmd.Flags().Changed("strict-host-keys") {
-				sshx.SetStrictHostKeys(strictHostKeys)
+			// rather than a default false switching the choice off for a job that set it.
+			// --strict-host-keys is deliberately not read: it only exists so old scripts parse.
+			if cmd.Flags().Changed("trust-new-host") {
+				sshx.SetTrustNewHost(trustNewHost)
 			}
 		},
 	}
 	jsonHelp(root)
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
+	root.PersistentFlags().BoolVar(&trustNewHost, "trust-new-host", false,
+		"learn the key of a host not seen before, on this run only (also BARYOVM_TRUST_NEW_HOST=1); a changed key is always refused")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
-		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
+		"accepted for compatibility and does nothing: unknown hosts are refused by default (BARYOVM_STRICT_HOST_KEYS is likewise ignored)")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newProjectCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newPublishCmd(), newCloudCmd(), newGuardCmd(), newSiteCmd(), newRemoteGroupCmd(), newRepoCmd(), newStatusCmd(), newShipCmd(), newProveCmd())
 	rejectUnknownSubcommands(root)
 	return root

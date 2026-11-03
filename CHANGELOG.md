@@ -8,6 +8,17 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: unknown host keys are refused by default.** A host with no recorded key used to be
+  learned on first use unless `--strict-host-keys` was set. Now the command stops and prints the
+  host, key type and SHA256 fingerprint, with the `ssh-keyscan` line to record it. Add
+  `--trust-new-host` (or `BARYOVM_TRUST_NEW_HOST=1`) to learn the key on that run. A changed key is
+  refused with or without it. `project release` still refuses an unpinned VM, and `--trust-new-host`
+  does not loosen that. `--strict-host-keys` and `BARYOVM_STRICT_HOST_KEYS` are still accepted and
+  now do nothing. Scripts that relied on first-use trust need `--trust-new-host` once, or the key
+  recorded beforehand.
+
 ## [0.6.0] - 2026-11-02
 
 Ship, prove and repo commands, guarded `git`, `gh`, publish and cloud wrappers, static sites, podman,

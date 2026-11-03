@@ -32,12 +32,16 @@ down.
   next connection learns the new one. There is no flag that disables the check
   for every host. Your own `~/.ssh/known_hosts` is read as an additional source,
   never written.
-- **Host identity in CI**. Trust on first use assumes there is a first use. A
-  runner with no memory between runs would learn a key every run, which is not
-  verification. Set `BARYOVM_STRICT_HOST_KEYS=1` (or `--strict-host-keys`) and
-  BaryoVM refuses an unknown host instead of learning it, so the job fails
-  rather than trusting whatever answered. Record the key first, ideally from a
-  committed file or a secret rather than an `ssh-keyscan` at deploy time.
+- **Unknown hosts**. A host with no recorded key is refused by default. The
+  error prints the host, key type and fingerprint. `--trust-new-host` (or
+  `BARYOVM_TRUST_NEW_HOST=1`) learns it on that run only; a changed key is
+  refused either way. `--strict-host-keys` and `BARYOVM_STRICT_HOST_KEYS` are
+  accepted and ignored.
+- **Host identity in CI**. A runner with no memory between runs would learn a
+  key every run, which is not verification, so do not set `--trust-new-host`
+  there. Record the key first, ideally from a committed file or a secret rather
+  than an `ssh-keyscan` at deploy time. `project release` refuses an unpinned
+  VM when `--trust-new-host` is set.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory
   on **your** VM; that file never leaves the machine through BaryoVM.

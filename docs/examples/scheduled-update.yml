@@ -58,4 +58,4 @@ jobs:
       - name: Update
         env:
           BARYOVM_NOTIFY_URL: ${{ secrets.NOTIFY_URL }}
-        run: baryovm stack update "$STACK" --auto --strict-host-keys -o json
+        run: baryovm stack update "$STACK" --auto -o json

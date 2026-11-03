@@ -35,24 +35,31 @@ func home() string {
 	return filepath.Join(h, ".baryovm")
 }
 
-// StrictHostKeys reports whether an unknown host should be refused rather than learned.
+// TrustNewHost reports whether an unknown host may be learned on this run. Off by default: an
+// unknown host is refused, and the refusal says how to trust it. A changed key for a known host is
+// refused whatever this says.
 //
 // Read from the environment rather than passed down, because it has to reach a dial from every
 // command without threading a parameter through six engine packages that have no business knowing
-// about it. BARYOVM_STRICT_HOST_KEYS=1 is the form a CI job sets once for the whole workflow.
+// about it. BARYOVM_TRUST_NEW_HOST=1 is the environment form of --trust-new-host.
 //
-// strictOverride is what the --strict-host-keys flag sets, so the flag wins over the environment.
-var strictOverride *bool
+// trustOverride is what the --trust-new-host flag sets, so the flag wins over the environment.
+// BARYOVM_STRICT_HOST_KEYS and --strict-host-keys are no longer read: strict is the default, and
+// honouring a "=0" would let an old script quietly turn the check off.
+var trustOverride *bool
 
-// SetStrictHostKeys is how the cli layer applies its flag.
-func SetStrictHostKeys(on bool) { strictOverride = &on }
+// SetTrustNewHost is how the cli layer applies its flag.
+func SetTrustNewHost(on bool) { trustOverride = &on }
 
-// StrictHostKeys resolves the flag, then the environment.
-func StrictHostKeys() bool {
-	if strictOverride != nil {
-		return *strictOverride
+// ResetTrustNewHost drops the flag, so the environment decides again. Tests use it to isolate runs.
+func ResetTrustNewHost() { trustOverride = nil }
+
+// TrustNewHost resolves the flag, then the environment.
+func TrustNewHost() bool {
+	if trustOverride != nil {
+		return *trustOverride
 	}
-	switch os.Getenv("BARYOVM_STRICT_HOST_KEYS") {
+	switch os.Getenv("BARYOVM_TRUST_NEW_HOST") {
 	case "1", "true", "yes", "on":
 		return true
 	}
@@ -92,7 +99,7 @@ func Dial(t Target) (*Client, error) {
 	}
 	defer closeAgent() // signing happens during the handshake, so the agent is done once Dial returns
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
-	store := hostkeys.New(home()).Strict(StrictHostKeys())
+	store := hostkeys.New(home()).Strict(!TrustNewHost())
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},

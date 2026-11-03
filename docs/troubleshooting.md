@@ -145,20 +145,22 @@ baryovm vm forget-key myvm
 The next connection learns the new key and prints its fingerprint, with an `ssh-keyscan` line to
 check it.
 
-## `no recorded host key for <host>, and strict host key checking is on`
+## `unknown host key for <host>, refusing to trust it`
 
-You passed `--strict-host-keys` (or set `BARYOVM_STRICT_HOST_KEYS=1`) for a host the tool has not
-seen. The message carries the offered fingerprint and a command to record it:
+The tool has not seen this host before, and unknown hosts are refused by default. The message
+carries the key type, the offered fingerprint and a command to record it:
 
 ```text
-no recorded host key for 203.0.113.10:22, and strict host key checking is on.
+unknown host key for 203.0.113.10:22, refusing to trust it.
+  type     ssh-ed25519
   offered  SHA256:...
 ...
   ssh-keyscan -t ecdsa,ed25519 203.0.113.10 >> ~/.baryovm/known_hosts
 ```
 
-Compare the fingerprint to the machine, then run that line. Or connect once without the flag to
-learn the key. `--strict-host-keys=false` turns strict mode off for one command.
+Compare the fingerprint to the machine, then run that line. Or run the command again with
+`--trust-new-host` (or `BARYOVM_TRUST_NEW_HOST=1`) to learn the key on that run. `--strict-host-keys`
+does nothing now, since strict is the default.
 
 ## `no recorded host key for <host:port> in <path>`
 
@@ -173,7 +175,8 @@ on first use: add its public key to the file ...
 ```
 
 Add `hostKey` to the project file (`ssh-keyscan -t ed25519 <host>`, then check the fingerprint), or
-pass `--strict-host-keys` with the key already in `~/.baryovm/known_hosts`.
+have the key already in `~/.baryovm/known_hosts`. `--trust-new-host` does not help here: a release
+refuses an unpinned VM when it is set.
 
 ## `vm add` warns `could not reach ... to detect its OS`
 

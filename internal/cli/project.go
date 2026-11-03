@@ -53,8 +53,8 @@ func newProjectReleaseCmd() *cobra.Command {
 		Short: "Release every stack of a project file, in order, with no vm add or stack add",
 		Long: "Reads the project file and nothing else: not fleet.json, so a person and a CI job release the same\n" +
 			"thing. Stacks are released in the file's order, and the first failed release or verify stops the\n" +
-			"rest. Every VM needs a pinned hostKey in the file, or --strict-host-keys with its key already\n" +
-			"known: a project release never trusts a host on first use.",
+			"rest. Every VM needs a pinned hostKey in the file, or its key already known: a project release\n" +
+			"never trusts a host on first use, and --trust-new-host does not change that.",
 		Example: "  baryovm project release\n" +
 			"  baryovm project release --file deploy/baryovm.project.json --no-backup",
 		Args: cobra.NoArgs,
@@ -104,8 +104,11 @@ func newProjectReleaseCmd() *cobra.Command {
 					continue
 				}
 				if vm.HostKey == "" {
-					if !sshx.StrictHostKeys() {
-						return fail(fmt.Errorf("vms[%d].hostKey: vm %q has no pinned host key, and a project release never trusts a host on first use: add its public key to the file (`ssh-keyscan -t ed25519 %s`, check the fingerprint) or pass --strict-host-keys with the key already in known_hosts", i, vm.Name, vm.Host))
+					// Connections are strict by default, so an unpinned VM only gets through when its key
+					// is already recorded. --trust-new-host would let the connect learn it, which is
+					// exactly the first use a release refuses, so it is not allowed to loosen this.
+					if sshx.TrustNewHost() {
+						return fail(fmt.Errorf("vms[%d].hostKey: vm %q has no pinned host key, and a project release never trusts a host on first use, with or without --trust-new-host: add its public key to the file (`ssh-keyscan -t ed25519 %s`, check the fingerprint) or drop --trust-new-host and have the key already in known_hosts", i, vm.Name, vm.Host))
 					}
 					continue
 				}
@@ -198,7 +201,7 @@ func newProjectExportCmd() *cobra.Command {
 			for _, v := range p.VMs {
 				if v.HostKey == "" {
 					unpinned = append(unpinned, v.Name)
-					ui.Warnf("vm %s has no host key in known_hosts, so it is not pinned: add hostKey before `project release`, or release with --strict-host-keys", v.Name)
+					ui.Warnf("vm %s has no host key in known_hosts, so it is not pinned: add hostKey before `project release`, or have its key already in known_hosts", v.Name)
 				}
 			}
 			ui.Emit(ui.Result{OK: true, Action: action, Message: "wrote " + out,

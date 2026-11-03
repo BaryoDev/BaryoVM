@@ -66,20 +66,37 @@ the machine, `baryovm vm forget-key <name-or-host>` drops the old key and the
 next connection learns the new one. There is no flag that turns the check off
 for every host.
 
-### Host keys in CI
+### Unknown hosts are refused
 
-Trust on first use assumes there is a first use. A CI runner has no memory
-between runs, so every run is the first one, and learning a key on each run
-means trusting whatever answers on that address, every time, with a key that can
-dump your database.
-
-Strict mode refuses to learn. An unknown host is an error:
+A host with no recorded key is refused. The error prints the host, the key type
+and the SHA256 fingerprint, and says how to trust it. Check the fingerprint
+against the machine, then either record the key:
 
 ```sh
-export BARYOVM_STRICT_HOST_KEYS=1     # or --strict-host-keys
+ssh-keyscan -t ecdsa,ed25519 "$VM_HOST" >> ~/.baryovm/known_hosts
 ```
 
-So a CI job records the key first, and fails rather than trusting a new one:
+or learn it on one run with `--trust-new-host` (or `BARYOVM_TRUST_NEW_HOST=1`):
+
+```sh
+baryovm vm ping myvm --trust-new-host
+```
+
+The key is recorded, so later runs need no flag. A changed key for a known host
+is refused with or without the flag; `vm forget-key` is the way to accept one.
+
+`--strict-host-keys` and `BARYOVM_STRICT_HOST_KEYS` are still accepted so old
+scripts parse, and do nothing: strict is the default. Before 0.7.0 an unknown
+host was learned unless one of them was set.
+
+### Host keys in CI
+
+A CI runner has no memory between runs, so every run is the first one, and
+learning a key on each run means trusting whatever answers on that address,
+every time, with a key that can dump your database. That is why the default
+refuses, and why a job should not set `--trust-new-host`.
+
+Record the key first, and the job fails rather than trusting a new one:
 
 ```yaml
 - name: Pin the host key
@@ -88,17 +105,12 @@ So a CI job records the key first, and fails rather than trusting a new one:
     ssh-keyscan -t ecdsa,ed25519 "$VM_HOST" >> ~/.baryovm/known_hosts
 
 - name: Deploy
-  env:
-    BARYOVM_STRICT_HOST_KEYS: "1"
   run: baryovm stack release myapp
 ```
 
 Better still, commit the expected `known_hosts` or keep it in a secret, so the
 pin is reviewed rather than fetched from the network on every run. `ssh-keyscan`
 at deploy time trusts whatever answers; a committed file does not.
-
-The flag beats the environment, so `--strict-host-keys=false` is how a human
-turns it off for one command on a machine where the workflow sets it globally.
 
 ### Keys held by ssh-agent
 
@@ -1111,7 +1123,7 @@ partial. Each stack goes through the same code as `stack release` (backup first,
 compose up, verify), so a safeguard added to one is in the other.
 
 It never trusts a host on first use. Each VM needs a pinned `hostKey`, or the run needs
-`--strict-host-keys` (or `BARYOVM_STRICT_HOST_KEYS=1`) with the key already in known_hosts. A pinned
+the key already in known_hosts. `--trust-new-host` does not loosen this: with it set, an unpinned VM is refused. A pinned
 key is held for that run only and never written to disk, so a committed file cannot change what the
 machine trusts. If `$BARYOVM_HOME/known_hosts` or `~/.ssh/known_hosts` already holds a different key
 for the host, the release stops, as any changed key does. A fresh runner has no recorded keys, so the

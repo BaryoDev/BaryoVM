@@ -10,10 +10,13 @@
 // about to do next, which includes pg_dump output streamed over the session and the contents of a
 // stack's config file.
 //
-// Trust on first use, then refuse on change:
+// Trust on first use, then refuse on change. The store itself learns by default; the CLI turns on
+// Strict unless the operator passes --trust-new-host, so from the command line the first use is an
+// explicit choice:
 //
 //   - Unknown host: record the key, print the fingerprint, continue. This is the fresh VM case and
-//     it is the one time a key can be learned without a second channel to check it against.
+//     it is the one time a key can be learned without a second channel to check it against. In
+//     Strict mode it is refused instead, with the fingerprint and how to trust it.
 //   - Known host, same key: continue silently.
 //   - Known host, different key: refuse, print both fingerprints, and name the one command that
 //     accepts the new key for that host. There is deliberately no flag that turns the check off
@@ -71,23 +74,27 @@ func (e *ErrChanged) Error() string {
 // fingerprint so an operator can pin it after checking it, rather than having to go and fetch it.
 type ErrUnknownHost struct {
 	Host    string
+	KeyType string // algorithm of the offered key, e.g. ssh-ed25519
 	Offered string
 	Store   string
 }
 
 func (e *ErrUnknownHost) Error() string {
 	return fmt.Sprintf(
-		"no recorded host key for %s, and strict host key checking is on.\n"+
+		"unknown host key for %s, refusing to trust it.\n"+
+			"  type     %s\n"+
 			"  offered  %s\n"+
 			"\n"+
-			"Strict mode refuses to learn a key, because there is nobody here to check it. A runner\n"+
+			"BaryoVM does not learn a key by itself, because nobody has checked this one. A runner\n"+
 			"with no memory between runs would otherwise trust whatever answers on this address,\n"+
 			"every run.\n"+
 			"\n"+
-			"Check that fingerprint against the machine, then record it before this runs:\n"+
+			"Check that fingerprint against the machine, then either record it:\n"+
 			"\n"+
-			"  %s >> %s\n",
-		e.Host, e.Offered, Keyscan(e.Host), e.Store)
+			"  %s >> %s\n"+
+			"\n"+
+			"or learn it on this run only, by adding --trust-new-host (or BARYOVM_TRUST_NEW_HOST=1).\n",
+		e.Host, e.KeyType, e.Offered, Keyscan(e.Host), e.Store)
 }
 
 // Keyscan is the ssh-keyscan command that fetches a host's ecdsa and ed25519 keys. ssh-keyscan
@@ -195,7 +202,7 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 
 		// Unknown everywhere: the fresh VM case.
 		if s.strict {
-			return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+			return &ErrUnknownHost{Host: hostname, KeyType: key.Type(), Offered: offered, Store: s.path}
 		}
 		// Learn it.
 		if err := s.add(hostname, key); err != nil {
