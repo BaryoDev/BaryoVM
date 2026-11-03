@@ -246,6 +246,27 @@ func TestStrictRefusesAnUnknownHost(t *testing.T) {
 	}
 }
 
+// Strict is the default for the CLI, so the refusal is what a first-time user reads. It names the
+// host, the key type and the fingerprint to check, and both ways to trust it.
+func TestUnknownHostRefusalNamesHostKeyTypeFingerprintAndTheWayToTrustIt(t *testing.T) {
+	s := newStore(t).Strict(true)
+	key := newKey(t)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), key)
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) {
+		t.Fatalf("want ErrUnknownHost, got %T: %v", err, err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"192.0.2.10", key.Type(), ssh.FingerprintSHA256(key), "--trust-new-host", "ssh-keyscan"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal must mention %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "strict host key checking is on") {
+		t.Errorf("strict is the default now, so the message must not present it as an opt-in:\n%s", msg)
+	}
+}
+
 // Refusing must not write anything: a strict run that recorded the key would have learned it, which
 // is the thing strict mode forbids.
 func TestStrictLearnsNothing(t *testing.T) {

@@ -39,7 +39,7 @@ func projectDir(t *testing.T, mutate func(p map[string]any)) (string, string) {
 	t.Helper()
 	t.Setenv("BARYOVM_HOME", t.TempDir())
 	t.Setenv("BARYOVM_DEPLOY_KEY_PATH", "/keys/ci-id")
-	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+	t.Setenv("BARYOVM_TRUST_NEW_HOST", "")
 	dir := t.TempDir()
 	hostKey := newHostKey(t)
 
@@ -217,12 +217,15 @@ func TestProjectReleaseHonoursTheOrderField(t *testing.T) {
 }
 
 // Risk: a host key is missing in CI and the release trusts first use.
-func TestProjectReleaseRequiresAPinnedHostKeyOrStrictHostKeys(t *testing.T) {
+func TestProjectReleaseRequiresAPinnedHostKeyEvenWithTrustNewHost(t *testing.T) {
 	dir, _ := projectDir(t, func(p map[string]any) {
 		delete(p["vms"].([]any)[0].(map[string]any), "hostKey")
 	})
 	file := filepath.Join(dir, fleet.DefaultProjectFile)
 
+	// --trust-new-host (sshx.TrustNewHost) is how an interactive command learns a host. A release
+	// must not take it as leave to learn one: an unpinned VM is refused before anything connects.
+	t.Setenv("BARYOVM_TRUST_NEW_HOST", "1")
 	f := &fakeRunner{answers: verifyAnswers("api", "console", "site")}
 	stdout, dialed, err := projectRun(t, f, "--file", file)
 	if err == nil || !strings.Contains(err.Error(), "vms[0].hostKey") || !strings.Contains(err.Error(), "first use") {
@@ -235,12 +238,12 @@ func TestProjectReleaseRequiresAPinnedHostKeyOrStrictHostKeys(t *testing.T) {
 		t.Error("the refusal must be reported as a failure")
 	}
 
-	// --strict-host-keys is the same switch as BARYOVM_STRICT_HOST_KEYS=1 (sshx.StrictHostKeys): the
-	// unknown host is then refused at connect, so a missing pin cannot become a learned one.
-	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "1")
+	// Without it the connect is strict by default, so a missing pin cannot become a learned one and
+	// the release goes on to that strict connect.
+	t.Setenv("BARYOVM_TRUST_NEW_HOST", "")
 	f = &fakeRunner{answers: verifyAnswers("api", "console", "site")}
 	if _, _, err := projectRun(t, f, "--file", file); err != nil {
-		t.Errorf("strict mode should let an unpinned VM through to the strict connect: %v", err)
+		t.Errorf("an unpinned VM should reach the strict connect by default: %v", err)
 	}
 }
 
@@ -356,7 +359,7 @@ func TestProjectReleaseResolvesManifestsRelativeToTheFile(t *testing.T) {
 func TestProjectExportProducesAFileProjectReleaseAccepts(t *testing.T) {
 	t.Setenv("BARYOVM_HOME", t.TempDir())
 	t.Setenv("BARYOVM_DEPLOY_KEY_PATH", "/keys/ci-id")
-	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+	t.Setenv("BARYOVM_TRUST_NEW_HOST", "")
 	out := t.TempDir()
 
 	var stacks []fleet.Stack
