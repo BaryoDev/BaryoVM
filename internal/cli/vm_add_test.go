@@ -196,6 +196,7 @@ func TestVMAddDetectionFailureKeepsTheErrorAndDoesNotSayUnreachable(t *testing.T
 		}
 	}()
 	host, port, _ := net.SplitHostPort(l.Addr().String())
+	t.Setenv("BARYOVM_TRUST_NEW_HOST", "1")
 
 	_, stderr, err := runCmdE(t, newVMAddCmd(), nil, false, "box", "--host", host, "--port", port, "--key", writeTestKey(t))
 	if err != nil {
