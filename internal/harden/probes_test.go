@@ -246,9 +246,15 @@ func newProbeEnv(t *testing.T) *probeEnv {
 		}
 	}
 	// sudo runs the command, and drops -o and -g from install because the tests are not root
-	stub("sudo", `[ "$1" = "-n" ] && shift
+	stub("sudo", `if [ "$1" != "-n" ]; then echo "sudo without -n: $*" >> "$STUB_LOG"; fi
+[ "$1" = "-n" ] && shift
+if [ "$1" = "cat" ] && [ -n "${STUB_CAT_FAIL:-}" ] && [[ "$*" == *"$STUB_CAT_FAIL"* ]]; then exit 1; fi
+if [ "$1" = "tee" ] && [ -n "${STUB_TEE_FAIL:-}" ] && [[ "$*" == *"$STUB_TEE_FAIL"* ]] && [ ! -e "$STUB_LOG.teefail" ]; then
+  touch "$STUB_LOG.teefail"; exit 1
+fi
 if [ "$1" = "install" ]; then
   shift
+  if [ -n "${STUB_INSTALL_FAIL:-}" ] && [[ "${*: -1}" == *"$STUB_INSTALL_FAIL"* ]]; then exit 1; fi
   args=()
   while [ $# -gt 0 ]; do
     case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
@@ -384,6 +390,18 @@ func TestPHPTierDecision(t *testing.T) {
 				t.Errorf("fastcgi_pass under --nginx-no-php was not reported:\n%s", out)
 			}
 		})
+	}
+}
+
+func TestEveryProbeSudoIsNonInteractive(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	out, code := e.run(Options{NginxBanProbes: true, NginxDropProbes: true}, false)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if strings.Contains(e.calls(), "sudo without -n") {
+		t.Errorf("a probe command ran sudo without -n:\n%s", e.calls())
 	}
 }
 

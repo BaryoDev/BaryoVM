@@ -154,7 +154,7 @@ func nginxProbesAt(o Options, root string) string {
 PROBE_ERR=""
 NOPHP=` + nophp + `
 if command -v nginx >/dev/null 2>&1; then
-  NGXP=$(sudo nginx -T 2>/dev/null)
+  NGXP=$(sudo -n nginx -T 2>/dev/null)
   PHPTIER=0
   if [ -z "$NGXP" ]; then
     say nginx-probes ` + StateReport + ` "nginx -T printed nothing (the config does not load), so the scanner jail and the drop step were not looked at"
@@ -199,7 +199,7 @@ func probeJailSection(o Options, root string) string {
 `
 	if !o.NginxBanProbes {
 		return head + `
-      if sudo test -f "$PJAIL" || sudo test -f "$PFILTER"; then
+      if sudo -n test -f "$PJAIL" || sudo -n test -f "$PFILTER"; then
         say nginx-probes ` + StateReport + ` "an earlier run wrote $PJAIL. It is left as it is and not updated. The scanner jail bans sources that request paths like .env and .git (path only, never the query string); run with --nginx-ban-probes to update it"
       else
         say nginx-probes ` + StateReport + ` "a fail2ban jail for nginx scanners is available: it bans sources that request .env, .git, .aws and similar paths. Two tradeoffs: another site can make a visitor's browser request such a path, and behind a CDN or load balancer the ban lands on the proxy. Enable it with --nginx-ban-probes"
@@ -244,21 +244,21 @@ func probeJailSection(o Options, root string) string {
         done
       } > "$NEWJAIL"
 
-      if sudo test -f "$PFILTER" && sudo cmp -s "$NEWFILT" "$PFILTER" && sudo test -f "$PJAIL" && sudo cmp -s "$NEWJAIL" "$PJAIL"; then
+      if sudo -n test -f "$PFILTER" && sudo -n cmp -s "$NEWFILT" "$PFILTER" && sudo -n test -f "$PJAIL" && sudo -n cmp -s "$NEWJAIL" "$PJAIL"; then
         say nginx-probes already-correct "scanner jail and filter match policy: $TIER"
       elif [ "$DRY" = "1" ]; then
         say nginx-probes would-apply "$PFILTER and $PJAIL would be written: $TIER"
       else
         PREVFILT=""
         PREVJAIL2=""
-        if sudo test -f "$PFILTER"; then PREVFILT=$(mktemp); sudo cat "$PFILTER" > "$PREVFILT"; fi
-        if sudo test -f "$PJAIL"; then PREVJAIL2=$(mktemp); sudo cat "$PJAIL" > "$PREVJAIL2"; fi
-        sudo mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")"
-        sudo install -m 644 -o root -g root "$NEWFILT" "$PFILTER"
-        sudo install -m 644 -o root -g root "$NEWJAIL" "$PJAIL"
-        if sudo fail2ban-client -t >/dev/null 2>&1; then
-          sudo systemctl enable --now fail2ban >/dev/null 2>&1
-          if sudo systemctl reload fail2ban >/dev/null 2>&1 || sudo systemctl restart fail2ban >/dev/null 2>&1; then
+        if sudo -n test -f "$PFILTER"; then PREVFILT=$(mktemp); sudo -n cat "$PFILTER" > "$PREVFILT"; fi
+        if sudo -n test -f "$PJAIL"; then PREVJAIL2=$(mktemp); sudo -n cat "$PJAIL" > "$PREVJAIL2"; fi
+        sudo -n mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")"
+        sudo -n install -m 644 -o root -g root "$NEWFILT" "$PFILTER"
+        sudo -n install -m 644 -o root -g root "$NEWJAIL" "$PJAIL"
+        if sudo -n fail2ban-client -t >/dev/null 2>&1; then
+          sudo -n systemctl enable --now fail2ban >/dev/null 2>&1
+          if sudo -n systemctl reload fail2ban >/dev/null 2>&1 || sudo -n systemctl restart fail2ban >/dev/null 2>&1; then
             say nginx-probes applied "wrote $PFILTER and $PJAIL and reloaded fail2ban: $TIER"
           else
             PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the scanner jail files were written and fail2ban accepted them, but fail2ban could not be reloaded or restarted, so the jail is not active"
@@ -266,8 +266,8 @@ func probeJailSection(o Options, root string) string {
         else
           # Same reasoning as jail.local: a rejected file must not cost the host the one
           # it already had.
-          if [ -n "$PREVFILT" ]; then sudo install -m 644 -o root -g root "$PREVFILT" "$PFILTER"; else sudo rm -f "$PFILTER"; fi
-          if [ -n "$PREVJAIL2" ]; then sudo install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL"; else sudo rm -f "$PJAIL"; fi
+          if [ -n "$PREVFILT" ]; then sudo -n install -m 644 -o root -g root "$PREVFILT" "$PFILTER"; else sudo -n rm -f "$PFILTER"; fi
+          if [ -n "$PREVJAIL2" ]; then sudo -n install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL"; else sudo -n rm -f "$PJAIL"; fi
           PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
         fi
         [ -n "$PREVFILT" ] && rm -f "$PREVFILT"
@@ -295,7 +295,7 @@ func probeDropSection(o Options, root string) string {
     ODDLIST=""
     for f in $NGXFILES; do
       case "$f" in "$PMAP"|"$PSNIP") continue ;; esac
-      OUT=$(sudo cat "$f" 2>/dev/null | awk -v mode=count -v inc="$PINC" "$INCAWK")
+      OUT=$(sudo -n cat "$f" 2>/dev/null | awk -v mode=count -v inc="$PINC" "$INCAWK")
       N=$(echo "$OUT" | head -1)
       case "$N" in ''|*[!0-9]*) N=0 ;; esac
       if [ "$N" -gt 0 ]; then LACK=$((LACK + N)); LACKFILES="$LACKFILES $f"; fi
@@ -342,7 +342,7 @@ func probeDropSection(o Options, root string) string {
       echo '}'
     } > "$NEWSNIP"
 
-    if [ "$LACK" = "0" ] && sudo test -f "$PMAP" && sudo cmp -s "$NEWMAP" "$PMAP" && sudo test -f "$PSNIP" && sudo cmp -s "$NEWSNIP" "$PSNIP"; then
+    if [ "$LACK" = "0" ] && sudo -n test -f "$PMAP" && sudo -n cmp -s "$NEWMAP" "$PMAP" && sudo -n test -f "$PSNIP" && sudo -n cmp -s "$NEWSNIP" "$PSNIP"; then
       if [ "$ODD" = "0" ]; then
         say nginx-drop already-correct "map, snippet and the include in every server block match policy: $TIER"
       fi
@@ -350,22 +350,22 @@ func probeDropSection(o Options, root string) string {
       say nginx-drop would-apply "$PMAP and $PSNIP would be written and $PINC added to $LACK server block(s): $TIER"
     else
       BK=$(mktemp -d)
-      if sudo test -f "$PMAP"; then sudo cat "$PMAP" > "$BK/map"; fi
-      if sudo test -f "$PSNIP"; then sudo cat "$PSNIP" > "$BK/snip"; fi
-      for f in $LACKFILES; do sudo cat "$f" > "$BK/file.$(echo "$f" | tr '/' '_')"; done
+      if sudo -n test -f "$PMAP"; then sudo -n cat "$PMAP" > "$BK/map"; fi
+      if sudo -n test -f "$PSNIP"; then sudo -n cat "$PSNIP" > "$BK/snip"; fi
+      for f in $LACKFILES; do sudo -n cat "$f" > "$BK/file.$(echo "$f" | tr '/' '_')"; done
       WROTE=1
-      sudo mkdir -p "$(dirname "$PMAP")" "$(dirname "$PSNIP")" || WROTE=0
-      sudo install -m 644 -o root -g root "$NEWMAP" "$PMAP" || WROTE=0
-      sudo install -m 644 -o root -g root "$NEWSNIP" "$PSNIP" || WROTE=0
+      sudo -n mkdir -p "$(dirname "$PMAP")" "$(dirname "$PSNIP")" || WROTE=0
+      sudo -n install -m 644 -o root -g root "$NEWMAP" "$PMAP" || WROTE=0
+      sudo -n install -m 644 -o root -g root "$NEWSNIP" "$PSNIP" || WROTE=0
       for f in $LACKFILES; do
         EDITED=$(mktemp)
-        sudo cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED"
-        sudo tee "$f" < "$EDITED" >/dev/null
+        sudo -n cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED"
+        sudo -n tee "$f" < "$EDITED" >/dev/null
         rm -f "$EDITED"
       done
       NGXTOUT="could not write the map or the snippet"
-      if [ "$WROTE" = "1" ] && NGXTOUT=$(sudo nginx -t 2>&1); then
-        if sudo systemctl reload nginx >/dev/null 2>&1 || sudo nginx -s reload >/dev/null 2>&1; then
+      if [ "$WROTE" = "1" ] && NGXTOUT=$(sudo -n nginx -t 2>&1); then
+        if sudo -n systemctl reload nginx >/dev/null 2>&1 || sudo -n nginx -s reload >/dev/null 2>&1; then
           say nginx-drop applied "wrote $PMAP and $PSNIP, added $PINC to $LACK server block(s), reloaded nginx: $TIER"
         else
           PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the drop step was written and nginx -t passed, but nginx could not be reloaded, so the running nginx does not drop probes yet"
@@ -376,9 +376,9 @@ func probeDropSection(o Options, root string) string {
         # Say where nginx complained, since a stream or mail block in an included file
         # is the usual cause and the awk cannot see it.
         WHERE=$(echo "$NGXTOUT" | sed -n 's/.* in \(\/[^ ]*:[0-9][0-9]*\).*/\1/p' | head -1 | tr -cd '[:print:]')
-        for f in $LACKFILES; do sudo tee "$f" < "$BK/file.$(echo "$f" | tr '/' '_')" >/dev/null; done
-        if [ -f "$BK/map" ]; then sudo tee "$PMAP" < "$BK/map" >/dev/null; else sudo rm -f "$PMAP"; fi
-        if [ -f "$BK/snip" ]; then sudo tee "$PSNIP" < "$BK/snip" >/dev/null; else sudo rm -f "$PSNIP"; fi
+        for f in $LACKFILES; do sudo -n tee "$f" < "$BK/file.$(echo "$f" | tr '/' '_')" >/dev/null; done
+        if [ -f "$BK/map" ]; then sudo -n tee "$PMAP" < "$BK/map" >/dev/null; else sudo -n rm -f "$PMAP"; fi
+        if [ -f "$BK/snip" ]; then sudo -n tee "$PSNIP" < "$BK/snip" >/dev/null; else sudo -n rm -f "$PSNIP"; fi
         REASON="nginx -t rejected the drop step at ${WHERE:-an unknown file and line}"
         [ "$WROTE" = "1" ] || REASON="the map or the snippet could not be written"
         PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$REASON, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
