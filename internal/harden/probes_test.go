@@ -370,14 +370,14 @@ func TestPHPTierDecision(t *testing.T) {
 			if got := strings.Contains(filter, `\.php`) && strings.Contains(filter, "/wp-"); got != c.wantPHP {
 				t.Errorf("filter has the PHP tier = %v, want %v:\n%s", got, c.wantPHP, filter)
 			}
-			if got := strings.Contains(mapf, `"~\.php`) && strings.Contains(mapf, "/wp-"); got != c.wantPHP {
+			if got := strings.Contains(mapf, `"~*\.php`) && strings.Contains(mapf, "/wp-"); got != c.wantPHP {
 				t.Errorf("map has the PHP tier = %v, want %v:\n%s", got, c.wantPHP, mapf)
 			}
 			if !strings.Contains(out, c.wantDetail) {
 				t.Errorf("detail %q missing from:\n%s", c.wantDetail, out)
 			}
 			// the core list is always there
-			if !strings.Contains(filter, `/\.(?:env|git`) || !strings.Contains(mapf, `"~/\.(?:env|git`) {
+			if !strings.Contains(filter, `/\.(?:env|git`) || !strings.Contains(mapf, `"~*/\.(?:env|git`) {
 				t.Error("the core list is missing")
 			}
 			if c.noPHP && c.fastcgi && !strings.Contains(out, "CHANGE|nginx-php|report|") {
