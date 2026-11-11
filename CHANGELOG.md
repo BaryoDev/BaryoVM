@@ -10,14 +10,17 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Added
 
-- **`vm harden` bans nginx scanners.** When nginx and fail2ban are both present it writes a
-  `baryovm-nginx-probes` filter and jail in their own files (`jail.local` is not touched). The
-  jail watches every absolute `access_log` path in `nginx -T` and bans sources asking for
-  `.env`, `.git`, `.aws`, `php://`, `/proc/self/environ` and similar paths, never
-  `/.well-known/`. PHP and WordPress paths are added only when `nginx -T` has no `fastcgi_pass`.
+- **`vm harden` can ban nginx scanners.** `--nginx-ban-probes` writes a `baryovm-nginx-probes`
+  filter and jail in their own files (`jail.local` is not touched). The jail watches every absolute
+  `access_log` path in `nginx -T` and bans sources whose request path asks for `.env`, `.git`,
+  `.aws`, `/proc/self/environ` and similar, never `/.well-known/` and never from the query string.
+  PHP and WordPress paths are added only when `nginx -T` has no `fastcgi_pass`. It is opt in because
+  another site can make a visitor's browser request such a path, and because behind a CDN or load
+  balancer without `set_real_ip_from` it would ban the proxy (private ranges are never banned, and
+  the run reports the missing `set_real_ip_from`). Without the flag the run only reports the jail.
   `--nginx-drop-probes` also answers those requests with 444 through a map and one include line
   per `server {` block, with every touched file backed up, `nginx -t` checked, and all files
-  restored on failure. Without the flag, the run reports how many server blocks lack the include.
+  restored on failure. Without it, the run reports how many server blocks lack the include.
 
 ## [0.6.0] - 2026-11-02
 

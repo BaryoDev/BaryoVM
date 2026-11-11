@@ -24,7 +24,6 @@ var (
 	probeCore = []string{
 		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)(?:[^A-Za-z0-9]|$)`,
 		`vendor/phpunit`,
-		`php://`,
 		`/proc/self/environ`,
 		`etc/passwd`,
 		`jndi:`,
@@ -45,11 +44,17 @@ const (
 	probeSnippet    = "/etc/nginx/baryovm/drop-probes.conf"
 	probeDefaultLog = "/var/log/nginx/access.log"
 
+	// probeIgnoreIP keeps jail.local's list through known/ and adds the private ranges, so
+	// a proxy or load balancer on a private address is never banned.
+	probeIgnoreIP = "ignoreip = %(known/ignoreip)s 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"
+
 	// probeFailPrefix and probeFailSuffix wrap the alternation of paths. The shape is the
 	// start of the nginx combined and main formats: address, identd, user, time, then the
-	// request line. \S* on both sides means the pattern can sit anywhere in the target,
-	// query string included, so php://filter in a parameter is caught.
-	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]+\] "[A-Z]+ \S*(?:`
+	// request line.
+	//	// query string excluded: [^?\s]* cannot cross a ?, so only the path can trigger a ban.
+	// A page on another site can make a visitor's browser request /.env or /?x=/.env, and
+	// that must not ban the visitor. The nginx map is on $uri, which has no query either.
+	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]+\] "[A-Z]+ [^?\s]*(?:`
 	probeFailSuffix = `)\S* HTTP/[0-9.]+"`
 )
 
@@ -137,17 +142,38 @@ fi
 `
 }
 
-// probeJailSection writes the filter and the jail. It restores what was there, or removes
+// probeJailSection is opt in (--nginx-ban-probes). Two tradeoffs are why: a page on another
+// site can make a visitor's browser request a scanner path, and behind a proxy that nginx
+// does not see through the jail would ban the proxy. Without the flag it only reports, and
+// it never removes a jail file an earlier run wrote. With it, it writes the filter and the
+// jail. It restores what was there, or removes
 // what it created, when fail2ban -t rejects the result, and reloads only on success.
 func probeJailSection(o Options) string {
-	return `
+	head := `
     if ! command -v fail2ban-client >/dev/null 2>&1; then
       say nginx-probes skipped "fail2ban is not installed, so there is nothing to ban scanners with"
     else
       PFILTER=` + sshx.Quote(probeFilterFile) + `
       PJAIL=` + sshx.Quote(probeJailFile) + `
+`
+	if !o.NginxBanProbes {
+		return head + `
+      if sudo test -f "$PJAIL" || sudo test -f "$PFILTER"; then
+        say nginx-probes ` + StateReport + ` "an earlier run wrote $PJAIL. It is left as it is and not updated. The scanner jail bans sources that request paths like .env and .git (path only, never the query string); run with --nginx-ban-probes to update it"
+      else
+        say nginx-probes ` + StateReport + ` "a fail2ban jail for nginx scanners is available: it bans sources that request .env, .git, .aws and similar paths. Two tradeoffs: another site can make a visitor's browser request such a path, and behind a CDN or load balancer the ban lands on the proxy. Enable it with --nginx-ban-probes"
+      fi
+    fi
+`
+	}
+	return head + `
       LOGS=$(echo "$NGXP" | awk ` + sshx.Quote(logpathAwk) + ` | sort -u)
       [ -z "$LOGS" ] && LOGS=` + sshx.Quote(probeDefaultLog) + `
+      # nginx logs the connecting address. Without set_real_ip_from that is the proxy's,
+      # and the jail would ban the proxy and cut off everyone behind it.
+      if ! echo "$NGXP" | grep -qE '^[[:space:]]*set_real_ip_from[[:space:]]'; then
+        say nginx-realip ` + StateReport + ` "nginx has no set_real_ip_from, so it logs the connecting address. Behind a CDN or load balancer the scanner jail would ban the proxy and cut off everyone. Configure set_real_ip_from first"
+      fi
       PHPALT=""
       if [ "$PHPTIER" = "1" ]; then
         PHPALT=` + sshx.Quote("|"+strings.Join(probePHP, "|")) + `
@@ -168,7 +194,8 @@ func probeJailSection(o Options) string {
         echo "filter = baryovm-nginx-probes"
         echo "backend = auto"
         echo "port = http,https"
-        echo "maxretry = 3"
+        echo '` + probeIgnoreIP + `'
+        echo "maxretry = 5"
         echo "findtime = 10m"
         FIRSTLOG=1
         for lp in $LOGS; do

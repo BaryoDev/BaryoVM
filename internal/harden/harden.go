@@ -54,6 +54,10 @@ type Options struct {
 	// server block, so scanner requests get 444 before they reach an app. Without it the
 	// run only reports how many server blocks lack the include.
 	NginxDropProbes bool
+	// NginxBanProbes writes the fail2ban jail for nginx scanners. It is opt in: another
+	// site can make a visitor's browser request a scanner path, and behind a proxy nginx
+	// does not see through the jail would ban the proxy. Without it the run only reports.
+	NginxBanProbes bool
 }
 
 const sshdDropIn = "/etc/ssh/sshd_config.d/10-baryovm-hardening.conf"

@@ -281,6 +281,7 @@ baryovm vm harden oracle --dry-run   # report what would change, write nothing
 baryovm vm harden oracle             # apply it
 baryovm vm harden oracle --ignore 10.0.0.0/24   # never ban this range
 baryovm vm harden oracle --ssh-from 203.0.113.7/32   # limit port 22 to this range
+baryovm vm harden oracle --nginx-ban-probes    # ban nginx scanners with fail2ban
 baryovm vm harden oracle --nginx-drop-probes   # also answer scanner requests with 444
 
 baryovm vm threats oracle                    # the last 24 hours
@@ -314,7 +315,6 @@ Fixed (a dry run prints these as `would-apply`):
   still shows another algorithm first, it reports that the policy needs a subpolicy. If
   OpenSSH has neither hybrid, it reports that and changes nothing.
 - nginx `server_tokens off`, written to `conf.d` and reloaded only if `nginx -t` passes.
-- A fail2ban jail for nginx scanners, when nginx and fail2ban are both present. See below.
 
 Reported only (shown as warnings, counted separately, never changed):
 
@@ -338,17 +338,28 @@ prefix. An IPv6 client is accepted only with `::/0`. Without `--ssh-from`, a 22 
 
 ### Banning nginx scanners
 
-Scanners ask nginx for `.env`, `.git`, `.aws` and similar paths. `vm harden` writes
+Scanners ask nginx for `.env`, `.git`, `.aws` and similar paths. `--nginx-ban-probes` writes
 `/etc/fail2ban/filter.d/baryovm-nginx-probes.conf` and
-`/etc/fail2ban/jail.d/baryovm-nginx-probes.local`, and leaves `jail.local` and its sshd jail
-alone. The jail uses `backend = auto` (`jail.local` sets `systemd` for sshd), reads every
+`/etc/fail2ban/jail.d/baryovm-nginx-probes.local` when nginx and fail2ban are both present,
+and leaves `jail.local` and its sshd jail alone. It is opt in because of two tradeoffs.
+Another site can make a visitor's browser request `/.env` (an image tag is enough), so a
+real visitor can be banned: the jail allows five matching requests in ten minutes, and the
+filter reads the path only, never the query string. And behind a CDN or load balancer nginx
+logs the proxy's address unless `set_real_ip_from` is set, so the jail would ban the proxy:
+the run still writes the jail but reports `nginx-realip` when `nginx -T` has no
+`set_real_ip_from`, and the jail never bans private ranges (`ignoreip` keeps the `jail.local`
+list through `%(known/ignoreip)s` and adds 10/8, 172.16/12, 192.168/16, 100.64/10 and fc00::/7).
+Without the flag the run only reports that the jail is available. A jail file written by an
+earlier run is left as it is and reported, not deleted or updated.
+
+The jail uses `backend = auto` (`jail.local` sets `systemd` for sshd), reads every
 absolute `access_log` path in `nginx -T` (`off`, `syslog:`, relative paths and paths with a
 variable are skipped, and `/var/log/nginx/access.log` is the default), and takes its ban time
 from the existing `bantime.increment` setting, so repeat sources already escalate.
 
 The filter matches paths no site serves: the dotfiles `.env*`, `.git`, `.aws`, `.ssh`, `.svn`,
-`.hg`, `.htpasswd`, `.npmrc` and `.DS_Store`, plus `vendor/phpunit`, `php://`,
-`/proc/self/environ`, `etc/passwd` and `jndi:`. It never matches `/.well-known/`. The PHP and
+`.hg`, `.htpasswd`, `.npmrc` and `.DS_Store`, plus `vendor/phpunit`,
+`/proc/self/environ`, `etc/passwd` and `jndi:`, all in the request path. It never matches `/.well-known/`. The PHP and
 WordPress paths (`*.php`, `wp-admin`, `wp-login`, `wp-content`, `wp-includes`, `xmlrpc`) are
 added only when `nginx -T` has no `fastcgi_pass`. On a host that runs PHP the run reports
 that and keeps the narrow list. The detail of the change says which list was used. The files
@@ -364,8 +375,8 @@ Every touched file is backed up first, `nginx -t` must pass, every file is resto
 does not, and nginx is reloaded only on success. The map must load before the server blocks
 that use it, which `nginx -t` checks. Without the flag the run only reports how many server
 blocks lack the include. A second run reports `already-correct`. A dry run writes nothing for
-either part. The map matches the path only, so a probe such as `/?path=php://filter` is
-caught by the ban and not by the drop.
+either part. The map and the filter both match the path only, so a probe that hides in the query string,
+such as `/?path=php://filter`, is neither banned nor dropped.
 
 Behind a CDN the address in the log is the visitor's but the connection comes from the CDN,
 so a ban at the host firewall does nothing. This does not fix that.

