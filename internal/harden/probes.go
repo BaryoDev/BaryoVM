@@ -257,22 +257,31 @@ func probeJailSection(o Options, root string) string {
         PREVJAIL2=""
         if sudo -n test -f "$PFILTER"; then PREVFILT=$(mktemp); sudo -n cat "$PFILTER" > "$PREVFILT"; fi
         if sudo -n test -f "$PJAIL"; then PREVJAIL2=$(mktemp); sudo -n cat "$PJAIL" > "$PREVJAIL2"; fi
-        sudo -n mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")"
-        sudo -n install -m 644 -o root -g root "$NEWFILT" "$PFILTER"
-        sudo -n install -m 644 -o root -g root "$NEWJAIL" "$PJAIL"
-        if sudo -n fail2ban-client -t >/dev/null 2>&1; then
+        JOK=1
+        sudo -n mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")" || JOK=0
+        sudo -n install -m 644 -o root -g root "$NEWFILT" "$PFILTER" || JOK=0
+        sudo -n install -m 644 -o root -g root "$NEWJAIL" "$PJAIL" || JOK=0
+        JERR=""
+        if [ "$JOK" != "1" ]; then
+          JERR="the scanner jail files could not be written, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+        elif sudo -n fail2ban-client -t >/dev/null 2>&1; then
           sudo -n systemctl enable --now fail2ban >/dev/null 2>&1
           if sudo -n systemctl reload fail2ban >/dev/null 2>&1 || sudo -n systemctl restart fail2ban >/dev/null 2>&1; then
             say nginx-probes applied "wrote $PFILTER and $PJAIL and reloaded fail2ban: $TIER"
           else
-            PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the scanner jail files were written and fail2ban accepted them, but fail2ban could not be reloaded or restarted, so the jail is not active"
+            # Restored too, or the next run would find the files matching and say
+            # already-correct while the jail is still not active.
+            JERR="the scanner jail files were accepted by fail2ban but it could not be reloaded or restarted, so the jail is not active and the previous files were restored (or the new ones removed)"
           fi
         else
+          JERR="fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+        fi
+        if [ -n "$JERR" ]; then
           # Same reasoning as jail.local: a rejected file must not cost the host the one
           # it already had.
           if [ -n "$PREVFILT" ]; then sudo -n install -m 644 -o root -g root "$PREVFILT" "$PFILTER"; else sudo -n rm -f "$PFILTER"; fi
           if [ -n "$PREVJAIL2" ]; then sudo -n install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL"; else sudo -n rm -f "$PJAIL"; fi
-          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$JERR"
         fi
         [ -n "$PREVFILT" ] && rm -f "$PREVFILT"
         [ -n "$PREVJAIL2" ] && rm -f "$PREVJAIL2"

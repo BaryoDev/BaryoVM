@@ -543,6 +543,37 @@ func TestProbesDryRunWritesNothingWhenRun(t *testing.T) {
 	}
 }
 
+func TestProbeJailFailedReloadIsRetriedNotAlreadyCorrect(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	o := Options{NginxBanProbes: true}
+	_, code := e.run(o, false, "STUB_RELOAD_FAIL=fail2ban")
+	if code != 1 {
+		t.Fatalf("first run exit %d", code)
+	}
+	for _, f := range []string{probeFilterFile, probeJailFile} {
+		if _, err := os.Stat(e.path(f)); err == nil {
+			t.Errorf("%s was left in place after the reload failed", f)
+		}
+	}
+	out, code := e.run(o, false)
+	if code != 0 || !strings.Contains(out, "CHANGE|nginx-probes|applied|") || strings.Contains(out, "already-correct") {
+		t.Errorf("retry, exit %d: %s", code, out)
+	}
+}
+
+func TestProbeJailWriteFailureIsAnErrorAndRestores(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	out, code := e.run(Options{NginxBanProbes: true}, false, "STUB_INSTALL_FAIL=jail.d")
+	if code != 1 || !strings.Contains(out, "ERROR|") || !strings.Contains(out, "could not be written") || strings.Contains(out, "|applied|") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+	if _, err := os.Stat(e.path(probeFilterFile)); err == nil {
+		t.Error("the filter was left behind without its jail")
+	}
+}
+
 func TestDropAppliesThenReportsAlreadyCorrect(t *testing.T) {
 	e := newProbeEnv(t)
 	cp := e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
