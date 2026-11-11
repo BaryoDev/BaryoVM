@@ -630,7 +630,7 @@ func TestProbesRunLastAndFailLoudly(t *testing.T) {
 
 func TestNoPHPFlagIsBakedIntoTheScript(t *testing.T) {
 	mustContain(t, script(Options{}), "NOPHP=0", "--nginx-no-php")
-	mustContain(t, script(Options{NginxNoPHP: true}), "NOPHP=1", `grep -qE '^[[:space:]]*fastcgi_pass[[:space:]]'`, "say nginx-php "+StateReport)
+	mustContain(t, script(Options{NginxNoPHP: true}), "NOPHP=1", `grep -qE '(^|[;{[:space:]])fastcgi_pass[[:space:]]'`, "say nginx-php "+StateReport)
 }
 
 func TestProbeJailIsItsOwnFileAndLeavesJailLocalAlone(t *testing.T) {
