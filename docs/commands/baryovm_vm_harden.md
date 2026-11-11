@@ -21,6 +21,17 @@ port 22 open to everyone. Those are decisions, so they are marked as reports
 and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses
 a list that excludes the address you are connecting from.
 
+When nginx and fail2ban are both present it also adds a fail2ban jail that
+bans sources requesting paths no site serves (.env, .git, .aws, php://,
+/proc/self/environ and similar) in its own jail.d file, leaving jail.local
+alone. PHP and WordPress paths join the list only when nginx has no
+fastcgi_pass. --nginx-drop-probes also answers those requests with 444 before
+they reach an app: it writes a map and a snippet and adds one include line to
+each server block, backs up every file it touches, runs nginx -t, and restores
+them all if it fails. Without the flag it only reports how many server blocks
+lack the include. Behind a CDN the banned address is the CDN's, so the ban
+does nothing there.
+
 ```
 baryovm vm harden <name> [flags]
 ```
@@ -28,10 +39,11 @@ baryovm vm harden <name> [flags]
 ### Options
 
 ```
-      --dry-run            report what would change and write nothing
-  -h, --help               help for harden
-      --ignore strings     extra CIDRs fail2ban must never ban (loopback is always exempt)
-      --ssh-from strings   limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)
+      --dry-run             report what would change and write nothing
+  -h, --help                help for harden
+      --ignore strings      extra CIDRs fail2ban must never ban (loopback is always exempt)
+      --nginx-drop-probes   answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)
+      --ssh-from strings    limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)
 ```
 
 ### Options inherited from parent commands

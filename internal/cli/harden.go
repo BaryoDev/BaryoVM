@@ -16,7 +16,7 @@ import (
 )
 
 func newVMHardenCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, dropProbes bool
 	var ignore, sshFrom []string
 	cmd := &cobra.Command{
 		Use:   "harden <name>",
@@ -34,7 +34,17 @@ func newVMHardenCmd() *cobra.Command {
 			"upgrades, a missing default_server on 443, a kernel waiting for a reboot and\n" +
 			"port 22 open to everyone. Those are decisions, so they are marked as reports\n" +
 			"and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses\n" +
-			"a list that excludes the address you are connecting from.",
+			"a list that excludes the address you are connecting from.\n\n" +
+			"When nginx and fail2ban are both present it also adds a fail2ban jail that\n" +
+			"bans sources requesting paths no site serves (.env, .git, .aws, php://,\n" +
+			"/proc/self/environ and similar) in its own jail.d file, leaving jail.local\n" +
+			"alone. PHP and WordPress paths join the list only when nginx has no\n" +
+			"fastcgi_pass. --nginx-drop-probes also answers those requests with 444 before\n" +
+			"they reach an app: it writes a map and a snippet and adds one include line to\n" +
+			"each server block, backs up every file it touches, runs nginx -t, and restores\n" +
+			"them all if it fails. Without the flag it only reports how many server blocks\n" +
+			"lack the include. Behind a CDN the banned address is the CDN's, so the ban\n" +
+			"does nothing there.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, c, err := dialVM(args[0], "vm harden")
@@ -43,7 +53,7 @@ func newVMHardenCmd() *cobra.Command {
 			}
 			defer c.Close()
 
-			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom})
+			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes})
 			if err != nil {
 				return err
 			}
@@ -80,6 +90,7 @@ func newVMHardenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would change and write nothing")
 	cmd.Flags().StringSliceVar(&ignore, "ignore", nil, "extra CIDRs fail2ban must never ban (loopback is always exempt)")
 	cmd.Flags().StringSliceVar(&sshFrom, "ssh-from", nil, "limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)")
+	cmd.Flags().BoolVar(&dropProbes, "nginx-drop-probes", false, "answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)")
 	return cmd
 }
 

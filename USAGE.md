@@ -281,6 +281,7 @@ baryovm vm harden oracle --dry-run   # report what would change, write nothing
 baryovm vm harden oracle             # apply it
 baryovm vm harden oracle --ignore 10.0.0.0/24   # never ban this range
 baryovm vm harden oracle --ssh-from 203.0.113.7/32   # limit port 22 to this range
+baryovm vm harden oracle --nginx-drop-probes   # also answer scanner requests with 444
 
 baryovm vm threats oracle                    # the last 24 hours
 baryovm vm threats oracle --since "7 days ago"
@@ -313,6 +314,7 @@ Fixed (a dry run prints these as `would-apply`):
   still shows another algorithm first, it reports that the policy needs a subpolicy. If
   OpenSSH has neither hybrid, it reports that and changes nothing.
 - nginx `server_tokens off`, written to `conf.d` and reloaded only if `nginx -t` passes.
+- A fail2ban jail for nginx scanners, when nginx and fail2ban are both present. See below.
 
 Reported only (shown as warnings, counted separately, never changed):
 
@@ -333,6 +335,40 @@ ranges contains the address in `$SSH_CLIENT`, so it cannot lock out the session 
 using, and it refuses when that address is unknown. IPv6 ranges are refused up front
 (only `::/0` is accepted), because the lockout check cannot match an IPv6 client against a
 prefix. An IPv6 client is accepted only with `::/0`. Without `--ssh-from`, a 22 open to everyone is only reported.
+
+### Banning nginx scanners
+
+Scanners ask nginx for `.env`, `.git`, `.aws` and similar paths. `vm harden` writes
+`/etc/fail2ban/filter.d/baryovm-nginx-probes.conf` and
+`/etc/fail2ban/jail.d/baryovm-nginx-probes.local`, and leaves `jail.local` and its sshd jail
+alone. The jail uses `backend = auto` (`jail.local` sets `systemd` for sshd), reads every
+absolute `access_log` path in `nginx -T` (`off`, `syslog:`, relative paths and paths with a
+variable are skipped, and `/var/log/nginx/access.log` is the default), and takes its ban time
+from the existing `bantime.increment` setting, so repeat sources already escalate.
+
+The filter matches paths no site serves: the dotfiles `.env*`, `.git`, `.aws`, `.ssh`, `.svn`,
+`.hg`, `.htpasswd`, `.npmrc` and `.DS_Store`, plus `vendor/phpunit`, `php://`,
+`/proc/self/environ`, `etc/passwd` and `jndi:`. It never matches `/.well-known/`. The PHP and
+WordPress paths (`*.php`, `wp-admin`, `wp-login`, `wp-content`, `wp-includes`, `xmlrpc`) are
+added only when `nginx -T` has no `fastcgi_pass`. On a host that runs PHP the run reports
+that and keeps the narrow list. The detail of the change says which list was used. The files
+are validated with `fail2ban-client -t`, the previous ones are restored (or new ones removed)
+if that fails, and fail2ban is reloaded only on success.
+
+`--nginx-drop-probes` also stops those requests before they reach an app. It writes a `map`
+on `$uri` to `/etc/nginx/conf.d/00-baryovm-probes.conf` and a snippet at
+`/etc/nginx/baryovm/drop-probes.conf` holding `if ($baryovm_probe) { return 444; }`, then
+adds `include /etc/nginx/baryovm/drop-probes.conf;` right after each `server {` line in the
+files `nginx -T` loads, skipping blocks that already have it and blocks inside `stream`.
+Every touched file is backed up first, `nginx -t` must pass, every file is restored if it
+does not, and nginx is reloaded only on success. The map must load before the server blocks
+that use it, which `nginx -t` checks. Without the flag the run only reports how many server
+blocks lack the include. A second run reports `already-correct`. A dry run writes nothing for
+either part. The map matches the path only, so a probe such as `/?path=php://filter` is
+caught by the ban and not by the drop.
+
+Behind a CDN the address in the log is the visitor's but the connection comes from the CDN,
+so a ban at the host firewall does nothing. This does not fix that.
 
 What it deliberately does not do: change the SSH port, disable public key
 authentication, or remove an `authorized_keys` entry. It validates the sshd configuration

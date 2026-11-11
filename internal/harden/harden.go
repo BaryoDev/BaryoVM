@@ -50,6 +50,10 @@ type Options struct {
 	// SSHFrom limits port 22 to these source CIDRs in firewalld or ufw. Empty
 	// leaves the firewall alone and only reports when 22 is open to everyone.
 	SSHFrom []string
+	// NginxDropProbes writes the nginx map and snippet and adds the include to every
+	// server block, so scanner requests get 444 before they reach an app. Without it the
+	// run only reports how many server blocks lack the include.
+	NginxDropProbes bool
 }
 
 const sshdDropIn = "/etc/ssh/sshd_config.d/10-baryovm-hardening.conf"
@@ -252,7 +256,7 @@ if command -v fail2ban-client >/dev/null 2>&1; then
   fi
   rm -f "$JAIL"
 fi
-` + sshFilesAudit + firewallSection(o) + systemAudit + nginxAudit + `
+` + sshFilesAudit + firewallSection(o) + systemAudit + nginxAudit + nginxProbes(o) + `
 if systemctl is-active --quiet fail2ban 2>/dev/null; then echo "FACT|fail2ban|active"; else echo "FACT|fail2ban|inactive"; fi
 `
 }

@@ -8,6 +8,17 @@ previously accepted is called out here rather than left to be discovered.
 
 ## [Unreleased]
 
+### Added
+
+- **`vm harden` bans nginx scanners.** When nginx and fail2ban are both present it writes a
+  `baryovm-nginx-probes` filter and jail in their own files (`jail.local` is not touched). The
+  jail watches every absolute `access_log` path in `nginx -T` and bans sources asking for
+  `.env`, `.git`, `.aws`, `php://`, `/proc/self/environ` and similar paths, never
+  `/.well-known/`. PHP and WordPress paths are added only when `nginx -T` has no `fastcgi_pass`.
+  `--nginx-drop-probes` also answers those requests with 444 through a map and one include line
+  per `server {` block, with every touched file backed up, `nginx -t` checked, and all files
+  restored on failure. Without the flag, the run reports how many server blocks lack the include.
+
 ## [0.6.0] - 2026-11-02
 
 Ship, prove and repo commands, guarded `git`, `gh`, publish and cloud wrappers, static sites, podman,
