@@ -362,7 +362,7 @@ The filter matches paths no site serves, in the request path only: the dotfiles 
 `.git`, `.aws`, `.ssh`, `.svn`, `.hg`, `.htpasswd`, `.npmrc` and `.DS_Store`, plus
 `/vendor/phpunit/`, `/proc/self/environ`, `/etc/passwd` and `jndi:`. Each ends at a boundary, so
 `/blog/etc/passwd-guide` and `/vendor/phpunit-docs` are not probes. It never matches
-`/.well-known/`. The map and the filter are both case sensitive, so they agree.
+`/.well-known/`. The map and the filter are both case insensitive, so `/.ENV` is caught the same as `/.env`.
 
 The PHP and WordPress paths (`*.php`, `wp-admin`, `wp-login`, `wp-content`, `wp-includes`,
 `xmlrpc`) are off by default. `--nginx-no-php` says no site on this host serves PHP or

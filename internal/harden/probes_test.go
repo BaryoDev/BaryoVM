@@ -151,14 +151,14 @@ func TestFilterPHPTierOnlyWithThePHPList(t *testing.T) {
 	}
 }
 
-// mapHits runs the map patterns on a path the way nginx does: case sensitive, on $uri.
+// mapHits runs the map patterns on a path the way nginx does: case insensitive (~*), on $uri.
 func mapHits(php bool, uri string) bool {
 	ps := append([]string{}, probeCore...)
 	if php {
 		ps = append(ps, probePHP...)
 	}
 	for _, p := range ps {
-		if regexp.MustCompile(p).MatchString(uri) {
+		if regexp.MustCompile("(?i)" + p).MatchString(uri) {
 			return true
 		}
 	}
@@ -166,14 +166,14 @@ func mapHits(php bool, uri string) bool {
 }
 
 func TestMapPatternsMatchURIs(t *testing.T) {
-	for _, u := range []string{"/.env", "/.env_prod", "/.git/config", "/.git_bak/config", "/.aws/credentials", "/..../..../proc/self/environ", "/vendor/phpunit/x", "/etc/passwd", "/a/etc/passwd"} {
+	for _, u := range []string{"/.env", "/.ENV", "/.Git/config", "/.env_prod", "/.git/config", "/.git_bak/config", "/.aws/credentials", "/..../..../proc/self/environ", "/vendor/phpunit/x", "/etc/passwd", "/a/etc/passwd"} {
 		if !mapHits(false, u) {
 			t.Errorf("map missed %s", u)
 		}
 	}
 	for _, u := range []string{
 		"/.well-known/acme-challenge/abc", "/_next/static/x.js", "/_next/static/chunks/x.js", "/api/content", "/", "/about",
-		"/wp-admin/install.php", "/index.php", "/blog/etc/passwd-guide", "/vendor/phpunit-docs", "/.github/x", "/.ENV",
+		"/wp-admin/install.php", "/index.php", "/blog/etc/passwd-guide", "/vendor/phpunit-docs", "/.github/x",
 	} {
 		if mapHits(false, u) {
 			t.Errorf("core map matched %s", u)
@@ -191,7 +191,7 @@ func TestMapPatternsMatchURIs(t *testing.T) {
 	}
 }
 
-// The map is case sensitive like the filter, so the two agree on what a probe is.
+// The map and the filter are both case insensitive, so the two agree on what a probe is.
 func TestMapAndFilterAgree(t *testing.T) {
 	for _, php := range []bool{false, true} {
 		r := filterRegexp(t, php)
@@ -678,9 +678,9 @@ func TestDropFlagAddsTheDropSection(t *testing.T) {
 			t.Errorf("with the flag the script is missing %q", needle)
 		}
 	}
-	mustContain(t, with, "/etc/nginx/conf.d/00-baryovm-probes.conf", "/etc/nginx/baryovm/drop-probes.conf", "say nginx-drop already-correct", "say nginx-drop would-apply", `"~%s"`)
-	if strings.Contains(with, `"~*`) {
-		t.Error("the map is case insensitive, the filter is not")
+	mustContain(t, with, "/etc/nginx/conf.d/00-baryovm-probes.conf", "/etc/nginx/baryovm/drop-probes.conf", "say nginx-drop already-correct", "say nginx-drop would-apply", `"~*%s"`)
+	if !strings.HasPrefix(probeFailPrefix, "(?i)") {
+		t.Error("the map is case insensitive, so the filter has to be too")
 	}
 	mustContain(t, without, "say nginx-drop "+StateReport, "lack $PINC", "--nginx-drop-probes", "say nginx-drop already-correct", "mode=count")
 	if strings.Contains(without, "mode=edit") {

@@ -62,7 +62,7 @@ const (
 	// before it applies failregex, so the brackets arrive empty.
 	// A page on another site can make a visitor's browser request /.env or /?x=/.env, and
 	// that must not ban the visitor. The nginx map is on $uri, which has no query either.
-	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]*\] "[A-Z]+ [^?\s]*(?:`
+	probeFailPrefix = `(?i)^<HOST> \S+ \S+ \[[^\]]*\] "[A-Z]+ [^?\s]*(?:`
 	probeFailSuffix = `)\S*\s?HTTP/[0-9.]+"`
 )
 
@@ -324,12 +324,12 @@ func probeDropSection(o Options, root string) string {
     {
       echo "# Managed by baryovm vm harden. Edits here are overwritten on the next run."
       echo "# $TIER"
-      echo "# Case sensitive (~), like the fail2ban filter, so both agree on what a probe is."
+      echo "# Case insensitive (~*), like the fail2ban filter ((?i)), so both agree on what a probe is."
       echo 'map $uri $baryovm_probe {'
       echo '    default 0;'
-      for p in ` + shellList(probeCore) + `; do printf '    "~%s" 1;\n' "$p"; done
+      for p in ` + shellList(probeCore) + `; do printf '    "~*%s" 1;\n' "$p"; done
       if [ "$PHPTIER" = "1" ]; then
-        for p in ` + shellList(probePHP) + `; do printf '    "~%s" 1;\n' "$p"; done
+        for p in ` + shellList(probePHP) + `; do printf '    "~*%s" 1;\n' "$p"; done
       fi
       echo '}'
     } > "$NEWMAP"
