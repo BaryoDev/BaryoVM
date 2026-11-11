@@ -32,6 +32,8 @@ func TestFilterMatchesScannerLines(t *testing.T) {
 	for _, req := range []string{
 		"GET /.env HTTP/1.1",
 		"GET /.env.local HTTP/1.1",
+		"GET /.env_prod HTTP/1.1",
+		"GET /.git_bak/config HTTP/1.1",
 		"GET /.git/config HTTP/1.1",
 		"GET /.aws/credentials HTTP/1.1",
 		"GET /app/.ssh/id_rsa HTTP/1.1",

@@ -22,7 +22,7 @@ import (
 var (
 	// probeCore is always on: paths no site serves.
 	probeCore = []string{
-		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)\b`,
+		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)(?:[^A-Za-z0-9]|$)`,
 		`vendor/phpunit`,
 		`/proc/self/environ`,
 		`etc/passwd`,
@@ -31,7 +31,7 @@ var (
 	// probePHP is added only when nginx -T has no fastcgi_pass. On a host that runs PHP
 	// these are real pages, and banning their visitors would be a self-inflicted outage.
 	probePHP = []string{
-		`\.php\b`,
+		`\.php(?:[^A-Za-z0-9]|$)`,
 		`/wp-(?:admin|login|content|includes)`,
 		`/xmlrpc`,
 	}
@@ -50,11 +50,14 @@ const (
 
 	// probeFailPrefix and probeFailSuffix wrap the alternation of paths. The shape is the
 	// start of the nginx combined and main formats: address, identd, user, time, then the
-	// request line. [^?\s]* cannot cross a ?, so only the path can trigger a ban.
+	// request line. [^?\s]* cannot cross a ?, so only the path can trigger a ban. The
+	// suffix's \s? is there because a pattern's own boundary group may already have taken
+	// the space that ends the path; \b would not need it but treats _ as a word character,
+	// so /.env_prod would get through.
 	// A page on another site can make a visitor's browser request /.env or /?x=/.env, and
 	// that must not ban the visitor. The nginx map is on $uri, which has no query either.
 	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]+\] "[A-Z]+ [^?\s]*(?:`
-	probeFailSuffix = `)\S* HTTP/[0-9.]+"`
+	probeFailSuffix = `)\S*\s?HTTP/[0-9.]+"`
 )
 
 // failregexLine is the whole failregex line, with the PHP tier when php is true.
