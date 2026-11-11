@@ -98,7 +98,10 @@ BEGIN { depth = 0; sdepth = -1; pending = 0; lack = 0; ind = ""; nodd = 0 }
   if (line ~ /\r$/) cr = 1
   if (pending) {
     pending = 0
-    if (index(line, inc) == 0) { lack++; if (mode == "edit") print ind inc }
+    live = line
+    sub(/\r$/, "", live)
+    sub(/[ \t]*#.*$/, "", live)
+    if (index(live, inc) == 0) { lack++; if (mode == "edit") print ind inc }
   }
   if (mode == "edit") print line
   c = line
@@ -129,10 +132,10 @@ END {
 }
 `
 
-// logpathAwk prints every absolute access_log path in nginx -T output. off, syslog:,
-// relative paths and anything with a variable in it cannot be watched by file, so they
-// are skipped.
-const logpathAwk = `$1 == "access_log" { p = $2; sub(/;$/, "", p); if (p ~ /^\// && p !~ /[$]/) print p }`
+// logpathAwk prints every absolute access_log path in nginx -T output, without the quotes
+// nginx allows around it. off, syslog:, relative paths and anything with a variable in it
+// cannot be watched by file, so they are skipped.
+const logpathAwk = `$1 == "access_log" { p = $2; sub(/;$/, "", p); sub(/^["']/, "", p); sub(/["']$/, "", p); if (p ~ /^\// && p !~ /[$]/) print p }`
 
 // nginxProbes is the scanner section: the opt in fail2ban jail and filter, and the opt in
 // drop step for nginx itself. A failure in either is collected and reported once, at the
@@ -165,8 +168,9 @@ if command -v nginx >/dev/null 2>&1; then
     if [ "$NOPHP" != "1" ]; then
       TIER="core list only (the PHP and WordPress list is off; pass --nginx-no-php if no site on this host serves PHP)"
     # Anywhere on a line that is not a comment: location ~ \.php$ { fastcgi_pass x; }
-    # on one line is a common shape, and missing it would ban that site's visitors.
-    elif echo "$NGXP" | grep -vE '^[[:space:]]*#' | grep -qE '(^|[;{[:space:]])fastcgi_pass[[:space:]]'; then
+    # on one line is a common shape, and missing it would ban that site's visitors. nginx
+    # also allows the argument on the next line, so the name may end the line.
+    elif echo "$NGXP" | grep -vE '^[[:space:]]*#' | grep -qE '(^|[;{[:space:]])fastcgi_pass([[:space:]]|$)'; then
       TIER="core list only (nginx has fastcgi_pass, so PHP and WordPress paths are left alone)"
       say nginx-php ` + StateReport + ` "--nginx-no-php was given but nginx runs PHP (fastcgi_pass found), so .php, wp-admin, wp-login, wp-content, wp-includes and xmlrpc are not banned or dropped"
     else

@@ -405,6 +405,18 @@ func TestEveryProbeSudoIsNonInteractive(t *testing.T) {
 	}
 }
 
+func TestFastcgiPassWithTheArgumentOnTheNextLine(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, "        location ~ x {\n            fastcgi_pass\n                127.0.0.1:9000;\n        }\n"), true)
+	out, code := e.run(Options{NginxBanProbes: true, NginxNoPHP: true}, false)
+	if code != 0 || !strings.Contains(out, "nginx has fastcgi_pass") || !strings.Contains(out, "CHANGE|nginx-php|report|") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if strings.Contains(e.read(e.path(probeFilterFile)), `\.php`) {
+		t.Error("the PHP tier was enabled although nginx runs fastcgi_pass")
+	}
+}
+
 func TestProbeJailWritesAndReloads(t *testing.T) {
 	e := newProbeEnv(t)
 	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
@@ -732,6 +744,9 @@ http {
         access_log syslog:server=203.0.113.1 main;
         access_log /var/log/nginx/$host.log;
         # access_log /var/log/nginx/commented.log;
+        access_log "/var/log/nginx/double.log" main;
+        access_log '/var/log/nginx/single.log';
+        access_log "logs/quoted-relative.log";
     }
 }
 `
@@ -742,7 +757,7 @@ http {
 		t.Fatal(err)
 	}
 	got := strings.Fields(string(out))
-	want := []string{"/var/log/nginx/access.log", "/var/log/nginx/example.com.access.log"}
+	want := []string{"/var/log/nginx/access.log", "/var/log/nginx/example.com.access.log", "/var/log/nginx/double.log", "/var/log/nginx/single.log"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("logpaths = %q, want %q", got, want)
 	}
@@ -801,6 +816,16 @@ stream {
 	}
 	if again := runIncludeAwk(t, "edit", edited); again != edited {
 		t.Error("editing already edited text changed it")
+	}
+}
+
+func TestIncludeAwkDoesNotCountACommentedInclude(t *testing.T) {
+	in := "http {\n    server {\n        # include " + probeSnippet + ";\n        listen 80;\n    }\n}\n"
+	if got := strings.TrimSpace(runIncludeAwk(t, "count", in)); got != "1" {
+		t.Errorf("count = %q, want 1 (a commented include is not installed)", got)
+	}
+	if edited := runIncludeAwk(t, "edit", in); !strings.Contains(edited, "    server {\n        include "+probeSnippet+";\n        # include") {
+		t.Errorf("the live include was not added:\n%s", edited)
 	}
 }
 
