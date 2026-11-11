@@ -362,39 +362,61 @@ func probeDropSection(o Options, root string) string {
     elif [ "$DRY" = "1" ]; then
       say nginx-drop would-apply "$PMAP and $PSNIP would be written and $PINC added to $LACK server block(s): $TIER"
     else
-      BK=$(mktemp -d)
-      if sudo -n test -f "$PMAP"; then sudo -n cat "$PMAP" > "$BK/map"; fi
-      if sudo -n test -f "$PSNIP"; then sudo -n cat "$PSNIP" > "$BK/snip"; fi
-      for f in $LACKFILES; do sudo -n cat "$f" > "$BK/file.$(echo "$f" | tr '/' '_')"; done
+      # Backups come first and all of them must succeed: a short or empty backup restored
+      # later would be worse than no edit. Files are numbered, not named by path, since
+      # a_b.conf and a/b.conf would otherwise share a name.
+      BKOK=1
+      BK=$(mktemp -d) || BKOK=0
+      if [ "$BKOK" = "1" ]; then
+        if sudo -n test -f "$PMAP"; then sudo -n cat "$PMAP" > "$BK/map" || BKOK=0; fi
+        if sudo -n test -f "$PSNIP"; then sudo -n cat "$PSNIP" > "$BK/snip" || BKOK=0; fi
+        BN=0
+        for f in $LACKFILES; do BN=$((BN + 1)); sudo -n cat "$f" > "$BK/file.$BN" || BKOK=0; done
+      fi
+      if [ "$BKOK" != "1" ]; then
+        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }could not back up the nginx files, so the drop step changed nothing"
+      else
       WROTE=1
       sudo -n mkdir -p "$(dirname "$PMAP")" "$(dirname "$PSNIP")" || WROTE=0
       sudo -n install -m 644 -o root -g root "$NEWMAP" "$PMAP" || WROTE=0
       sudo -n install -m 644 -o root -g root "$NEWSNIP" "$PSNIP" || WROTE=0
       for f in $LACKFILES; do
         EDITED=$(mktemp)
-        sudo -n cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED"
-        sudo -n tee "$f" < "$EDITED" >/dev/null
+        # An empty result means the read failed, and writing it would empty the server file.
+        if sudo -n cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED" && [ -s "$EDITED" ]; then
+          sudo -n tee "$f" < "$EDITED" >/dev/null || WROTE=0
+        else
+          WROTE=0
+        fi
         rm -f "$EDITED"
       done
       NGXTOUT="could not write the map or the snippet"
+      RB=1
       if [ "$WROTE" = "1" ] && NGXTOUT=$(sudo -n nginx -t 2>&1); then
         if sudo -n systemctl reload nginx >/dev/null 2>&1 || sudo -n nginx -s reload >/dev/null 2>&1; then
+          RB=0
           say nginx-drop applied "wrote $PMAP and $PSNIP, added $PINC to $LACK server block(s), reloaded nginx: $TIER"
         else
-          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the drop step was written and nginx -t passed, but nginx could not be reloaded, so the running nginx does not drop probes yet"
+          # Restored too, or the next run would find everything in place and say
+          # already-correct while the running nginx never took the change.
+          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the drop step was written and nginx -t passed, but nginx could not be reloaded, so every file was restored and the running nginx does not drop probes yet"
         fi
       else
-        # Every file goes back: the ones that existed get their old text, the ones this
-        # step created are removed. nginx is not reloaded, so it never saw the change.
         # Say where nginx complained, since a stream or mail block in an included file
         # is the usual cause and the awk cannot see it.
         WHERE=$(echo "$NGXTOUT" | sed -n 's/.* in \(\/[^ ]*:[0-9][0-9]*\).*/\1/p' | head -1 | tr -cd '[:print:]')
-        for f in $LACKFILES; do sudo -n tee "$f" < "$BK/file.$(echo "$f" | tr '/' '_')" >/dev/null; done
+        REASON="nginx -t rejected the drop step at ${WHERE:-an unknown file and line}"
+        [ "$WROTE" = "1" ] || REASON="a file could not be written"
+        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$REASON, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
+      fi
+      if [ "$RB" = "1" ]; then
+        # Every file goes back: the ones that existed get their old text, the ones this
+        # step created are removed. nginx is not reloaded, so it never saw the change.
+        BN=0
+        for f in $LACKFILES; do BN=$((BN + 1)); sudo -n tee "$f" < "$BK/file.$BN" >/dev/null; done
         if [ -f "$BK/map" ]; then sudo -n tee "$PMAP" < "$BK/map" >/dev/null; else sudo -n rm -f "$PMAP"; fi
         if [ -f "$BK/snip" ]; then sudo -n tee "$PSNIP" < "$BK/snip" >/dev/null; else sudo -n rm -f "$PSNIP"; fi
-        REASON="nginx -t rejected the drop step at ${WHERE:-an unknown file and line}"
-        [ "$WROTE" = "1" ] || REASON="the map or the snippet could not be written"
-        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$REASON, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
+      fi
       fi
       rm -rf "$BK"
     fi

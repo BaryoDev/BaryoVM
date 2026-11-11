@@ -652,6 +652,78 @@ func TestDropReloadFailureIsAnError(t *testing.T) {
 	}
 }
 
+func TestDropFailedReloadRestoresAndIsRetried(t *testing.T) {
+	e := newProbeEnv(t)
+	conf := e.conf(true, "")
+	cp := e.write("etc/nginx/nginx.conf", conf, true)
+	o := Options{NginxDropProbes: true}
+	_, code := e.run(o, false, "STUB_RELOAD_FAIL=nginx", "STUB_NGINX_RELOAD_FAIL=1")
+	if code != 1 {
+		t.Fatalf("first run exit %d", code)
+	}
+	if e.read(cp) != conf {
+		t.Errorf("the config was left edited after the reload failed:\n%s", e.read(cp))
+	}
+	if _, err := os.Stat(e.path(probeSnippet)); err == nil {
+		t.Error("the snippet was left behind after the reload failed")
+	}
+	out, code := e.run(o, false)
+	if code != 0 || !strings.Contains(out, "CHANGE|nginx-drop|applied|") || strings.Contains(out, "already-correct") {
+		t.Errorf("retry, exit %d: %s", code, out)
+	}
+}
+
+func TestDropStopsBeforeEditingWhenABackupFails(t *testing.T) {
+	e := newProbeEnv(t)
+	conf := e.conf(true, "")
+	cp := e.write("etc/nginx/nginx.conf", conf, true)
+	oldMap := e.write("etc/nginx/conf.d/00-baryovm-probes.conf", "OLD MAP\n", false)
+	out, code := e.run(Options{NginxDropProbes: true}, false, "STUB_CAT_FAIL=00-baryovm-probes")
+	if code != 1 || !strings.Contains(out, "ERROR|could not back up") || strings.Contains(out, "|applied|") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+	if e.read(cp) != conf || e.read(oldMap) != "OLD MAP\n" {
+		t.Error("a file was changed although its backup failed")
+	}
+	if _, err := os.Stat(e.path(probeSnippet)); err == nil {
+		t.Error("the snippet was written although a backup failed")
+	}
+	if strings.Contains(e.calls(), "reload nginx") {
+		t.Error("nginx was reloaded")
+	}
+}
+
+func TestDropBackupsOfSimilarPathsDoNotCollide(t *testing.T) {
+	e := newProbeEnv(t)
+	aOrig := "server {\n    listen 81;\n}\n"
+	bOrig := "server {\n    listen 82;\n}\n"
+	a := e.write("etc/nginx/conf.d/a_b.conf", aOrig, true)
+	b := e.write("etc/nginx/conf.d/a/b.conf", bOrig, true)
+	out, code := e.run(Options{NginxDropProbes: true}, false, "STUB_NGINX_TEST_FAIL=nginx: [emerg] nope in "+a+":1")
+	if code != 1 || !strings.Contains(out, "ERROR|nginx -t rejected") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if e.read(a) != aOrig || e.read(b) != bOrig {
+		t.Errorf("rollback mixed the files up:\n%s\n%s", e.read(a), e.read(b))
+	}
+}
+
+func TestDropFailedServerFileWriteRollsBack(t *testing.T) {
+	e := newProbeEnv(t)
+	conf := e.conf(true, "")
+	cp := e.write("etc/nginx/nginx.conf", conf, true)
+	out, code := e.run(Options{NginxDropProbes: true}, false, "STUB_TEE_FAIL=nginx.conf")
+	if code != 1 || !strings.Contains(out, "ERROR|a file could not be written") || strings.Contains(out, "|applied|") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+	if e.read(cp) != conf {
+		t.Errorf("the config was not restored:\n%s", e.read(cp))
+	}
+	if strings.Contains(e.calls(), "reload nginx") {
+		t.Error("nginx was reloaded after a write failed")
+	}
+}
+
 func TestDropReportsShapesItDoesNotEditAndNeverSaysAlreadyCorrect(t *testing.T) {
 	e := newProbeEnv(t)
 	conf := "http {\n    access_log " + e.root + "/var/log/nginx/access.log;\n    set_real_ip_from 10.0.0.0/8;\n    server { listen 80; }\n}\n"
