@@ -58,6 +58,11 @@ type Options struct {
 	// site can make a visitor's browser request a scanner path, and behind a proxy nginx
 	// does not see through the jail would ban the proxy. Without it the run only reports.
 	NginxBanProbes bool
+	// NginxNoPHP is the owner saying no site on this host serves PHP or WordPress. Only then
+	// do the PHP and WordPress paths join the ban and drop lists, and a fastcgi_pass in
+	// nginx -T still keeps them off. A PHP site behind proxy_pass has no fastcgi_pass, so
+	// the script cannot know by looking.
+	NginxNoPHP bool
 }
 
 const sshdDropIn = "/etc/ssh/sshd_config.d/10-baryovm-hardening.conf"
@@ -260,9 +265,9 @@ if command -v fail2ban-client >/dev/null 2>&1; then
   fi
   rm -f "$JAIL"
 fi
-` + sshFilesAudit + firewallSection(o) + systemAudit + nginxAudit + nginxProbes(o) + `
+` + sshFilesAudit + firewallSection(o) + systemAudit + nginxAudit + `
 if systemctl is-active --quiet fail2ban 2>/dev/null; then echo "FACT|fail2ban|active"; else echo "FACT|fail2ban|inactive"; fi
-`
+` + nginxProbes(o)
 }
 
 // Apply runs the policy. It is safe to run repeatedly: every step reports

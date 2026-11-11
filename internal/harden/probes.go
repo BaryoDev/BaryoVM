@@ -20,20 +20,24 @@ import (
 // catching .env.local and .git/config. Nothing here matches /.well-known/, which
 // certificate renewal needs.
 var (
-	// probeCore is always on: paths no site serves.
+	// probeCore is always on: paths no site serves. Each pattern ends at a boundary, so
+	// /blog/etc/passwd-guide and /vendor/phpunit-docs are not probes. A boundary may
+	// consume the character after the name, which is why the filter suffix allows for it.
 	probeCore = []string{
 		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)(?:[^A-Za-z0-9]|$)`,
-		`vendor/phpunit`,
+		`/vendor/phpunit/`,
 		`/proc/self/environ`,
-		`etc/passwd`,
+		`/etc/passwd(?:[^A-Za-z0-9_-]|$)`,
 		`jndi:`,
 	}
-	// probePHP is added only when nginx -T has no fastcgi_pass. On a host that runs PHP
-	// these are real pages, and banning their visitors would be a self-inflicted outage.
+	// probePHP is added only when the owner says no site on the host serves PHP
+	// (--nginx-no-php) and nginx -T has no fastcgi_pass. A PHP or WordPress site behind
+	// proxy_pass has no fastcgi_pass, so the flag is the owner's word and not a guess. A
+	// .php match ends at the end of the path segment, so foo.php.min.js is not a probe.
 	probePHP = []string{
-		`\.php(?:[^A-Za-z0-9]|$)`,
-		`/wp-(?:admin|login|content|includes)`,
-		`/xmlrpc`,
+		`\.php(?:[/?\s]|$)`,
+		`/wp-(?:admin|login|content|includes)(?:[^A-Za-z0-9_-]|$)`,
+		`/xmlrpc(?:[^A-Za-z0-9_-]|$)`,
 	}
 )
 
@@ -54,9 +58,11 @@ const (
 	// suffix's \s? is there because a pattern's own boundary group may already have taken
 	// the space that ends the path; \b would not need it but treats _ as a word character,
 	// so /.env_prod would get through.
+	// The time is [^\]]* and not +: fail2ban cuts the matched timestamp out of the line
+	// before it applies failregex, so the brackets arrive empty.
 	// A page on another site can make a visitor's browser request /.env or /?x=/.env, and
 	// that must not ban the visitor. The nginx map is on $uri, which has no query either.
-	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]+\] "[A-Z]+ [^?\s]*(?:`
+	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]*\] "[A-Z]+ [^?\s]*(?:`
 	probeFailSuffix = `)\S*\s?HTTP/[0-9.]+"`
 )
 
@@ -80,24 +86,34 @@ func shellList(ps []string) string {
 
 // includeAwk rewrites one nginx file. In edit mode it prints the file with inc added
 // right after every server block opener that does not already have it. In count mode it
-// prints how many blocks lack it. Blocks inside stream are left alone, since if and
-// return 444 are not valid there. Only an opener alone on its line is touched.
+// prints how many blocks lack it, then one odd:LINE for each server block in a shape it
+// does not edit: everything after the brace on the same line, the brace on the next
+// line, or CRLF line ends. Blocks inside stream or mail in the same file are left alone,
+// since if and return 444 are not valid there.
 const includeAwk = `
-BEGIN { depth = 0; sdepth = -1; pending = 0; lack = 0; ind = "" }
+BEGIN { depth = 0; sdepth = -1; pending = 0; lack = 0; ind = ""; nodd = 0 }
 {
   line = $0
+  cr = 0
+  if (line ~ /\r$/) cr = 1
   if (pending) {
     pending = 0
     if (index(line, inc) == 0) { lack++; if (mode == "edit") print ind inc }
   }
   if (mode == "edit") print line
   c = line
+  sub(/\r$/, "", c)
   sub(/[ \t]*#.*$/, "", c)
-  if (c ~ /^[ \t]*stream[ \t]*[{][ \t]*$/ && sdepth < 0) sdepth = depth
-  if (c ~ /^[ \t]*server[ \t]*[{][ \t]*$/ && sdepth < 0) {
-    pending = 1
-    match(line, /^[ \t]*/)
-    ind = substr(line, 1, RLENGTH) "    "
+  if (c ~ /^[ \t]*(stream|mail)[ \t]*[{][ \t]*$/ && sdepth < 0) sdepth = depth
+  if (sdepth < 0) {
+    if (c ~ /^[ \t]*server[ \t]*[{][ \t]*$/ && !cr) {
+      pending = 1
+      match(line, /^[ \t]*/)
+      ind = substr(line, 1, RLENGTH) "    "
+    } else if (c ~ /^[ \t]*server[ \t]*[{]/ || c ~ /^[ \t]*server[ \t]*$/) {
+      nodd++
+      odd[nodd] = NR
+    }
   }
   n = gsub(/[{]/, "{", c)
   m = gsub(/[}]/, "}", c)
@@ -106,7 +122,10 @@ BEGIN { depth = 0; sdepth = -1; pending = 0; lack = 0; ind = "" }
 }
 END {
   if (pending) { lack++; if (mode == "edit") print ind inc }
-  if (mode == "count") print lack
+  if (mode == "count") {
+    print lack
+    for (i = 1; i <= nodd; i++) print "odd:" odd[i]
+  }
 }
 `
 
@@ -115,31 +134,49 @@ END {
 // are skipped.
 const logpathAwk = `$1 == "access_log" { p = $2; sub(/;$/, "", p); if (p ~ /^\// && p !~ /[$]/) print p }`
 
-// nginxProbes is the scanner section: a fail2ban jail and filter whenever nginx and
-// fail2ban are both present, and the opt in drop step for nginx itself.
-func nginxProbes(o Options) string {
+// nginxProbes is the scanner section: the opt in fail2ban jail and filter, and the opt in
+// drop step for nginx itself. A failure in either is collected and reported once, at the
+// end, as an ERROR line, so the other step still runs and the run still exits non-zero.
+func nginxProbes(o Options) string { return nginxProbesAt(o, "") }
+
+// nginxProbesAt is nginxProbes with every file path under root, which the tests point at a
+// temporary directory. Production passes an empty root.
+func nginxProbesAt(o Options, root string) string {
+	nophp := "0"
+	if o.NginxNoPHP {
+		nophp = "1"
+	}
 	return `
 # --- nginx scanners: fail2ban filter and jail, optional drop --------------------------
 # nginx -T is the effective configuration, so conf.d, sites-enabled and includes are all
 # read without guessing at the layout. The jail lives in its own jail.d file: jail.local
 # sets backend = systemd for sshd and is not touched here.
+PROBE_ERR=""
+NOPHP=` + nophp + `
 if command -v nginx >/dev/null 2>&1; then
   NGXP=$(sudo nginx -T 2>/dev/null)
   PHPTIER=0
   if [ -z "$NGXP" ]; then
     say nginx-probes ` + StateReport + ` "nginx -T printed nothing (the config does not load), so the scanner jail and the drop step were not looked at"
   else
-    # A host that runs PHP serves .php, wp-* and xmlrpc paths for real. Only a host with
-    # no fastcgi_pass gets those added, and one that has it keeps the narrow list.
-    if echo "$NGXP" | grep -qE '^[[:space:]]*fastcgi_pass[[:space:]]'; then
+    # The PHP list is off unless the owner passed --nginx-no-php, because a PHP or
+    # WordPress site behind proxy_pass has no fastcgi_pass and would look like a host
+    # without PHP. Even with the flag, fastcgi_pass keeps it off.
+    if [ "$NOPHP" != "1" ]; then
+      TIER="core list only (the PHP and WordPress list is off; pass --nginx-no-php if no site on this host serves PHP)"
+    elif echo "$NGXP" | grep -qE '^[[:space:]]*fastcgi_pass[[:space:]]'; then
       TIER="core list only (nginx has fastcgi_pass, so PHP and WordPress paths are left alone)"
-      say nginx-php ` + StateReport + ` "nginx runs PHP (fastcgi_pass found), so .php, wp-admin, wp-login, wp-content, wp-includes and xmlrpc are not banned or dropped"
+      say nginx-php ` + StateReport + ` "--nginx-no-php was given but nginx runs PHP (fastcgi_pass found), so .php, wp-admin, wp-login, wp-content, wp-includes and xmlrpc are not banned or dropped"
     else
       PHPTIER=1
-      TIER="core list plus PHP and WordPress paths (no fastcgi_pass in nginx)"
+      TIER="core list plus PHP and WordPress paths (--nginx-no-php, and no fastcgi_pass in nginx)"
     fi
-` + probeJailSection(o) + probeDropSection(o) + `
+` + probeJailSection(o, root) + probeDropSection(o, root) + `
   fi
+fi
+if [ -n "$PROBE_ERR" ]; then
+  echo "ERROR|$PROBE_ERR"
+  exit 1
 fi
 `
 }
@@ -148,15 +185,15 @@ fi
 // site can make a visitor's browser request a scanner path, and behind a proxy that nginx
 // does not see through the jail would ban the proxy. Without the flag it only reports, and
 // it never removes a jail file an earlier run wrote. With it, it writes the filter and the
-// jail. It restores what was there, or removes
-// what it created, when fail2ban -t rejects the result, and reloads only on success.
-func probeJailSection(o Options) string {
+// jail. It restores what was there, or removes what it created, when fail2ban -t rejects
+// the result, and reloads only on success. A rejected jail and a failed reload are errors.
+func probeJailSection(o Options, root string) string {
 	head := `
     if ! command -v fail2ban-client >/dev/null 2>&1; then
       say nginx-probes skipped "fail2ban is not installed, so there is nothing to ban scanners with"
     else
-      PFILTER=` + sshx.Quote(probeFilterFile) + `
-      PJAIL=` + sshx.Quote(probeJailFile) + `
+      PFILTER=` + sshx.Quote(root+probeFilterFile) + `
+      PJAIL=` + sshx.Quote(root+probeJailFile) + `
 `
 	if !o.NginxBanProbes {
 		return head + `
@@ -214,19 +251,22 @@ func probeJailSection(o Options) string {
         PREVJAIL2=""
         if sudo test -f "$PFILTER"; then PREVFILT=$(mktemp); sudo cat "$PFILTER" > "$PREVFILT"; fi
         if sudo test -f "$PJAIL"; then PREVJAIL2=$(mktemp); sudo cat "$PJAIL" > "$PREVJAIL2"; fi
-        sudo mkdir -p /etc/fail2ban/filter.d /etc/fail2ban/jail.d
+        sudo mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")"
         sudo install -m 644 -o root -g root "$NEWFILT" "$PFILTER"
         sudo install -m 644 -o root -g root "$NEWJAIL" "$PJAIL"
         if sudo fail2ban-client -t >/dev/null 2>&1; then
           sudo systemctl enable --now fail2ban >/dev/null 2>&1
-          sudo systemctl reload fail2ban >/dev/null 2>&1 || sudo systemctl restart fail2ban >/dev/null 2>&1
-          say nginx-probes applied "wrote $PFILTER and $PJAIL and reloaded fail2ban: $TIER"
+          if sudo systemctl reload fail2ban >/dev/null 2>&1 || sudo systemctl restart fail2ban >/dev/null 2>&1; then
+            say nginx-probes applied "wrote $PFILTER and $PJAIL and reloaded fail2ban: $TIER"
+          else
+            PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the scanner jail files were written and fail2ban accepted them, but fail2ban could not be reloaded or restarted, so the jail is not active"
+          fi
         else
           # Same reasoning as jail.local: a rejected file must not cost the host the one
           # it already had.
           if [ -n "$PREVFILT" ]; then sudo install -m 644 -o root -g root "$PREVFILT" "$PFILTER"; else sudo rm -f "$PFILTER"; fi
           if [ -n "$PREVJAIL2" ]; then sudo install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL"; else sudo rm -f "$PJAIL"; fi
-          say nginx-probes ` + StateReport + ` "fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
         fi
         [ -n "$PREVFILT" ] && rm -f "$PREVFILT"
         [ -n "$PREVJAIL2" ] && rm -f "$PREVJAIL2"
@@ -237,32 +277,46 @@ func probeJailSection(o Options) string {
 }
 
 // probeDropSection counts the server blocks without the include, and with
-// --nginx-drop-probes writes the map and the snippet and adds the include.
-func probeDropSection(o Options) string {
+// --nginx-drop-probes writes the map and the snippet and adds the include. Server blocks
+// in a shape the awk does not edit are counted apart and never read as already-correct.
+func probeDropSection(o Options, root string) string {
 	common := `
     # --- drop: server blocks that lack the include --------------------------------------
-    PMAP=` + sshx.Quote(probeMapFile) + `
-    PSNIP=` + sshx.Quote(probeSnippet) + `
+    PMAP=` + sshx.Quote(root+probeMapFile) + `
+    PSNIP=` + sshx.Quote(root+probeSnippet) + `
     PINC="include $PSNIP;"
     INCAWK=` + sshx.Quote(includeAwk) + `
     NGXFILES=$(echo "$NGXP" | awk '/^# configuration file /{f=$4; sub(/:$/, "", f); print f}' | sort -u)
     LACK=0
     LACKFILES=""
+    ODD=0
+    ODDLIST=""
     for f in $NGXFILES; do
       case "$f" in "$PMAP"|"$PSNIP") continue ;; esac
-      N=$(sudo cat "$f" 2>/dev/null | awk -v mode=count -v inc="$PINC" "$INCAWK")
+      OUT=$(sudo cat "$f" 2>/dev/null | awk -v mode=count -v inc="$PINC" "$INCAWK")
+      N=$(echo "$OUT" | head -1)
       case "$N" in ''|*[!0-9]*) N=0 ;; esac
       if [ "$N" -gt 0 ]; then LACK=$((LACK + N)); LACKFILES="$LACKFILES $f"; fi
+      for ln in $(echo "$OUT" | sed -n 's/^odd://p'); do
+        ODD=$((ODD + 1))
+        if [ "$ODD" -le 5 ]; then ODDLIST="${ODDLIST:+$ODDLIST, }$f:$ln"; fi
+      done
     done
+    [ "$ODD" -gt 5 ] && ODDLIST="$ODDLIST, ..."
+`
+	oddReport := `
+    if [ "$ODD" -gt 0 ]; then
+      say nginx-drop ` + StateReport + ` "$ODD server block(s) in a shape this step does not edit (one line, the brace on the next line, or CRLF line ends): $ODDLIST. Add $PINC by hand"
+    fi
 `
 	if !o.NginxDropProbes {
 		return common + `
-    if [ "$LACK" = "0" ]; then
+    if [ "$LACK" = "0" ] && [ "$ODD" = "0" ]; then
       say nginx-drop already-correct "every server block has $PINC"
-    else
+    elif [ "$LACK" -gt 0 ]; then
       say nginx-drop ` + StateReport + ` "$LACK server block(s) lack $PINC, so scanner requests still reach the apps. Add it with --nginx-drop-probes"
     fi
-`
+` + oddReport
 	}
 	return common + `
     NEWMAP=$(mktemp)
@@ -270,11 +324,12 @@ func probeDropSection(o Options) string {
     {
       echo "# Managed by baryovm vm harden. Edits here are overwritten on the next run."
       echo "# $TIER"
+      echo "# Case sensitive (~), like the fail2ban filter, so both agree on what a probe is."
       echo 'map $uri $baryovm_probe {'
       echo '    default 0;'
-      for p in ` + shellList(probeCore) + `; do printf '    "~*%s" 1;\n' "$p"; done
+      for p in ` + shellList(probeCore) + `; do printf '    "~%s" 1;\n' "$p"; done
       if [ "$PHPTIER" = "1" ]; then
-        for p in ` + shellList(probePHP) + `; do printf '    "~*%s" 1;\n' "$p"; done
+        for p in ` + shellList(probePHP) + `; do printf '    "~%s" 1;\n' "$p"; done
       fi
       echo '}'
     } > "$NEWMAP"
@@ -286,7 +341,9 @@ func probeDropSection(o Options) string {
     } > "$NEWSNIP"
 
     if [ "$LACK" = "0" ] && sudo test -f "$PMAP" && sudo cmp -s "$NEWMAP" "$PMAP" && sudo test -f "$PSNIP" && sudo cmp -s "$NEWSNIP" "$PSNIP"; then
-      say nginx-drop already-correct "map, snippet and the include in every server block match policy: $TIER"
+      if [ "$ODD" = "0" ]; then
+        say nginx-drop already-correct "map, snippet and the include in every server block match policy: $TIER"
+      fi
     elif [ "$DRY" = "1" ]; then
       say nginx-drop would-apply "$PMAP and $PSNIP would be written and $PINC added to $LACK server block(s): $TIER"
     else
@@ -294,28 +351,38 @@ func probeDropSection(o Options) string {
       if sudo test -f "$PMAP"; then sudo cat "$PMAP" > "$BK/map"; fi
       if sudo test -f "$PSNIP"; then sudo cat "$PSNIP" > "$BK/snip"; fi
       for f in $LACKFILES; do sudo cat "$f" > "$BK/file.$(echo "$f" | tr '/' '_')"; done
-      sudo mkdir -p "$(dirname "$PSNIP")"
-      sudo install -m 644 -o root -g root "$NEWMAP" "$PMAP"
-      sudo install -m 644 -o root -g root "$NEWSNIP" "$PSNIP"
+      WROTE=1
+      sudo mkdir -p "$(dirname "$PMAP")" "$(dirname "$PSNIP")" || WROTE=0
+      sudo install -m 644 -o root -g root "$NEWMAP" "$PMAP" || WROTE=0
+      sudo install -m 644 -o root -g root "$NEWSNIP" "$PSNIP" || WROTE=0
       for f in $LACKFILES; do
         EDITED=$(mktemp)
         sudo cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED"
         sudo tee "$f" < "$EDITED" >/dev/null
         rm -f "$EDITED"
       done
-      if sudo nginx -t >/dev/null 2>&1; then
-        sudo systemctl reload nginx >/dev/null 2>&1 || sudo nginx -s reload >/dev/null 2>&1
-        say nginx-drop applied "wrote $PMAP and $PSNIP, added $PINC to $LACK server block(s), reloaded nginx: $TIER"
+      NGXTOUT="could not write the map or the snippet"
+      if [ "$WROTE" = "1" ] && NGXTOUT=$(sudo nginx -t 2>&1); then
+        if sudo systemctl reload nginx >/dev/null 2>&1 || sudo nginx -s reload >/dev/null 2>&1; then
+          say nginx-drop applied "wrote $PMAP and $PSNIP, added $PINC to $LACK server block(s), reloaded nginx: $TIER"
+        else
+          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the drop step was written and nginx -t passed, but nginx could not be reloaded, so the running nginx does not drop probes yet"
+        fi
       else
         # Every file goes back: the ones that existed get their old text, the ones this
         # step created are removed. nginx is not reloaded, so it never saw the change.
+        # Say where nginx complained, since a stream or mail block in an included file
+        # is the usual cause and the awk cannot see it.
+        WHERE=$(echo "$NGXTOUT" | sed -n 's/.* in \(\/[^ ]*:[0-9][0-9]*\).*/\1/p' | head -1 | tr -cd '[:print:]')
         for f in $LACKFILES; do sudo tee "$f" < "$BK/file.$(echo "$f" | tr '/' '_')" >/dev/null; done
         if [ -f "$BK/map" ]; then sudo tee "$PMAP" < "$BK/map" >/dev/null; else sudo rm -f "$PMAP"; fi
         if [ -f "$BK/snip" ]; then sudo tee "$PSNIP" < "$BK/snip" >/dev/null; else sudo rm -f "$PSNIP"; fi
-        say nginx-drop ` + StateReport + ` "nginx -t rejected the drop step, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it"
+        REASON="nginx -t rejected the drop step at ${WHERE:-an unknown file and line}"
+        [ "$WROTE" = "1" ] || REASON="the map or the snippet could not be written"
+        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$REASON, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
       fi
       rm -rf "$BK"
     fi
     rm -f "$NEWMAP" "$NEWSNIP"
-`
+` + oddReport
 }

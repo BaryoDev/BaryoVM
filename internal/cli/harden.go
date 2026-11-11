@@ -16,7 +16,7 @@ import (
 )
 
 func newVMHardenCmd() *cobra.Command {
-	var dryRun, dropProbes, banProbes bool
+	var dryRun, dropProbes, banProbes, noPHP bool
 	var ignore, sshFrom []string
 	cmd := &cobra.Command{
 		Use:   "harden <name>",
@@ -38,7 +38,9 @@ func newVMHardenCmd() *cobra.Command {
 			"--nginx-ban-probes adds a fail2ban jail, in its own jail.d file, that bans\n" +
 			"sources requesting paths no site serves (.env, .git, .aws, /proc/self/environ\n" +
 			"and similar). It matches the path only, never the query string. PHP and\n" +
-			"WordPress paths join the list only when nginx has no fastcgi_pass. Another\n" +
+			"WordPress paths join the list only with --nginx-no-php (you say no site on\n" +
+			"this host serves PHP) and only when nginx has no fastcgi_pass; a PHP site\n" +
+			"behind proxy_pass has none, so the flag is your word. Another\n" +
 			"site can still make a visitor's browser request such a path, so a visitor can\n" +
 			"be banned. Behind a CDN or load balancer nginx logs the proxy's address unless\n" +
 			"set_real_ip_from is set, and the jail would ban the proxy; private ranges are\n" +
@@ -56,7 +58,7 @@ func newVMHardenCmd() *cobra.Command {
 			}
 			defer c.Close()
 
-			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes, NginxBanProbes: banProbes})
+			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes, NginxBanProbes: banProbes, NginxNoPHP: noPHP})
 			if err != nil {
 				return err
 			}
@@ -94,6 +96,7 @@ func newVMHardenCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&ignore, "ignore", nil, "extra CIDRs fail2ban must never ban (loopback is always exempt)")
 	cmd.Flags().StringSliceVar(&sshFrom, "ssh-from", nil, "limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)")
 	cmd.Flags().BoolVar(&banProbes, "nginx-ban-probes", false, "ban sources that request scanner paths (.env, .git, ...) with a fail2ban jail on the nginx access logs")
+	cmd.Flags().BoolVar(&noPHP, "nginx-no-php", false, "no site on this host serves PHP or WordPress: also ban and drop their paths (still off if nginx has fastcgi_pass)")
 	cmd.Flags().BoolVar(&dropProbes, "nginx-drop-probes", false, "answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)")
 	return cmd
 }

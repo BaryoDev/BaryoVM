@@ -14,13 +14,16 @@ previously accepted is called out here rather than left to be discovered.
   filter and jail in their own files (`jail.local` is not touched). The jail watches every absolute
   `access_log` path in `nginx -T` and bans sources whose request path asks for `.env`, `.git`,
   `.aws`, `/proc/self/environ` and similar, never `/.well-known/` and never from the query string.
-  PHP and WordPress paths are added only when `nginx -T` has no `fastcgi_pass`. It is opt in because
+  PHP and WordPress paths are added only with `--nginx-no-php` (you say no site serves PHP) and
+  only when `nginx -T` has no `fastcgi_pass`. It is opt in because
   another site can make a visitor's browser request such a path, and because behind a CDN or load
   balancer without `set_real_ip_from` it would ban the proxy (private ranges are never banned, and
   the run reports the missing `set_real_ip_from`). Without the flag the run only reports the jail.
   `--nginx-drop-probes` also answers those requests with 444 through a map and one include line
   per `server {` block, with every touched file backed up, `nginx -t` checked, and all files
-  restored on failure. Without it, the run reports how many server blocks lack the include.
+  restored on failure. Without it, the run reports how many server blocks lack the include. A
+  server block in a shape the step does not edit is reported, and a rejected jail, a rolled-back
+  drop or a failed reload ends the run with an error.
 
 ## [0.6.0] - 2026-11-02
 
