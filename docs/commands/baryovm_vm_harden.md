@@ -21,6 +21,23 @@ port 22 open to everyone. Those are decisions, so they are marked as reports
 and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses
 a list that excludes the address you are connecting from.
 
+--nginx-ban-probes adds a fail2ban jail, in its own jail.d file, that bans
+sources requesting paths no site serves (.env, .git, .aws, /proc/self/environ
+and similar). It matches the path only, never the query string. PHP and
+WordPress paths join the list only with --nginx-no-php (you say no site on
+this host serves PHP) and only when nginx has no fastcgi_pass; a PHP site
+behind proxy_pass has none, so the flag is your word. Another
+site can still make a visitor's browser request such a path, so a visitor can
+be banned. Behind a CDN or load balancer nginx logs the proxy's address unless
+set_real_ip_from is set, and the jail would ban the proxy; private ranges are
+never banned. Without the flag the run only reports the jail.
+
+--nginx-drop-probes answers those requests with 444 before they reach an app:
+it writes a map and a snippet and adds one include line to each server block,
+backs up every file it touches, runs nginx -t, and restores them all if it
+fails. Without the flag it only reports how many server blocks lack the
+include.
+
 ```
 baryovm vm harden <name> [flags]
 ```
@@ -28,10 +45,13 @@ baryovm vm harden <name> [flags]
 ### Options
 
 ```
-      --dry-run            report what would change and write nothing
-  -h, --help               help for harden
-      --ignore strings     extra CIDRs fail2ban must never ban (loopback is always exempt)
-      --ssh-from strings   limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)
+      --dry-run             report what would change and write nothing
+  -h, --help                help for harden
+      --ignore strings      extra CIDRs fail2ban must never ban (loopback is always exempt)
+      --nginx-ban-probes    ban sources that request scanner paths (.env, .git, ...) with a fail2ban jail on the nginx access logs
+      --nginx-drop-probes   answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)
+      --nginx-no-php        no site on this host serves PHP or WordPress: also ban and drop their paths (still off if nginx has fastcgi_pass)
+      --ssh-from strings    limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)
 ```
 
 ### Options inherited from parent commands

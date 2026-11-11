@@ -16,7 +16,7 @@ import (
 )
 
 func newVMHardenCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, dropProbes, banProbes, noPHP bool
 	var ignore, sshFrom []string
 	cmd := &cobra.Command{
 		Use:   "harden <name>",
@@ -34,7 +34,22 @@ func newVMHardenCmd() *cobra.Command {
 			"upgrades, a missing default_server on 443, a kernel waiting for a reboot and\n" +
 			"port 22 open to everyone. Those are decisions, so they are marked as reports\n" +
 			"and never changed. --ssh-from limits port 22 in firewalld or ufw, and refuses\n" +
-			"a list that excludes the address you are connecting from.",
+			"a list that excludes the address you are connecting from.\n\n" +
+			"--nginx-ban-probes adds a fail2ban jail, in its own jail.d file, that bans\n" +
+			"sources requesting paths no site serves (.env, .git, .aws, /proc/self/environ\n" +
+			"and similar). It matches the path only, never the query string. PHP and\n" +
+			"WordPress paths join the list only with --nginx-no-php (you say no site on\n" +
+			"this host serves PHP) and only when nginx has no fastcgi_pass; a PHP site\n" +
+			"behind proxy_pass has none, so the flag is your word. Another\n" +
+			"site can still make a visitor's browser request such a path, so a visitor can\n" +
+			"be banned. Behind a CDN or load balancer nginx logs the proxy's address unless\n" +
+			"set_real_ip_from is set, and the jail would ban the proxy; private ranges are\n" +
+			"never banned. Without the flag the run only reports the jail.\n\n" +
+			"--nginx-drop-probes answers those requests with 444 before they reach an app:\n" +
+			"it writes a map and a snippet and adds one include line to each server block,\n" +
+			"backs up every file it touches, runs nginx -t, and restores them all if it\n" +
+			"fails. Without the flag it only reports how many server blocks lack the\n" +
+			"include.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vm, c, err := dialVM(args[0], "vm harden")
@@ -43,8 +58,13 @@ func newVMHardenCmd() *cobra.Command {
 			}
 			defer c.Close()
 
-			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom})
+			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes, NginxBanProbes: banProbes, NginxNoPHP: noPHP})
 			if err != nil {
+				// The run stopped at an error, but the other audits already ran. Show what
+				// they found; the error still ends the command and no success line is printed.
+				if !ui.JSON() && len(rep.Changes) > 0 {
+					printHardenChanges(vm.Name, rep)
+				}
 				return err
 			}
 			action := "vm harden"
@@ -55,18 +75,7 @@ func newVMHardenCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: true, Action: action, Data: rep})
 				return nil
 			}
-			ui.Title(fmt.Sprintf("Hardening %s (%s)", vm.Name, rep.OS))
-			ui.Detail("sshd", rep.SSHVersion)
-			if !rep.PenaltiesUsed {
-				ui.Warnf("this sshd has no PerSourcePenalties (needs OpenSSH 9.8+); fail2ban is doing all the work")
-			}
-			for _, ch := range rep.Changes {
-				if ch.Action == harden.StateReport {
-					ui.Warnf("%s: %s", ch.Item, ch.Detail)
-					continue
-				}
-				ui.Detail(ch.Item, fmt.Sprintf("%s: %s", ch.Action, ch.Detail))
-			}
+			printHardenChanges(vm.Name, rep)
 			ui.Detail("fail2ban", rep.Fail2ban)
 			ui.Detail("summary", hardenSummary(rep, dryRun))
 			if dryRun {
@@ -80,7 +89,27 @@ func newVMHardenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would change and write nothing")
 	cmd.Flags().StringSliceVar(&ignore, "ignore", nil, "extra CIDRs fail2ban must never ban (loopback is always exempt)")
 	cmd.Flags().StringSliceVar(&sshFrom, "ssh-from", nil, "limit port 22 in firewalld or ufw to these CIDRs (refused if they exclude your own address)")
+	cmd.Flags().BoolVar(&banProbes, "nginx-ban-probes", false, "ban sources that request scanner paths (.env, .git, ...) with a fail2ban jail on the nginx access logs")
+	cmd.Flags().BoolVar(&noPHP, "nginx-no-php", false, "no site on this host serves PHP or WordPress: also ban and drop their paths (still off if nginx has fastcgi_pass)")
+	cmd.Flags().BoolVar(&dropProbes, "nginx-drop-probes", false, "answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)")
 	return cmd
+}
+
+// printHardenChanges prints the title and every change line, shared by the finished run
+// and the run that ended in an error.
+func printHardenChanges(name string, rep harden.Report) {
+	ui.Title(fmt.Sprintf("Hardening %s (%s)", name, rep.OS))
+	ui.Detail("sshd", rep.SSHVersion)
+	if !rep.PenaltiesUsed {
+		ui.Warnf("this sshd has no PerSourcePenalties (needs OpenSSH 9.8+); fail2ban is doing all the work")
+	}
+	for _, ch := range rep.Changes {
+		if ch.Action == harden.StateReport {
+			ui.Warnf("%s: %s", ch.Item, ch.Detail)
+			continue
+		}
+		ui.Detail(ch.Item, fmt.Sprintf("%s: %s", ch.Action, ch.Detail))
+	}
 }
 
 // hardenSummary says in one line how many findings were changed and how many were
