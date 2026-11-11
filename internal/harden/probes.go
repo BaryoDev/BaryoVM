@@ -255,33 +255,44 @@ func probeJailSection(o Options, root string) string {
       else
         PREVFILT=""
         PREVJAIL2=""
-        if sudo -n test -f "$PFILTER"; then PREVFILT=$(mktemp); sudo -n cat "$PFILTER" > "$PREVFILT"; fi
-        if sudo -n test -f "$PJAIL"; then PREVJAIL2=$(mktemp); sudo -n cat "$PJAIL" > "$PREVJAIL2"; fi
+        JBK=1
+        # All or nothing: a short backup restored later would replace a good file.
+        if sudo -n test -f "$PFILTER"; then PREVFILT=$(mktemp) && sudo -n cat "$PFILTER" > "$PREVFILT" || JBK=0; fi
+        if sudo -n test -f "$PJAIL"; then PREVJAIL2=$(mktemp) && sudo -n cat "$PJAIL" > "$PREVJAIL2" || JBK=0; fi
+        JERR=""
+        if [ "$JBK" != "1" ]; then
+          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }could not back up the existing scanner jail files, so nothing was changed"
+        else
         JOK=1
         sudo -n mkdir -p "$(dirname "$PFILTER")" "$(dirname "$PJAIL")" || JOK=0
         sudo -n install -m 644 -o root -g root "$NEWFILT" "$PFILTER" || JOK=0
         sudo -n install -m 644 -o root -g root "$NEWJAIL" "$PJAIL" || JOK=0
-        JERR=""
         if [ "$JOK" != "1" ]; then
-          JERR="the scanner jail files could not be written, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+          JERR="the scanner jail files could not be written"
         elif sudo -n fail2ban-client -t >/dev/null 2>&1; then
           sudo -n systemctl enable --now fail2ban >/dev/null 2>&1
           if sudo -n systemctl reload fail2ban >/dev/null 2>&1 || sudo -n systemctl restart fail2ban >/dev/null 2>&1; then
             say nginx-probes applied "wrote $PFILTER and $PJAIL and reloaded fail2ban: $TIER"
           else
-            # Restored too, or the next run would find the files matching and say
-            # already-correct while the jail is still not active.
-            JERR="the scanner jail files were accepted by fail2ban but it could not be reloaded or restarted, so the jail is not active and the previous files were restored (or the new ones removed)"
+            # Files go back too, or the next run would find them matching and say
+            # already-correct. fail2ban may already have read the new jail.
+            JERR="the scanner jail files were accepted by fail2ban but it could not be reloaded or restarted, so it may still run the new jail until it restarts"
           fi
         else
-          JERR="fail2ban rejected the scanner jail, so the previous files were restored (or the new ones removed) and fail2ban was not reloaded"
+          JERR="fail2ban rejected the scanner jail"
         fi
         if [ -n "$JERR" ]; then
           # Same reasoning as jail.local: a rejected file must not cost the host the one
           # it already had.
-          if [ -n "$PREVFILT" ]; then sudo -n install -m 644 -o root -g root "$PREVFILT" "$PFILTER"; else sudo -n rm -f "$PFILTER"; fi
-          if [ -n "$PREVJAIL2" ]; then sudo -n install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL"; else sudo -n rm -f "$PJAIL"; fi
-          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$JERR"
+          JRB=0
+          if [ -n "$PREVFILT" ]; then sudo -n install -m 644 -o root -g root "$PREVFILT" "$PFILTER" || JRB=1; else sudo -n rm -f "$PFILTER" || JRB=1; fi
+          if [ -n "$PREVJAIL2" ]; then sudo -n install -m 644 -o root -g root "$PREVJAIL2" "$PJAIL" || JRB=1; else sudo -n rm -f "$PJAIL" || JRB=1; fi
+          if [ "$JRB" = "0" ]; then
+            PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$JERR. The previous files were restored (or the new ones removed)"
+          else
+            PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$JERR. The restore failed, check $PFILTER and $PJAIL by hand"
+          fi
+        fi
         fi
         [ -n "$PREVFILT" ] && rm -f "$PREVFILT"
         [ -n "$PREVJAIL2" ] && rm -f "$PREVJAIL2"
@@ -380,10 +391,13 @@ func probeDropSection(o Options, root string) string {
       sudo -n mkdir -p "$(dirname "$PMAP")" "$(dirname "$PSNIP")" || WROTE=0
       sudo -n install -m 644 -o root -g root "$NEWMAP" "$PMAP" || WROTE=0
       sudo -n install -m 644 -o root -g root "$NEWSNIP" "$PSNIP" || WROTE=0
+      BN=0
       for f in $LACKFILES; do
+        BN=$((BN + 1))
         EDITED=$(mktemp)
-        # An empty result means the read failed, and writing it would empty the server file.
-        if sudo -n cat "$f" | awk -v mode=edit -v inc="$PINC" "$INCAWK" > "$EDITED" && [ -s "$EDITED" ]; then
+        # The edit starts from the backup, the exact bytes a rollback restores. An empty
+        # result means something failed, and writing it would empty the server file.
+        if awk -v mode=edit -v inc="$PINC" "$INCAWK" < "$BK/file.$BN" > "$EDITED" && [ -s "$EDITED" ]; then
           sudo -n tee "$f" < "$EDITED" >/dev/null || WROTE=0
         else
           WROTE=0
@@ -399,7 +413,8 @@ func probeDropSection(o Options, root string) string {
         else
           # Restored too, or the next run would find everything in place and say
           # already-correct while the running nginx never took the change.
-          PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }the drop step was written and nginx -t passed, but nginx could not be reloaded, so every file was restored and the running nginx does not drop probes yet"
+          DERR="the drop step was written and nginx -t passed, but nginx could not be reloaded, so the running nginx does not drop probes yet"
+          DTAIL=""
         fi
       else
         # Say where nginx complained, since a stream or mail block in an included file
@@ -407,15 +422,23 @@ func probeDropSection(o Options, root string) string {
         WHERE=$(echo "$NGXTOUT" | sed -n 's/.* in \(\/[^ ]*:[0-9][0-9]*\).*/\1/p' | head -1 | tr -cd '[:print:]')
         REASON="nginx -t rejected the drop step at ${WHERE:-an unknown file and line}"
         [ "$WROTE" = "1" ] || REASON="a file could not be written"
-        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$REASON, so every file was restored and nginx was not reloaded. The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
+        DERR="$REASON"
+        DTAIL=" The map must load before the server blocks that use it, and a server block included from inside stream or mail cannot take the include"
       fi
       if [ "$RB" = "1" ]; then
         # Every file goes back: the ones that existed get their old text, the ones this
         # step created are removed. nginx is not reloaded, so it never saw the change.
         BN=0
-        for f in $LACKFILES; do BN=$((BN + 1)); sudo -n tee "$f" < "$BK/file.$BN" >/dev/null; done
-        if [ -f "$BK/map" ]; then sudo -n tee "$PMAP" < "$BK/map" >/dev/null; else sudo -n rm -f "$PMAP"; fi
-        if [ -f "$BK/snip" ]; then sudo -n tee "$PSNIP" < "$BK/snip" >/dev/null; else sudo -n rm -f "$PSNIP"; fi
+        RBFAIL=""
+        for f in $LACKFILES; do BN=$((BN + 1)); sudo -n tee "$f" < "$BK/file.$BN" >/dev/null || RBFAIL="$RBFAIL $f"; done
+        if [ -f "$BK/map" ]; then sudo -n tee "$PMAP" < "$BK/map" >/dev/null || RBFAIL="$RBFAIL $PMAP"; else sudo -n rm -f "$PMAP" || RBFAIL="$RBFAIL $PMAP"; fi
+        if [ -f "$BK/snip" ]; then sudo -n tee "$PSNIP" < "$BK/snip" >/dev/null || RBFAIL="$RBFAIL $PSNIP"; else sudo -n rm -f "$PSNIP" || RBFAIL="$RBFAIL $PSNIP"; fi
+        if [ -z "$RBFAIL" ]; then
+          RBNOTE="Every file was restored and nginx was not reloaded."
+        else
+          RBNOTE="The restore failed, check these by hand:$RBFAIL."
+        fi
+        PROBE_ERR="${PROBE_ERR:+$PROBE_ERR; }$DERR. $RBNOTE$DTAIL"
       fi
       fi
       rm -rf "$BK"

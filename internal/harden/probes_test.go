@@ -249,12 +249,18 @@ func newProbeEnv(t *testing.T) *probeEnv {
 	stub("sudo", `if [ "$1" != "-n" ]; then echo "sudo without -n: $*" >> "$STUB_LOG"; fi
 [ "$1" = "-n" ] && shift
 if [ "$1" = "cat" ] && [ -n "${STUB_CAT_FAIL:-}" ] && [[ "$*" == *"$STUB_CAT_FAIL"* ]]; then exit 1; fi
-if [ "$1" = "tee" ] && [ -n "${STUB_TEE_FAIL:-}" ] && [[ "$*" == *"$STUB_TEE_FAIL"* ]] && [ ! -e "$STUB_LOG.teefail" ]; then
-  touch "$STUB_LOG.teefail"; exit 1
+if [ "$1" = "tee" ]; then
+  if [ -n "${STUB_TEE_FAIL:-}" ] && [[ "$*" == *"$STUB_TEE_FAIL"* ]] && [ ! -e "$STUB_LOG.teefail" ]; then
+    touch "$STUB_LOG.teefail"; : > "${*: -1}"; exit 1
+  fi
+  if [ -n "${STUB_TEE_FAIL_ALWAYS:-}" ] && [[ "$*" == *"$STUB_TEE_FAIL_ALWAYS"* ]]; then : > "${*: -1}"; exit 1; fi
 fi
 if [ "$1" = "install" ]; then
   shift
-  if [ -n "${STUB_INSTALL_FAIL:-}" ] && [[ "${*: -1}" == *"$STUB_INSTALL_FAIL"* ]]; then exit 1; fi
+  if [ -n "${STUB_INSTALL_FAIL:-}" ] && [[ "${*: -1}" == *"$STUB_INSTALL_FAIL"* ]] && [ ! -e "$STUB_LOG.instfail" ]; then
+    touch "$STUB_LOG.instfail"; exit 1
+  fi
+  if [ -n "${STUB_INSTALL_FAIL_ALWAYS:-}" ] && [[ "${*: -1}" == *"$STUB_INSTALL_FAIL_ALWAYS"* ]]; then exit 1; fi
   args=()
   while [ $# -gt 0 ]; do
     case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
@@ -565,12 +571,41 @@ func TestProbeJailFailedReloadIsRetriedNotAlreadyCorrect(t *testing.T) {
 func TestProbeJailWriteFailureIsAnErrorAndRestores(t *testing.T) {
 	e := newProbeEnv(t)
 	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	e.write("etc/fail2ban/filter.d/baryovm-nginx-probes.conf", "OLD FILTER\n", false)
+	e.write("etc/fail2ban/jail.d/baryovm-nginx-probes.local", "OLD JAIL\n", false)
 	out, code := e.run(Options{NginxBanProbes: true}, false, "STUB_INSTALL_FAIL=jail.d")
 	if code != 1 || !strings.Contains(out, "ERROR|") || !strings.Contains(out, "could not be written") || strings.Contains(out, "|applied|") {
 		t.Errorf("exit %d: %s", code, out)
 	}
-	if _, err := os.Stat(e.path(probeFilterFile)); err == nil {
-		t.Error("the filter was left behind without its jail")
+	if got := e.read(e.path(probeFilterFile)); got != "OLD FILTER\n" {
+		t.Errorf("filter = %q, want the previous bytes back", got)
+	}
+	if got := e.read(e.path(probeJailFile)); got != "OLD JAIL\n" {
+		t.Errorf("jail = %q", got)
+	}
+}
+
+func TestProbeJailSaysWhenTheRestoreFailsToo(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	e.write("etc/fail2ban/jail.d/baryovm-nginx-probes.local", "OLD JAIL\n", false)
+	out, code := e.run(Options{NginxBanProbes: true}, false, "STUB_INSTALL_FAIL_ALWAYS=jail.d")
+	if code != 1 || !strings.Contains(out, "The restore failed, check") || !strings.Contains(out, e.path(probeJailFile)) || strings.Contains(out, "were restored") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+}
+
+func TestProbeJailStopsBeforeWritingWhenABackupFails(t *testing.T) {
+	e := newProbeEnv(t)
+	e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	e.write("etc/fail2ban/filter.d/baryovm-nginx-probes.conf", "OLD FILTER\n", false)
+	e.write("etc/fail2ban/jail.d/baryovm-nginx-probes.local", "OLD JAIL\n", false)
+	out, code := e.run(Options{NginxBanProbes: true}, false, "STUB_CAT_FAIL=baryovm-nginx-probes.local")
+	if code != 1 || !strings.Contains(out, "ERROR|could not back up") || strings.Contains(out, "|applied|") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+	if e.read(e.path(probeFilterFile)) != "OLD FILTER\n" || e.read(e.path(probeJailFile)) != "OLD JAIL\n" {
+		t.Error("a jail file was changed although its backup failed")
 	}
 }
 
@@ -724,6 +759,15 @@ func TestDropFailedServerFileWriteRollsBack(t *testing.T) {
 	}
 }
 
+func TestDropSaysWhenTheRestoreFailsToo(t *testing.T) {
+	e := newProbeEnv(t)
+	cp := e.write("etc/nginx/nginx.conf", e.conf(true, ""), true)
+	out, code := e.run(Options{NginxDropProbes: true}, false, "STUB_TEE_FAIL_ALWAYS=nginx.conf")
+	if code != 1 || !strings.Contains(out, "The restore failed, check these by hand: "+cp) || strings.Contains(out, "Every file was restored") {
+		t.Errorf("exit %d: %s", code, out)
+	}
+}
+
 func TestDropReportsShapesItDoesNotEditAndNeverSaysAlreadyCorrect(t *testing.T) {
 	e := newProbeEnv(t)
 	conf := "http {\n    access_log " + e.root + "/var/log/nginx/access.log;\n    set_real_ip_from 10.0.0.0/8;\n    server { listen 80; }\n}\n"
@@ -763,13 +807,13 @@ func TestProbesRunLastAndFailLoudly(t *testing.T) {
 
 func TestNoPHPFlagIsBakedIntoTheScript(t *testing.T) {
 	mustContain(t, script(Options{}), "NOPHP=0", "--nginx-no-php")
-	mustContain(t, script(Options{NginxNoPHP: true}), "NOPHP=1", `grep -qE '(^|[;{[:space:]])fastcgi_pass[[:space:]]'`, "say nginx-php "+StateReport)
+	mustContain(t, script(Options{NginxNoPHP: true}), "NOPHP=1", `grep -qE '(^|[;{[:space:]])fastcgi_pass([[:space:]]|$)'`, "say nginx-php "+StateReport)
 }
 
 func TestProbeJailIsItsOwnFileAndLeavesJailLocalAlone(t *testing.T) {
 	s := probeJailSection(Options{NginxBanProbes: true}, "")
 	mustContain(t, s, "/etc/fail2ban/jail.d/baryovm-nginx-probes.local", "/etc/fail2ban/filter.d/baryovm-nginx-probes.conf",
-		"backend = auto", "logpath = $lp", "[baryovm-nginx-probes]", "fail2ban-client -t", "sudo cmp -s")
+		"backend = auto", "logpath = $lp", "[baryovm-nginx-probes]", "fail2ban-client -t", "sudo -n cmp -s")
 	if strings.Contains(s, "[DEFAULT]") || strings.Contains(s, "[sshd]") {
 		t.Error("the probe jail writes a DEFAULT or sshd section")
 	}
@@ -783,13 +827,13 @@ func TestProbeJailIsItsOwnFileAndLeavesJailLocalAlone(t *testing.T) {
 
 func TestProbeJailIsOptIn(t *testing.T) {
 	off := script(Options{})
-	for _, w := range []string{"[baryovm-nginx-probes]", `sudo install -m 644 -o root -g root "$NEWJAIL"`, `"maxretry = 5"`, "say nginx-probes applied", "say nginx-probes would-apply"} {
+	for _, w := range []string{"[baryovm-nginx-probes]", `sudo -n install -m 644 -o root -g root "$NEWJAIL"`, `"maxretry = 5"`, "say nginx-probes applied", "say nginx-probes would-apply"} {
 		if strings.Contains(off, w) {
 			t.Errorf("without --nginx-ban-probes the script has %q", w)
 		}
 	}
-	mustContain(t, off, "say nginx-probes "+StateReport, "--nginx-ban-probes", "is available", `sudo test -f "$PJAIL" || sudo test -f "$PFILTER"`, "left as it is")
-	if strings.Contains(off, `sudo rm -f "$PJAIL"`) || strings.Contains(off, `sudo rm -f "$PFILTER"`) {
+	mustContain(t, off, "say nginx-probes "+StateReport, "--nginx-ban-probes", "is available", `sudo -n test -f "$PJAIL" || sudo -n test -f "$PFILTER"`, "left as it is")
+	if strings.Contains(off, `sudo -n rm -f "$PJAIL"`) || strings.Contains(off, `sudo -n rm -f "$PFILTER"`) {
 		t.Error("without the flag the script can delete an existing jail file")
 	}
 	mustContain(t, script(Options{NginxBanProbes: true}), "[baryovm-nginx-probes]", "say nginx-probes applied")
@@ -803,7 +847,7 @@ func TestProbeJailIgnoreIPKeepsDefaultsAndPrivateRanges(t *testing.T) {
 func TestDropFlagAddsTheDropSection(t *testing.T) {
 	without := script(Options{})
 	with := script(Options{NginxDropProbes: true})
-	for _, needle := range []string{"return 444;", `map $uri $baryovm_probe`, "say nginx-drop applied", `sudo tee "$f" < "$EDITED"`} {
+	for _, needle := range []string{"return 444;", `map $uri $baryovm_probe`, "say nginx-drop applied", `sudo -n tee "$f" < "$EDITED"`} {
 		if strings.Contains(without, needle) {
 			t.Errorf("without the flag the script has %q", needle)
 		}
