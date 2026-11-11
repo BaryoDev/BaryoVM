@@ -60,6 +60,11 @@ func newVMHardenCmd() *cobra.Command {
 
 			rep, err := harden.Apply(c, harden.Options{DryRun: dryRun, IgnoreCIDRs: ignore, SSHFrom: sshFrom, NginxDropProbes: dropProbes, NginxBanProbes: banProbes, NginxNoPHP: noPHP})
 			if err != nil {
+				// The run stopped at an error, but the other audits already ran. Show what
+				// they found; the error still ends the command and no success line is printed.
+				if !ui.JSON() && len(rep.Changes) > 0 {
+					printHardenChanges(vm.Name, rep)
+				}
 				return err
 			}
 			action := "vm harden"
@@ -70,18 +75,7 @@ func newVMHardenCmd() *cobra.Command {
 				ui.Emit(ui.Result{OK: true, Action: action, Data: rep})
 				return nil
 			}
-			ui.Title(fmt.Sprintf("Hardening %s (%s)", vm.Name, rep.OS))
-			ui.Detail("sshd", rep.SSHVersion)
-			if !rep.PenaltiesUsed {
-				ui.Warnf("this sshd has no PerSourcePenalties (needs OpenSSH 9.8+); fail2ban is doing all the work")
-			}
-			for _, ch := range rep.Changes {
-				if ch.Action == harden.StateReport {
-					ui.Warnf("%s: %s", ch.Item, ch.Detail)
-					continue
-				}
-				ui.Detail(ch.Item, fmt.Sprintf("%s: %s", ch.Action, ch.Detail))
-			}
+			printHardenChanges(vm.Name, rep)
 			ui.Detail("fail2ban", rep.Fail2ban)
 			ui.Detail("summary", hardenSummary(rep, dryRun))
 			if dryRun {
@@ -99,6 +93,23 @@ func newVMHardenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noPHP, "nginx-no-php", false, "no site on this host serves PHP or WordPress: also ban and drop their paths (still off if nginx has fastcgi_pass)")
 	cmd.Flags().BoolVar(&dropProbes, "nginx-drop-probes", false, "answer scanner requests with 444 in nginx: edits every server block (backed up, nginx -t checked, restored on failure)")
 	return cmd
+}
+
+// printHardenChanges prints the title and every change line, shared by the finished run
+// and the run that ended in an error.
+func printHardenChanges(name string, rep harden.Report) {
+	ui.Title(fmt.Sprintf("Hardening %s (%s)", name, rep.OS))
+	ui.Detail("sshd", rep.SSHVersion)
+	if !rep.PenaltiesUsed {
+		ui.Warnf("this sshd has no PerSourcePenalties (needs OpenSSH 9.8+); fail2ban is doing all the work")
+	}
+	for _, ch := range rep.Changes {
+		if ch.Action == harden.StateReport {
+			ui.Warnf("%s: %s", ch.Item, ch.Detail)
+			continue
+		}
+		ui.Detail(ch.Item, fmt.Sprintf("%s: %s", ch.Action, ch.Detail))
+	}
 }
 
 // hardenSummary says in one line how many findings were changed and how many were
