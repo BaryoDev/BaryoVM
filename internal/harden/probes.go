@@ -22,7 +22,7 @@ import (
 var (
 	// probeCore is always on: paths no site serves.
 	probeCore = []string{
-		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)(?:[^A-Za-z0-9]|$)`,
+		`/\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|DS_Store)\b`,
 		`vendor/phpunit`,
 		`/proc/self/environ`,
 		`etc/passwd`,
@@ -31,7 +31,7 @@ var (
 	// probePHP is added only when nginx -T has no fastcgi_pass. On a host that runs PHP
 	// these are real pages, and banning their visitors would be a self-inflicted outage.
 	probePHP = []string{
-		`\.php(?:[^A-Za-z0-9]|$)`,
+		`\.php\b`,
 		`/wp-(?:admin|login|content|includes)`,
 		`/xmlrpc`,
 	}
@@ -50,8 +50,7 @@ const (
 
 	// probeFailPrefix and probeFailSuffix wrap the alternation of paths. The shape is the
 	// start of the nginx combined and main formats: address, identd, user, time, then the
-	// request line.
-	//	// query string excluded: [^?\s]* cannot cross a ?, so only the path can trigger a ban.
+	// request line. [^?\s]* cannot cross a ?, so only the path can trigger a ban.
 	// A page on another site can make a visitor's browser request /.env or /?x=/.env, and
 	// that must not ban the visitor. The nginx map is on $uri, which has no query either.
 	probeFailPrefix = `^<HOST> \S+ \S+ \[[^\]]+\] "[A-Z]+ [^?\s]*(?:`
