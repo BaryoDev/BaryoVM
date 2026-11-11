@@ -164,7 +164,9 @@ if command -v nginx >/dev/null 2>&1; then
     # without PHP. Even with the flag, fastcgi_pass keeps it off.
     if [ "$NOPHP" != "1" ]; then
       TIER="core list only (the PHP and WordPress list is off; pass --nginx-no-php if no site on this host serves PHP)"
-    elif echo "$NGXP" | grep -qE '^[[:space:]]*fastcgi_pass[[:space:]]'; then
+    # Anywhere on a line that is not a comment: location ~ \.php$ { fastcgi_pass x; }
+    # on one line is a common shape, and missing it would ban that site's visitors.
+    elif echo "$NGXP" | grep -vE '^[[:space:]]*#' | grep -qE '(^|[;{[:space:]])fastcgi_pass[[:space:]]'; then
       TIER="core list only (nginx has fastcgi_pass, so PHP and WordPress paths are left alone)"
       say nginx-php ` + StateReport + ` "--nginx-no-php was given but nginx runs PHP (fastcgi_pass found), so .php, wp-admin, wp-login, wp-content, wp-includes and xmlrpc are not banned or dropped"
     else
