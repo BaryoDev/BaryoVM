@@ -300,3 +300,41 @@ func TestNoPreDeployMeansNoCommands(t *testing.T) {
 		t.Fatalf("expected none, got %v", got)
 	}
 }
+
+// "." and "x/.." land on remoteRoot, and the tar transport cleans the path before it prunes. A guard
+// that compares the raw string saw "/srv/app/." and let both through.
+func TestSyncEntriesThatCleanToTheStackRootAreRefused(t *testing.T) {
+	for _, sub := range []string{".", "./", "x/..", "x/../", "web/.."} {
+		m := &Manifest{RemoteRoot: "/srv/app", Sync: []string{sub}}
+		if err := m.CheckComposeDir("/srv/app"); err == nil {
+			t.Errorf("sync %q reaches the stack root and must be refused", sub)
+		}
+	}
+}
+
+func TestASyncEntryThatEscapesRemoteRootIsRefused(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/srv/app", Sync: []string{"../x"}}
+	if err := m.CheckComposeDir("/srv/app"); err == nil {
+		t.Error("sync ../x lands outside remoteRoot and must be refused")
+	}
+	if got := m.SyncDest("../x"); got != "/srv/x" {
+		t.Errorf("SyncDest should be cleaned, got %q", got)
+	}
+}
+
+func TestACleanSyncEntryBesideTheComposeDirStillPasses(t *testing.T) {
+	m := &Manifest{RemoteRoot: "/srv/app", Sync: []string{"web/./dist", "api"}}
+	if err := m.CheckComposeDir("/srv/app/deploy"); err != nil {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestTheLexicalCheckRefusesAnEntryThatCleansOutsideLocalRoot(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"../x", "x/../../y", ".."} {
+		m := &Manifest{Dir: dir, LocalRoot: dir, RemoteRoot: "/srv/app", Sync: []string{sub}}
+		if err := m.checkPathsLexical(); err == nil {
+			t.Errorf("sync %q must be refused", sub)
+		}
+	}
+}

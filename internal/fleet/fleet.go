@@ -231,7 +231,37 @@ func (s *Store) Save() error {
 		return err
 	}
 	b, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(path(), b, 0o600)
+	return writeFileAtomic(path(), b)
+}
+
+// writeFileAtomic writes to a temp file in the same directory, syncs it, and renames it over the
+// target, so a kill or a full disk part way leaves the old file whole. CreateTemp makes it 0600.
+// There is no lock: two commands that load, change and save at once still lose one change.
+func writeFileAtomic(target string, b []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // Find returns the VM with the given name, or nil.

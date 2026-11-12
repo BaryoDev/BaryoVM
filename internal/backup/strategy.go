@@ -385,9 +385,9 @@ func multiBackupScript(cfg Config) (string, error) {
 			continue
 		}
 		seen[glob] = true
-		fmt.Fprintf(&b, "ls -1t \"$BK\"/%s 2>/dev/null | tail -n +%d | xargs -r rm -f\n", glob, cfg.keep()+1)
+		b.WriteString(pruneLine(glob, cfg.keep()))
 	}
-	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
+	b.WriteString(pruneLine("env-*", cfg.keep()))
 	for _, i := range ran[1:] {
 		fmt.Fprintf(&b, "echo \"backed up %s: %s ($(du -h \"$BK/%s\" | cut -f1))\"\n", cfg.Strategies[i].Kind, names[i], names[i])
 	}

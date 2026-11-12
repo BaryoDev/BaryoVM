@@ -27,6 +27,15 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Fixed
 
+- **Sync paths are cleaned before the compose directory check.** `"sync": ["."]` and `"x/.."` passed
+  the guard as `/srv/app/.` while the tar transport cleaned them to the stack root and pruned it,
+  `.env` included. Both now count as the root and are refused, and so is an entry that cleans to
+  outside `remoteRoot`.
+- **`fleet.json` is written atomically.** A temp file in the same directory, fsync, then rename, so a
+  kill or a full disk leaves the old file. There is still no lock between two commands that save at
+  once.
+- **Backup retention works when the backup directory has a space in its name.** It looped over the
+  list instead of piping to `xargs`, which split on the space and removed nothing.
 - **`stack restore` checks the dump and saves the current database before it drops anything.** It
   runs `pg_restore -l` on every postgres dump (and `tar -tzf` on files archives) first, so a corrupt
   dump stops the restore with nothing changed. It then dumps the current database to

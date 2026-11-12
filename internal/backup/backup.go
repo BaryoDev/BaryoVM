@@ -186,8 +186,8 @@ func BackupScript(cfg Config) (string, error) {
 			envPath, cp, envPath, chown)
 	}
 	// Retention: keep the newest N of each kind.
-	fmt.Fprintf(&b, "ls -1t \"$BK\"/db-*.dump 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
-	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
+	b.WriteString(pruneLine("db-*.dump", cfg.keep()))
+	b.WriteString(pruneLine("env-*", cfg.keep()))
 	b.WriteString("sz=$(du -h \"$BK/db-$ts.dump\" | cut -f1)\n")
 	b.WriteString(`echo "backup ok: db-$ts.dump ($sz) in $BK"` + "\n")
 	return b.String(), nil
@@ -365,4 +365,11 @@ func (c Config) pgSafetyDump(container, user, db, name string) string {
 	fmt.Fprintf(&b, "  hints=\"$hints\n  %s\"\n", hint)
 	b.WriteString("fi\n")
 	return b.String()
+}
+
+// pruneLine keeps the newest keep files matching glob in $BK and removes the rest. It loops over
+// the newest-first list a line at a time rather than piping to xargs, which splits on spaces and
+// removes nothing when the backup dir has one in its name.
+func pruneLine(glob string, keep int) string {
+	return fmt.Sprintf("ls -1t \"$BK\"/%s 2>/dev/null | tail -n +%d | while IFS= read -r old; do rm -f -- \"$old\"; done\n", glob, keep+1)
 }

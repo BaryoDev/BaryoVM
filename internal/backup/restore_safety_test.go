@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runRestore runs a restore script against a fake docker that logs every call. The fake fails
@@ -123,5 +124,35 @@ func TestASetWithACorruptSecondDumpRunsNothing(t *testing.T) {
 		if strings.Contains(log, bad) {
 			t.Errorf("%s ran although a dump was unreadable:\n%s", bad, log)
 		}
+	}
+}
+
+// Retention used `ls | xargs rm`, which splits on spaces: with a space in the backup dir nothing
+// matched and old dumps stayed forever.
+func TestRetentionPrunesInABackupDirWithASpace(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this machine")
+	}
+	bk := filepath.Join(t.TempDir(), "my backups")
+	if err := os.MkdirAll(bk, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"db-1.dump", "db-2.dump", "db-3.dump", "db-4.dump"} {
+		p := filepath.Join(bk, n)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// ls -t orders by mtime; make 4 the newest.
+		ts := time.Now().Add(time.Duration(len(n)+int(n[3]-'0')) * time.Minute)
+		os.Chtimes(p, ts, ts)
+	}
+	script := "BK='" + bk + "'\n" + pruneLine("db-*.dump", 2)
+	if out, err := exec.Command(sh, "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	left, _ := filepath.Glob(filepath.Join(bk, "db-*.dump"))
+	if len(left) != 2 {
+		t.Errorf("want the 2 newest kept, got %v", left)
 	}
 }
