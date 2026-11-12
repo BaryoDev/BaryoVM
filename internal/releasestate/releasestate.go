@@ -238,7 +238,7 @@ func Acquire(r sshx.Runner, l Loc) error {
 	}
 	if msg, ok := strings.CutPrefix(out, "error:"); ok {
 		if strings.Contains(msg, "File exists") {
-			return fmt.Errorf("%w: %s exists and is not a directory (remove it, or use `stack release --clear`): %s", ErrLock, l.Lock(), strings.TrimSpace(msg))
+			return fmt.Errorf("%w: %s exists and is not a directory (remove %s on the server by hand): %s", ErrLock, l.Lock(), l.Lock(), strings.TrimSpace(msg))
 		}
 		return fmt.Errorf("%w in %s: %s (set sudo in the manifest or use a writable remoteRoot)", ErrLock, path.Dir(l.File), strings.TrimSpace(msg))
 	}

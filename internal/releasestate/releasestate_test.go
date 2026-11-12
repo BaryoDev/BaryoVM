@@ -314,7 +314,7 @@ func TestAcquireNamesALockPathThatIsNotADirectory(t *testing.T) {
 	if !errors.Is(err, ErrLock) || errors.Is(err, ErrBusy) {
 		t.Fatalf("want ErrLock, got %v", err)
 	}
-	if !strings.Contains(err.Error(), l.Lock()) || !strings.Contains(err.Error(), "not a directory") || strings.Contains(err.Error(), "sudo") {
+	if !strings.Contains(err.Error(), l.Lock()) || !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "by hand") || strings.Contains(err.Error(), "sudo") || strings.Contains(err.Error(), "--clear") {
 		t.Errorf("message: %v", err)
 	}
 }
