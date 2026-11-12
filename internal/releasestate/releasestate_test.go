@@ -231,3 +231,90 @@ func TestWriteCmdLeavesNoTempFileWhenTheDecodeFails(t *testing.T) {
 		t.Errorf("stray temp files: %v", left)
 	}
 }
+
+func TestAcquireReportsAPermissionErrorAsNotBusy(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", false)
+	r := &stubRunner{answers: func(cmd string) string {
+		if strings.Contains(cmd, "echo locked") {
+			return "error: mkdir: cannot create directory '/opt/.baryovm-release-tinycast.json.lock': Permission denied\n"
+		}
+		return ""
+	}}
+	err := Acquire(r, l)
+	if err == nil || errors.Is(err, ErrBusy) || !errors.Is(err, ErrLock) {
+		t.Fatalf("want ErrLock and not ErrBusy, got %v", err)
+	}
+	for _, want := range []string{"/opt", "Permission denied", "sudo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q lacks %q", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "another release") {
+		t.Errorf("a permission error must not say another release is running: %v", err)
+	}
+}
+
+func TestLockCmdSeparatesAHeldLockFromAFailure(t *testing.T) {
+	dir := t.TempDir()
+	l := Loc{File: filepath.Join(dir, ".baryovm-release-demo.json")}
+	run := func() string {
+		out, err := exec.Command("sh", "-c", l.LockCmd()).CombinedOutput()
+		if err != nil {
+			t.Fatalf("lock command: %v: %s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if got := run(); got != "locked" {
+		t.Fatalf("first: %q", got)
+	}
+	if got := run(); got != "busy" {
+		t.Fatalf("second: %q", got)
+	}
+	if err := os.Remove(l.Lock()); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	got := run()
+	if !strings.HasPrefix(got, "error: ") || !strings.Contains(got, "ermission denied") {
+		t.Errorf("read-only dir: %q", got)
+	}
+}
+
+type failRunner struct{ err error }
+
+func (f failRunner) Run(string) (string, error) { return "", f.err }
+
+func TestAcquireReturnsATransportErrorWithoutTheLockHint(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", true)
+	cause := errors.New("ssh: connection reset by peer")
+	err := Acquire(failRunner{cause}, l)
+	if !errors.Is(err, cause) || errors.Is(err, ErrLock) || errors.Is(err, ErrBusy) {
+		t.Fatalf("want the raw transport error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sudo in the manifest") {
+		t.Errorf("transport error carries the lock hint: %v", err)
+	}
+}
+
+func TestAcquireNamesALockPathThatIsNotADirectory(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", false)
+	r := &stubRunner{answers: func(cmd string) string {
+		if strings.Contains(cmd, "echo locked") {
+			return "error: mkdir: /opt/.baryovm-release-tinycast.json.lock: File exists\n"
+		}
+		return ""
+	}}
+	err := Acquire(r, l)
+	if !errors.Is(err, ErrLock) || errors.Is(err, ErrBusy) {
+		t.Fatalf("want ErrLock, got %v", err)
+	}
+	if !strings.Contains(err.Error(), l.Lock()) || !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "by hand") || strings.Contains(err.Error(), "sudo") || strings.Contains(err.Error(), "--clear") {
+		t.Errorf("message: %v", err)
+	}
+}
