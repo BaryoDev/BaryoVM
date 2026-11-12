@@ -157,7 +157,7 @@ type keepAliver interface {
 func keepAlive(c keepAliver, interval, reply time.Duration) {
 	done := make(chan struct{})
 	go func() {
-		c.Wait()
+		_ = c.Wait()
 		close(done)
 	}()
 	t := time.NewTicker(interval)
