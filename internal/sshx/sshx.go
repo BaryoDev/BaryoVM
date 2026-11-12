@@ -129,16 +129,16 @@ func dialWithHandshakeDeadline(addr string, cfg *ssh.ClientConfig, handshake tim
 		return nil, err
 	}
 	if err := conn.SetDeadline(time.Now().Add(handshake)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		sc.Close()
+		_ = sc.Close()
 		return nil, err
 	}
 	return ssh.NewClient(sc, chans, reqs), nil
@@ -176,11 +176,11 @@ func keepAlive(c keepAliver, interval, reply time.Duration) {
 		select {
 		case err := <-res:
 			if err != nil {
-				c.Close()
+				_ = c.Close()
 				return
 			}
 		case <-time.After(reply):
-			c.Close()
+			_ = c.Close()
 			return
 		case <-done:
 			return
