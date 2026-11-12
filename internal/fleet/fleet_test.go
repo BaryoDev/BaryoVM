@@ -230,7 +230,7 @@ func TestAFailedSaveLeavesThePreviousFleetWhole(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(dir, 0o700)
+	defer func() { _ = os.Chmod(dir, 0o700) }()
 	if err := (&Store{}).Save(); err == nil {
 		t.Fatal("expected Save to fail in a directory that takes no new files")
 	}

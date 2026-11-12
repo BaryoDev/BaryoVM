@@ -1441,6 +1441,12 @@ script, both without connecting. `restore --dry-run` needs no `--yes` (nothing i
 which file it would use: the one named by `--file`, or "newest", which the VM picks when the real
 restore runs.
 
+Before a restore drops anything it checks each postgres dump with `pg_restore -l` (and each files
+archive with `tar -tzf`), then dumps every postgres-container database to
+`pre-restore-<timestamp>.dump` in the backup dir. If a step fails after the drop, the output gives the
+safety dump path and the command that restores it. `command` strategies are not verified.
+Remote-postgres and files strategies get no safety dump. A set that fails part way is not rolled back.
+
 `stack restore <name> --drill` proves a backup restores. It starts a throwaway postgres container on
 the VM (same image as the stack's database container, no network, no mounts), `pg_restore`s the
 newest dump (or `--file`) into it with `--no-owner --no-privileges`, checks that the restore had no

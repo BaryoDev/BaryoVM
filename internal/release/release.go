@@ -791,7 +791,6 @@ func (m *Manifest) baseVerification(spec *verify.Spec, ctx verify.Context) (Veri
 // rsync's trailing-slash rule decides this: "out" copies the directory, giving remoteRoot/out,
 // while "out/" copies its contents to remoteRoot itself.
 func (m *Manifest) SyncDest(sub string) string {
-	//
 	// The result is cleaned, because the tar transport cleans: "." and "x/.." both land on
 	// remoteRoot, and a guard comparing the raw string would see "/srv/app/." and let them through.
 	root := path.Clean(m.RemoteRoot)

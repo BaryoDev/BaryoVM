@@ -348,14 +348,19 @@ func (c Config) pgVerify(container, art string) string {
 
 // pgSafetyDump is the script lines that dump the current database to $BK/<name> before it is
 // dropped, print where it is and the exact command that puts it back, and remember that command for
-// restore_failed. A database that is not there yet has nothing to save, so that case is skipped. A
+// restore_failed. A database that is not there yet (an empty answer) has nothing to save, so that case is skipped; a failed check stops the restore. A
 // dump that fails stops the restore with nothing changed.
 func (c Config) pgSafetyDump(container, user, db, name string) string {
 	q := sshx.Quote
 	dc := c.dockerCmd()
 	safe := `"$BK/` + name + `"`
 	var b strings.Builder
-	fmt.Fprintf(&b, "if %s exec %s psql -U %s -d %s -c 'select 1' >/dev/null 2>&1; then\n", dc, q(container), q(user), q(db))
+	// Existence is asked of the postgres database, so a failure to connect (no slots, no CONNECT
+	// privilege, connections disallowed) is an error and stops the restore, never a "not there".
+	sql := "select 1 from pg_database where datname='" + strings.ReplaceAll(db, "'", "''") + "'"
+	fmt.Fprintf(&b, "ex=$(%s exec %s psql -U %s -d postgres -tAc %s) || { echo \"could not check whether the database exists, nothing was changed\" >&2; exit 1; }\n",
+		dc, q(container), q(user), q(sql))
+	b.WriteString("if [ \"$ex\" = 1 ]; then\n")
 	fmt.Fprintf(&b, "  %s exec %s pg_dump -U %s -Fc %s > %s.partial || { rm -f %s.partial; echo \"safety dump failed, nothing was changed\" >&2; exit 1; }\n",
 		dc, q(container), q(user), q(db), safe, safe)
 	fmt.Fprintf(&b, "  mv %s.partial %s\n", safe, safe)

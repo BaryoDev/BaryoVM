@@ -297,8 +297,8 @@ func (c Config) restoreCmd(s Strategy, art string) (string, error) {
 	q := sshx.Quote
 	switch s.Kind {
 	case KindPostgresContainer:
-		return fmt.Sprintf(c.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n", q(s.Container), q(s.user()), q(s.Database)) +
-			fmt.Sprintf(c.dockerCmd()+" exec -i %s createdb -U %s %s\n", q(s.Container), q(s.user()), q(s.Database)) +
+		return fmt.Sprintf(c.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s &&\n", q(s.Container), q(s.user()), q(s.Database)) +
+			fmt.Sprintf(c.dockerCmd()+" exec -i %s createdb -U %s %s &&\n", q(s.Container), q(s.user()), q(s.Database)) +
 			fmt.Sprintf(c.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < %s", q(s.Container), q(s.user()), q(s.Database), art), nil
 	case KindPostgresRemote:
 		// --clean --if-exists --no-owner: a managed database cannot be dropped and recreated by

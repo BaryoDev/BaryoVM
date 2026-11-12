@@ -261,6 +261,11 @@ func writeFileAtomic(target string, b []byte) error {
 		os.Remove(tmp)
 		return err
 	}
+	// Make the rename itself durable. Best effort: some platforms cannot sync a directory.
+	if d, err := os.Open(filepath.Dir(target)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 
