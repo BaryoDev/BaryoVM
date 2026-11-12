@@ -2,8 +2,25 @@ set -e
 BK="$HOME/app-backups"
 f=$(ls -1t "$BK"/db-*.dump | head -1)
 [ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }
+umask 077
 echo "restoring $f"
-docker exec -i 'app-postgres-1' dropdb -U 'postgres' --force --if-exists 'appdb'
-docker exec -i 'app-postgres-1' createdb -U 'postgres' 'appdb'
-docker exec -i 'app-postgres-1' pg_restore -U 'postgres' -d 'appdb' < "$f"
+rts=$(date +%Y%m%d-%H%M%S)
+hints=
+restore_failed() {
+  echo "restore failed, and the database may already be dropped." >&2
+  if [ -n "$hints" ]; then echo "the data from before the restore is in a safety dump. Put it back with:$hints" >&2; fi
+  exit 1
+}
+docker exec -i 'app-postgres-1' pg_restore -l < "$f" >/dev/null || { echo "backup is not a readable dump, nothing was changed: $f" >&2; exit 1; }
+ex=$(docker exec 'app-postgres-1' psql -U 'postgres' -d postgres -tAc 'select 1 from pg_database where datname='\''appdb'\''') || { echo "could not check whether the database exists, nothing was changed" >&2; exit 1; }
+if [ "$ex" = 1 ]; then
+  docker exec 'app-postgres-1' pg_dump -U 'postgres' -Fc 'appdb' > "$BK/pre-restore-$rts.dump".partial || { rm -f "$BK/pre-restore-$rts.dump".partial; echo "safety dump failed, nothing was changed" >&2; exit 1; }
+  mv "$BK/pre-restore-$rts.dump".partial "$BK/pre-restore-$rts.dump"
+  echo "safety dump of the current database: $BK/pre-restore-$rts.dump"
+  hints="$hints
+  docker exec -i 'app-postgres-1' dropdb -U 'postgres' --force --if-exists 'appdb' && docker exec -i 'app-postgres-1' createdb -U 'postgres' 'appdb' && docker exec -i 'app-postgres-1' pg_restore -U 'postgres' -d 'appdb' < \"$BK/pre-restore-$rts.dump\""
+fi
+docker exec -i 'app-postgres-1' dropdb -U 'postgres' --force --if-exists 'appdb' || restore_failed
+docker exec -i 'app-postgres-1' createdb -U 'postgres' 'appdb' || restore_failed
+docker exec -i 'app-postgres-1' pg_restore -U 'postgres' -d 'appdb' < "$f" || restore_failed
 echo "restored from $f"

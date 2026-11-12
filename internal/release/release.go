@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -537,6 +538,9 @@ func (m *Manifest) checkPathsLexical() error {
 		return fmt.Errorf("localRoot %q is outside the manifest's directory %s: %s%s", m.LocalRoot, m.Dir, escapeHint, relativeNote(m.LocalRoot))
 	}
 	for _, sub := range m.Sync {
+		if clean := path.Clean(filepath.ToSlash(sub)); clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("sync entry %q reaches outside localRoot: %s", sub, escapeHint)
+		}
 		if !insideAnyForm(roots, filepath.Join(local, filepath.FromSlash(sub))) {
 			return fmt.Errorf("sync entry %q reaches outside the manifest's directory %s: %s", sub, m.Dir, escapeHint)
 		}
@@ -787,10 +791,13 @@ func (m *Manifest) baseVerification(spec *verify.Spec, ctx verify.Context) (Veri
 // rsync's trailing-slash rule decides this: "out" copies the directory, giving remoteRoot/out,
 // while "out/" copies its contents to remoteRoot itself.
 func (m *Manifest) SyncDest(sub string) string {
+	// The result is cleaned, because the tar transport cleans: "." and "x/.." both land on
+	// remoteRoot, and a guard comparing the raw string would see "/srv/app/." and let them through.
+	root := path.Clean(m.RemoteRoot)
 	if strings.HasSuffix(sub, "/") {
-		return strings.TrimSuffix(m.RemoteRoot, "/")
+		return root
 	}
-	return strings.TrimSuffix(m.RemoteRoot, "/") + "/" + strings.Trim(sub, "/")
+	return path.Clean(root + "/" + filepath.ToSlash(sub))
 }
 
 // CheckComposeDir refuses a manifest whose sync would let --delete reach the stack's compose
@@ -813,13 +820,17 @@ func (m *Manifest) CheckComposeDir(composeDir string) error {
 		return nil
 	}
 
-	composeDir = strings.TrimSuffix(strings.TrimSpace(composeDir), "/")
+	composeDir = strings.TrimSpace(composeDir)
 	if composeDir == "" {
 		return nil
 	}
+	composeDir = path.Clean(composeDir)
 
 	for _, sub := range m.Sync {
 		dest := m.SyncDest(sub)
+		if root := path.Clean(m.RemoteRoot); dest != root && !strings.HasPrefix(dest, root+"/") {
+			return fmt.Errorf("sync entry %q lands on %s, outside remoteRoot %s", sub, dest, root)
+		}
 		if dest == composeDir || strings.HasPrefix(composeDir, dest+"/") {
 			return fmt.Errorf(
 				"sync entry %q lands on %s, which contains the compose directory %s: "+

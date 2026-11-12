@@ -27,6 +27,27 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Fixed
 
+- **A silent SSH host no longer hangs the CLI.** The handshake has its own 30 second deadline (the
+  existing timeout covered only the TCP connect), and a keepalive every 30 seconds closes the
+  connection when the VM stops answering, so a running command returns an error instead of waiting
+  forever. Per-command timeouts and Ctrl+C handling are not part of this.
+- **The release workflow runs `go vet` and `go test -race` before GoReleaser.** A tag pushed from a
+  red commit no longer publishes.
+- **Sync paths are cleaned before the compose directory check.** `"sync": ["."]` and `"x/.."` passed
+  the guard as `/srv/app/.` while the tar transport cleaned them to the stack root and pruned it,
+  `.env` included. Both now count as the root and are refused, and so is an entry that cleans to
+  outside `remoteRoot`.
+- **`fleet.json` is written atomically.** A temp file in the same directory, fsync, then rename, so a
+  kill or a full disk leaves the old file. There is still no lock between two commands that save at
+  once.
+- **Backup retention works when the backup directory has a space in its name.** It looped over the
+  list instead of piping to `xargs`, which split on the space and removed nothing.
+- **`stack restore` checks the dump and saves the current database before it drops anything.** It
+  runs `pg_restore -l` on every postgres dump (and `tar -tzf` on files archives) first, so a corrupt
+  dump stops the restore with nothing changed. It then dumps the current database to
+  `pre-restore-<timestamp>.dump` in the backup dir and prints the path. If a step fails after the
+  drop, the output gives the safety dump path and the exact command that restores it. A set that
+  fails part way is still not rolled back.
 - **`stack release` no longer calls a failed lock a held lock.** When the release lock cannot be
   created (permission denied in a root-owned parent of `remoteRoot` with `sudo` off, a read-only
   filesystem), the error names the directory and the OS message and says to set `sudo` or use a

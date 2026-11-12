@@ -297,8 +297,8 @@ func (c Config) restoreCmd(s Strategy, art string) (string, error) {
 	q := sshx.Quote
 	switch s.Kind {
 	case KindPostgresContainer:
-		return fmt.Sprintf(c.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n", q(s.Container), q(s.user()), q(s.Database)) +
-			fmt.Sprintf(c.dockerCmd()+" exec -i %s createdb -U %s %s\n", q(s.Container), q(s.user()), q(s.Database)) +
+		return fmt.Sprintf(c.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s &&\n", q(s.Container), q(s.user()), q(s.Database)) +
+			fmt.Sprintf(c.dockerCmd()+" exec -i %s createdb -U %s %s &&\n", q(s.Container), q(s.user()), q(s.Database)) +
 			fmt.Sprintf(c.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < %s", q(s.Container), q(s.user()), q(s.Database), art), nil
 	case KindPostgresRemote:
 		// --clean --if-exists --no-owner: a managed database cannot be dropped and recreated by
@@ -385,9 +385,9 @@ func multiBackupScript(cfg Config) (string, error) {
 			continue
 		}
 		seen[glob] = true
-		fmt.Fprintf(&b, "ls -1t \"$BK\"/%s 2>/dev/null | tail -n +%d | xargs -r rm -f\n", glob, cfg.keep()+1)
+		b.WriteString(pruneLine(glob, cfg.keep()))
 	}
-	fmt.Fprintf(&b, "ls -1t \"$BK\"/env-* 2>/dev/null | tail -n +%d | xargs -r rm -f\n", cfg.keep()+1)
+	b.WriteString(pruneLine("env-*", cfg.keep()))
 	for _, i := range ran[1:] {
 		fmt.Fprintf(&b, "echo \"backed up %s: %s ($(du -h \"$BK/%s\" | cut -f1))\"\n", cfg.Strategies[i].Kind, names[i], names[i])
 	}
@@ -431,13 +431,34 @@ func multiRestoreScript(cfg Config, file string) (string, error) {
 	for i := range cfg.Strategies {
 		fmt.Fprintf(&b, "[ -f \"$BK/%s\" ] || { echo \"backup not found: $BK/%s\" >&2; exit 1; }\n", names[i], names[i])
 	}
+	b.WriteString("umask 077\n")
 	b.WriteString(`echo "restoring set $ts"` + "\n")
+	b.WriteString(restoreHeader)
+	// Verify every artifact, then save every postgres container database, before the first step
+	// that replaces anything.
+	for i, s := range cfg.Strategies {
+		art := `"$BK/` + names[i] + `"`
+		switch s.Kind {
+		case KindPostgresContainer:
+			b.WriteString(cfg.pgVerify(s.Container, art))
+		case KindPostgresRemote:
+			fmt.Fprintf(&b, "%s pg_restore -l < %s >/dev/null || { echo \"backup is not a readable dump, nothing was changed: $BK/%s\" >&2; exit 1; }\n",
+				cfg.remoteClient(s, "pg_restore -l"), art, names[i])
+		case KindFiles:
+			fmt.Fprintf(&b, "tar -tzf - < %s >/dev/null || { echo \"backup is not a readable archive, nothing was changed: $BK/%s\" >&2; exit 1; }\n", art, names[i])
+		}
+	}
+	for i, s := range cfg.Strategies {
+		if s.Kind == KindPostgresContainer {
+			b.WriteString(cfg.pgSafetyDump(s.Container, s.user(), s.Database, fmt.Sprintf("pre-restore%d-$rts.dump", i)))
+		}
+	}
 	for i, s := range cfg.Strategies {
 		cmd, err := cfg.restoreCmd(s, `"$BK/`+names[i]+`"`)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(cmd + "\n")
+		b.WriteString("( set -e\n" + cmd + "\n) || restore_failed\n")
 	}
 	b.WriteString(`echo "restored from set $ts"` + "\n")
 	return b.String(), nil

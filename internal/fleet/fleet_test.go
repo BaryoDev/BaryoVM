@@ -196,3 +196,45 @@ func TestUnknownStoreAndSiteKeysSurviveASave(t *testing.T) {
 		t.Errorf("an unknown key was dropped:\n%s", out)
 	}
 }
+
+func TestSaveLeavesNoTempFilesAndKeepsOwnerOnlyMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BARYOVM_HOME", dir)
+	s := &Store{}
+	for i := 0; i < 3; i++ {
+		if err := s.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "fleet.json" {
+		t.Errorf("want only fleet.json, got %v", entries)
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, "fleet.json")); fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v", fi.Mode().Perm())
+	}
+}
+
+// Save writes a new file and renames it over the old one. In a directory that cannot take a new
+// file it fails and the old fleet.json is untouched, where an in-place write would have gone through.
+func TestAFailedSaveLeavesThePreviousFleetWhole(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	t.Setenv("BARYOVM_HOME", dir)
+	p := filepath.Join(dir, "fleet.json")
+	if err := os.WriteFile(p, []byte(`{"vms":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	if err := (&Store{}).Save(); err == nil {
+		t.Fatal("expected Save to fail in a directory that takes no new files")
+	}
+	if b, _ := os.ReadFile(p); string(b) != `{"vms":[]}` {
+		t.Errorf("the previous fleet.json changed: %q", b)
+	}
+}
