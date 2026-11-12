@@ -25,6 +25,13 @@ previously accepted is called out here rather than left to be discovered.
   server block in a shape the step does not edit is reported, and a rejected jail, a rolled-back
   drop or a failed reload ends the run with an error.
 
+### Fixed
+
+- **`stack release` no longer calls a failed lock a held lock.** When the release lock cannot be
+  created (permission denied in a root-owned parent of `remoteRoot` with `sudo` off, a read-only
+  filesystem), the error names the directory and the OS message and says to set `sudo` or use a
+  writable `remoteRoot`. Only a lock that exists says another release is starting.
+
 ## [0.6.0] - 2026-11-02
 
 Ship, prove and repo commands, guarded `git`, `gh`, publish and cloud wrappers, static sites, podman,

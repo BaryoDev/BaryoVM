@@ -231,3 +231,57 @@ func TestWriteCmdLeavesNoTempFileWhenTheDecodeFails(t *testing.T) {
 		t.Errorf("stray temp files: %v", left)
 	}
 }
+
+func TestAcquireReportsAPermissionErrorAsNotBusy(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", false)
+	r := &stubRunner{answers: func(cmd string) string {
+		if strings.Contains(cmd, "echo locked") {
+			return "error: mkdir: cannot create directory '/opt/.baryovm-release-tinycast.json.lock': Permission denied\n"
+		}
+		return ""
+	}}
+	err := Acquire(r, l)
+	if err == nil || errors.Is(err, ErrBusy) || !errors.Is(err, ErrLock) {
+		t.Fatalf("want ErrLock and not ErrBusy, got %v", err)
+	}
+	for _, want := range []string{"/opt", "Permission denied", "sudo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q lacks %q", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "another release") {
+		t.Errorf("a permission error must not say another release is running: %v", err)
+	}
+}
+
+func TestLockCmdSeparatesAHeldLockFromAFailure(t *testing.T) {
+	dir := t.TempDir()
+	l := Loc{File: filepath.Join(dir, ".baryovm-release-demo.json")}
+	run := func() string {
+		out, err := exec.Command("sh", "-c", l.LockCmd()).CombinedOutput()
+		if err != nil {
+			t.Fatalf("lock command: %v: %s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if got := run(); got != "locked" {
+		t.Fatalf("first: %q", got)
+	}
+	if got := run(); got != "busy" {
+		t.Fatalf("second: %q", got)
+	}
+	if err := os.Remove(l.Lock()); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	got := run()
+	if !strings.HasPrefix(got, "error: ") || !strings.Contains(got, "ermission denied") {
+		t.Errorf("read-only dir: %q", got)
+	}
+}

@@ -32,6 +32,10 @@ const (
 // ErrBusy means another release holds the start lock on this host.
 var ErrBusy = errors.New("another release is starting on this host")
 
+// ErrLock means the start lock could not be created for a reason other than another release holding
+// it, such as a directory the login cannot write to.
+var ErrLock = errors.New("cannot create the release lock")
+
 // Step is one stage of a release.
 type Step struct {
 	Name   string `json:"name"`
@@ -188,11 +192,13 @@ func (l Loc) DeployedFile() string { return strings.TrimSuffix(l.File, ".json") 
 
 func (l Loc) sh(cmd string) string { return sshx.SudoShell(l.Sudo, cmd) }
 
-// LockCmd takes the start lock. It prints "locked" or "busy".
+// LockCmd takes the start lock. It prints "locked", "busy" when the lock directory exists, or
+// "error: <mkdir's message>" when mkdir failed and no lock is there (permission denied, read-only
+// filesystem, no space).
 func (l Loc) LockCmd() string {
 	dir := sshx.Quote(path.Dir(l.File))
 	lock := sshx.Quote(l.Lock())
-	return l.sh("mkdir -p " + dir + " && { mkdir " + lock + " 2>/dev/null && echo locked || echo busy; }")
+	return l.sh("mkdir -p " + dir + " && { e=$(mkdir " + lock + " 2>&1) && echo locked || { [ -d " + lock + " ] && echo busy || echo \"error: $e\"; }; }")
 }
 
 // UnlockCmd drops the start lock.
@@ -220,14 +226,18 @@ func (l Loc) RemoveCmd() string {
 	return l.sh("rm -f " + sshx.Quote(l.File) + "; rmdir " + sshx.Quote(l.Lock()) + " 2>/dev/null; true")
 }
 
-// Acquire takes the start lock. ErrBusy when another release has it.
+// Acquire takes the start lock. ErrBusy when another release has it, ErrLock when it cannot be created.
 func Acquire(r sshx.Runner, l Loc) error {
 	out, err := r.Run(l.LockCmd())
 	if err != nil {
-		return err
+		return fmt.Errorf("%w in %s: %w (set sudo in the manifest or use a writable remoteRoot)", ErrLock, path.Dir(l.File), err)
 	}
-	if strings.TrimSpace(out) == "busy" {
+	out = strings.TrimSpace(out)
+	if out == "busy" {
 		return fmt.Errorf("%w: lock %s is held (remove it with `stack release --clear` if no release is running)", ErrBusy, l.Lock())
+	}
+	if msg, ok := strings.CutPrefix(out, "error:"); ok {
+		return fmt.Errorf("%w in %s: %s (set sudo in the manifest or use a writable remoteRoot)", ErrLock, path.Dir(l.File), strings.TrimSpace(msg))
 	}
 	return nil
 }
