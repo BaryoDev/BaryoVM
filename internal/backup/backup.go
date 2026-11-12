@@ -311,13 +311,58 @@ func RestoreScript(cfg Config, file string) string {
 		b.WriteString("case \"$f\" in /*) ;; *) f=\"$BK/$f\" ;; esac\n")
 	}
 	b.WriteString(`[ -n "$f" ] && [ -f "$f" ] || { echo "backup not found: $f" >&2; exit 1; }` + "\n")
+	b.WriteString("umask 077\n")
 	b.WriteString(`echo "restoring $f"` + "\n")
-	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s\n",
+	// Everything that can be checked is checked before the drop: the dump must be readable, and the
+	// current database is dumped to a file of its own.
+	b.WriteString(restoreHeader)
+	b.WriteString(cfg.pgVerify(cfg.DBContainer, `"$f"`))
+	b.WriteString(cfg.pgSafetyDump(cfg.DBContainer, cfg.user(), cfg.DBName, "pre-restore-$rts.dump"))
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s dropdb -U %s --force --if-exists %s || restore_failed\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
-	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s createdb -U %s %s\n",
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s createdb -U %s %s || restore_failed\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
-	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\"\n",
+	fmt.Fprintf(&b, cfg.dockerCmd()+" exec -i %s pg_restore -U %s -d %s < \"$f\" || restore_failed\n",
 		q(cfg.DBContainer), q(cfg.user()), q(cfg.DBName))
 	b.WriteString(`echo "restored from $f"` + "\n")
+	return b.String()
+}
+
+// restoreHeader opens the shared restore plumbing: a timestamp for safety dumps, the hints that tell
+// a person how to put the old data back, and the handler every step after the drop reports through.
+const restoreHeader = `rts=$(date +%Y%m%d-%H%M%S)
+hints=
+restore_failed() {
+  echo "restore failed, and the database may already be dropped." >&2
+  if [ -n "$hints" ]; then echo "the data from before the restore is in a safety dump. Put it back with:$hints" >&2; fi
+  exit 1
+}
+`
+
+// pgVerify is the script lines that prove a custom-format dump is readable, run in the same
+// container the restore uses and before anything is dropped.
+func (c Config) pgVerify(container, art string) string {
+	return fmt.Sprintf(c.dockerCmd()+" exec -i %s pg_restore -l < %s >/dev/null || { echo \"backup is not a readable dump, nothing was changed: %s\" >&2; exit 1; }\n",
+		sshx.Quote(container), art, strings.ReplaceAll(art, `"`, ""))
+}
+
+// pgSafetyDump is the script lines that dump the current database to $BK/<name> before it is
+// dropped, print where it is and the exact command that puts it back, and remember that command for
+// restore_failed. A database that is not there yet has nothing to save, so that case is skipped. A
+// dump that fails stops the restore with nothing changed.
+func (c Config) pgSafetyDump(container, user, db, name string) string {
+	q := sshx.Quote
+	dc := c.dockerCmd()
+	safe := `"$BK/` + name + `"`
+	var b strings.Builder
+	fmt.Fprintf(&b, "if %s exec %s psql -U %s -d %s -c 'select 1' >/dev/null 2>&1; then\n", dc, q(container), q(user), q(db))
+	fmt.Fprintf(&b, "  %s exec %s pg_dump -U %s -Fc %s > %s.partial || { rm -f %s.partial; echo \"safety dump failed, nothing was changed\" >&2; exit 1; }\n",
+		dc, q(container), q(user), q(db), safe, safe)
+	fmt.Fprintf(&b, "  mv %s.partial %s\n", safe, safe)
+	fmt.Fprintf(&b, "  echo \"safety dump of the current database: $BK/%s\"\n", name)
+	hint := fmt.Sprintf("%s exec -i %s dropdb -U %s --force --if-exists %s && %s exec -i %s createdb -U %s %s && %s exec -i %s pg_restore -U %s -d %s < \\\"$BK/%s\\\"",
+		dc, q(container), q(user), q(db), dc, q(container), q(user), q(db), dc, q(container), q(user), q(db), name)
+	fmt.Fprintf(&b, "  hints=\"$hints\n  %s\"\n", hint)
+	b.WriteString("fi\n")
 	return b.String()
 }

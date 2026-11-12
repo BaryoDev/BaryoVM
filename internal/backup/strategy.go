@@ -431,13 +431,34 @@ func multiRestoreScript(cfg Config, file string) (string, error) {
 	for i := range cfg.Strategies {
 		fmt.Fprintf(&b, "[ -f \"$BK/%s\" ] || { echo \"backup not found: $BK/%s\" >&2; exit 1; }\n", names[i], names[i])
 	}
+	b.WriteString("umask 077\n")
 	b.WriteString(`echo "restoring set $ts"` + "\n")
+	b.WriteString(restoreHeader)
+	// Verify every artifact, then save every postgres container database, before the first step
+	// that replaces anything.
+	for i, s := range cfg.Strategies {
+		art := `"$BK/` + names[i] + `"`
+		switch s.Kind {
+		case KindPostgresContainer:
+			b.WriteString(cfg.pgVerify(s.Container, art))
+		case KindPostgresRemote:
+			fmt.Fprintf(&b, "%s pg_restore -l < %s >/dev/null || { echo \"backup is not a readable dump, nothing was changed: $BK/%s\" >&2; exit 1; }\n",
+				cfg.remoteClient(s, "pg_restore -l"), art, names[i])
+		case KindFiles:
+			fmt.Fprintf(&b, "tar -tzf - < %s >/dev/null || { echo \"backup is not a readable archive, nothing was changed: $BK/%s\" >&2; exit 1; }\n", art, names[i])
+		}
+	}
+	for i, s := range cfg.Strategies {
+		if s.Kind == KindPostgresContainer {
+			b.WriteString(cfg.pgSafetyDump(s.Container, s.user(), s.Database, fmt.Sprintf("pre-restore%d-$rts.dump", i)))
+		}
+	}
 	for i, s := range cfg.Strategies {
 		cmd, err := cfg.restoreCmd(s, `"$BK/`+names[i]+`"`)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(cmd + "\n")
+		b.WriteString("( set -e\n" + cmd + "\n) || restore_failed\n")
 	}
 	b.WriteString(`echo "restored from set $ts"` + "\n")
 	return b.String(), nil

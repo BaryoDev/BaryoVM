@@ -27,6 +27,12 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Fixed
 
+- **`stack restore` checks the dump and saves the current database before it drops anything.** It
+  runs `pg_restore -l` on every postgres dump (and `tar -tzf` on files archives) first, so a corrupt
+  dump stops the restore with nothing changed. It then dumps the current database to
+  `pre-restore-<timestamp>.dump` in the backup dir and prints the path. If a step fails after the
+  drop, the output gives the safety dump path and the exact command that restores it. A set that
+  fails part way is still not rolled back.
 - **`stack release` no longer calls a failed lock a held lock.** When the release lock cannot be
   created (permission denied in a root-owned parent of `remoteRoot` with `sudo` off, a read-only
   filesystem), the error names the directory and the OS message and says to set `sudo` or use a
