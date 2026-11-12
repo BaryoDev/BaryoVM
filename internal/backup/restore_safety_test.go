@@ -38,6 +38,7 @@ func runRestore(t *testing.T, script string, env ...string) (log, out string, er
 	fake := "#!/bin/sh\necho \"$*\" >> \"" + logPath + "\"\n" +
 		"case \"$*\" in\n" +
 		"  *\"pg_restore -l\"*) [ -z \"$BAD_DUMP\" ] || exit 1 ;;\n" +
+		"  *\"-tAc\"*) [ -z \"$NO_CHECK\" ] || exit 1; [ -n \"$NO_DB\" ] || echo 1 ;;\n" +
 		"  *pg_dump*) [ -z \"$NO_DUMP\" ] || exit 1; echo DUMPDATA ;;\n" +
 		"  *dropdb*) [ -z \"$NO_DROP\" ] || exit 1 ;;\n" +
 		"esac\n" +
@@ -123,5 +124,45 @@ func TestASetWithACorruptSecondDumpRunsNothing(t *testing.T) {
 		if strings.Contains(log, bad) {
 			t.Errorf("%s ran although a dump was unreadable:\n%s", bad, log)
 		}
+	}
+}
+
+func TestAnErrorCheckingTheDatabaseStopsBeforeDropdb(t *testing.T) {
+	log, out, err := runRestore(t, RestoreScript(singleCfg(), ""), "NO_CHECK=1")
+	if err == nil || strings.Contains(log, "dropdb") || strings.Contains(log, "pg_dump") {
+		t.Errorf("a failed existence check must stop the restore (err %v):\n%s\n%s", err, out, log)
+	}
+}
+
+func TestAMissingDatabaseGetsNoSafetyDumpButStillRestores(t *testing.T) {
+	log, out, err := runRestore(t, RestoreScript(singleCfg(), ""), "NO_DB=1")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Contains(log, "pg_dump") || !strings.Contains(log, "pg_restore -U") {
+		t.Errorf("want a restore and no safety dump:\n%s", log)
+	}
+}
+
+// set -e is ignored inside a subshell on the left of ||, so a failed dropdb used to fall through to
+// pg_restore in a set restore.
+func TestASetStopsWhenDropdbFailsAndRunsTheHandler(t *testing.T) {
+	cfg := Config{Name: "app", Strategies: []Strategy{
+		{Kind: KindPostgresContainer, Container: "pg", Database: "one"},
+		{Kind: KindPostgresContainer, Container: "pg2", Database: "two"},
+	}}
+	script, err := RestoreScriptE(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, out, rerr := runRestore(t, script, "NO_DROP=1")
+	if rerr == nil {
+		t.Fatalf("expected failure:\n%s", out)
+	}
+	if strings.Contains(log, "createdb") || strings.Contains(log, "pg_restore -U") {
+		t.Errorf("createdb or pg_restore ran after dropdb failed:\n%s", log)
+	}
+	if !strings.Contains(out, "restore failed") || !strings.Contains(out, "Put it back with") {
+		t.Errorf("the handler did not run:\n%s", out)
 	}
 }
