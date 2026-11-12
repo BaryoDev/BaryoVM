@@ -13,7 +13,8 @@ restore_failed() {
   exit 1
 }
 sudo -n docker exec -i 'app-postgres-1' pg_restore -l < "$f" >/dev/null || { echo "backup is not a readable dump, nothing was changed: $f" >&2; exit 1; }
-if sudo -n docker exec 'app-postgres-1' psql -U 'app' -d 'appdb' -c 'select 1' >/dev/null 2>&1; then
+ex=$(sudo -n docker exec 'app-postgres-1' psql -U 'app' -d postgres -tAc 'select 1 from pg_database where datname='\''appdb'\''') || { echo "could not check whether the database exists, nothing was changed" >&2; exit 1; }
+if [ "$ex" = 1 ]; then
   sudo -n docker exec 'app-postgres-1' pg_dump -U 'app' -Fc 'appdb' > "$BK/pre-restore-$rts.dump".partial || { rm -f "$BK/pre-restore-$rts.dump".partial; echo "safety dump failed, nothing was changed" >&2; exit 1; }
   mv "$BK/pre-restore-$rts.dump".partial "$BK/pre-restore-$rts.dump"
   echo "safety dump of the current database: $BK/pre-restore-$rts.dump"
