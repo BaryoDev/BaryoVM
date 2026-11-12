@@ -230,13 +230,16 @@ func (l Loc) RemoveCmd() string {
 func Acquire(r sshx.Runner, l Loc) error {
 	out, err := r.Run(l.LockCmd())
 	if err != nil {
-		return fmt.Errorf("%w in %s: %w (set sudo in the manifest or use a writable remoteRoot)", ErrLock, path.Dir(l.File), err)
+		return err
 	}
 	out = strings.TrimSpace(out)
 	if out == "busy" {
 		return fmt.Errorf("%w: lock %s is held (remove it with `stack release --clear` if no release is running)", ErrBusy, l.Lock())
 	}
 	if msg, ok := strings.CutPrefix(out, "error:"); ok {
+		if strings.Contains(msg, "File exists") {
+			return fmt.Errorf("%w: %s exists and is not a directory (remove it, or use `stack release --clear`): %s", ErrLock, l.Lock(), strings.TrimSpace(msg))
+		}
 		return fmt.Errorf("%w in %s: %s (set sudo in the manifest or use a writable remoteRoot)", ErrLock, path.Dir(l.File), strings.TrimSpace(msg))
 	}
 	return nil

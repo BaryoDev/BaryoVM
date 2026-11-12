@@ -285,3 +285,36 @@ func TestLockCmdSeparatesAHeldLockFromAFailure(t *testing.T) {
 		t.Errorf("read-only dir: %q", got)
 	}
 }
+
+type failRunner struct{ err error }
+
+func (f failRunner) Run(string) (string, error) { return "", f.err }
+
+func TestAcquireReturnsATransportErrorWithoutTheLockHint(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", true)
+	cause := errors.New("ssh: connection reset by peer")
+	err := Acquire(failRunner{cause}, l)
+	if !errors.Is(err, cause) || errors.Is(err, ErrLock) || errors.Is(err, ErrBusy) {
+		t.Fatalf("want the raw transport error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sudo in the manifest") {
+		t.Errorf("transport error carries the lock hint: %v", err)
+	}
+}
+
+func TestAcquireNamesALockPathThatIsNotADirectory(t *testing.T) {
+	l := For("/opt/tinycast", "tinycast", false)
+	r := &stubRunner{answers: func(cmd string) string {
+		if strings.Contains(cmd, "echo locked") {
+			return "error: mkdir: /opt/.baryovm-release-tinycast.json.lock: File exists\n"
+		}
+		return ""
+	}}
+	err := Acquire(r, l)
+	if !errors.Is(err, ErrLock) || errors.Is(err, ErrBusy) {
+		t.Fatalf("want ErrLock, got %v", err)
+	}
+	if !strings.Contains(err.Error(), l.Lock()) || !strings.Contains(err.Error(), "not a directory") || strings.Contains(err.Error(), "sudo") {
+		t.Errorf("message: %v", err)
+	}
+}
