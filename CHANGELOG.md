@@ -27,6 +27,12 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Fixed
 
+- **A silent SSH host no longer hangs the CLI.** The handshake has its own 30 second deadline (the
+  existing timeout covered only the TCP connect), and a keepalive every 30 seconds closes the
+  connection when the VM stops answering, so a running command returns an error instead of waiting
+  forever. Per-command timeouts and Ctrl+C handling are not part of this.
+- **The release workflow runs `go vet` and `go test -race` before GoReleaser.** A tag pushed from a
+  red commit no longer publishes.
 - **Sync paths are cleaned before the compose directory check.** `"sync": ["."]` and `"x/.."` passed
   the guard as `/srv/app/.` while the tar transport cleaned them to the stack root and pruned it,
   `.env` included. Both now count as the root and are refused, and so is an entry that cleans to

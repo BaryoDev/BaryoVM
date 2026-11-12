@@ -5,7 +5,28 @@ on:
     tags: ["v*.*.*"]
 
 jobs:
+  # A tag from a red commit must not publish. CI runs on main and pull requests, not on tags, so the
+  # same checks run here and the release job waits for them.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
   goreleaser:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the GitHub Release + upload artifacts

@@ -102,11 +102,90 @@ func Dial(t Target) (*Client, error) {
 		HostKeyAlgorithms: store.Algorithms(addr),
 		Timeout:           15 * time.Second,
 	}
-	c, err := ssh.Dial("tcp", addr, cfg)
+	c, err := dialWithHandshakeDeadline(addr, cfg, handshakeTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
+	go keepAlive(c, keepAliveInterval, keepAliveReplyTimeout)
 	return &Client{c: c}, nil
+}
+
+// handshakeTimeout bounds the SSH handshake. ClientConfig.Timeout covers only the TCP connect, so a
+// host that accepts the connection and never sends a banner would otherwise hang Dial forever.
+var handshakeTimeout = 30 * time.Second
+
+// keepAliveInterval and keepAliveReplyTimeout decide when a VM that stopped answering is given up
+// on: a keepalive goes out every interval and must be answered within the reply timeout.
+var (
+	keepAliveInterval     = 30 * time.Second
+	keepAliveReplyTimeout = 20 * time.Second
+)
+
+// dialWithHandshakeDeadline is ssh.Dial with a deadline on the connection until the handshake is
+// done, then cleared so a long command is not cut off.
+func dialWithHandshakeDeadline(addr string, cfg *ssh.ClientConfig, handshake time.Duration) (*ssh.Client, error) {
+	conn, err := net.DialTimeout("tcp", addr, cfg.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(handshake)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		sc.Close()
+		return nil, err
+	}
+	return ssh.NewClient(sc, chans, reqs), nil
+}
+
+// keepAliver is the part of *ssh.Client keepAlive needs.
+type keepAliver interface {
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
+	Close() error
+	Wait() error
+}
+
+// keepAlive sends keepalive@openssh.com every interval and closes the connection when one is not
+// answered within reply (or fails). Closing makes every pending Run return an error instead of
+// waiting on a VM that dropped off the network. It ends when the connection does.
+func keepAlive(c keepAliver, interval, reply time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		c.Wait()
+		close(done)
+	}()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+		res := make(chan error, 1)
+		go func() {
+			_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+			res <- err
+		}()
+		select {
+		case err := <-res:
+			if err != nil {
+				c.Close()
+				return
+			}
+		case <-time.After(reply):
+			c.Close()
+			return
+		case <-done:
+			return
+		}
+	}
 }
 
 // IsUnreachable reports whether a Dial error means no connection was made: nothing answered, the
