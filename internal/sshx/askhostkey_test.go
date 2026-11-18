@@ -176,8 +176,8 @@ func TestDialRefusesAnUnknownHostWithNoTerminal(t *testing.T) {
 	setHostKeyState(t, nil, false, func(string, string) bool { asked.Add(1); return true })
 	home, err := dialUnknownHost(t, host, port)
 	var unknown *hostkeys.ErrUnknownHost
-	if !errors.As(err, &unknown) || unknown.Reason == hostkeys.ReasonDeclined {
-		t.Fatalf("want ErrUnknownHost that nobody was asked about, got %v", err)
+	if !errors.As(err, &unknown) || unknown.Reason != hostkeys.ReasonNoTerminal {
+		t.Fatalf("want ErrUnknownHost refused for having no terminal, got %v", err)
 	}
 	if asked.Load() != 0 {
 		t.Error("with no terminal nobody may be asked")

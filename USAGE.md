@@ -178,7 +178,8 @@ A new host's key is asked about on a terminal. A script or app (`-o json`, no te
 asked, so `vm add` refuses and the JSON error carries `data.host`, `data.offered` and `data.reason`.
 Show that fingerprint to the person, and once they have checked it against the machine, run again
 with `--host-key-fingerprint SHA256:...`: a host offering exactly that key is recorded and the add
-continues, and any other key is refused with both fingerprints. The flag does not apply to a host
+continues, and any other key is refused with both fingerprints. This holds under strict mode too,
+since the fingerprint is the checked key. The flag does not apply to a host
 that already has a different key on record, which is still a changed key, and a `project release`
 ignores it.
 A host key that does not match the one on record is not "unreachable": `vm add` fails

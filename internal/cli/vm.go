@@ -44,8 +44,9 @@ host's default shell is powershell.exe.
 An unknown host key is asked about on a terminal and refused with no terminal or
 under -o json. A script or app that has had a person check the key can pass its
 SHA256 fingerprint with --host-key-fingerprint: a host offering exactly that key
-is recorded and the command continues, and any other key is refused. A host with
-a different recorded key is still refused.
+is recorded and the command continues, and any other key is refused. This holds
+under --strict-host-keys too, since the flag is the checked key. A host with a
+different recorded key is still refused.
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
