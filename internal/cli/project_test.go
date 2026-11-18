@@ -8,6 +8,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"testing"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
+	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
+	"github.com/BaryoDev/BaryoVM/internal/sshx"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -489,5 +493,47 @@ func TestProjectExportWillNotOverwriteWithoutForce(t *testing.T) {
 	}
 	if _, _, err := runCmdE(t, newProjectExportCmd(), nil, true, "--out", file); err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("want a refusal that names --force, got %v", err)
+	}
+}
+
+// A project release never asks about a host and never learns one, whatever the flag, the
+// environment or the terminal say. The connect it makes must see a refusal with the Release reason.
+func TestProjectReleaseRefusesAnUnknownHostEvenWhenAskingOrLearningIsOn(t *testing.T) {
+	dir, _ := projectDir(t, nil)
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "0")
+	prevConfirm := sshx.ConfirmHostKey
+	sshx.SetInteractive(true)
+	sshx.ConfirmHostKey = func(string, string) bool { return true }
+	t.Cleanup(func() { sshx.SetInteractive(false); sshx.ConfirmHostKey = prevConfirm })
+
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(newHostKey(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &net.TCPAddr{IP: net.IPv4(198, 51, 100, 7), Port: 22}
+
+	f := &fakeRunner{answers: verifyAnswers("api", "console", "site")}
+	withLookPath(t, hasRsync)
+	var decided error
+	prevDial, prevLocal := dialRelease, runLocal
+	dialRelease = func(vm *fleet.VM) (remoteSession, error) {
+		decided = sshx.HostKeyStore().Callback(nil)("198.51.100.7:22", remote, key)
+		return fakeSession{f}, nil
+	}
+	runLocal = func(c *exec.Cmd) (string, error) { return "", nil }
+	t.Cleanup(func() { dialRelease, runLocal = prevDial, prevLocal })
+
+	_, _, _ = runCmdE(t, newProjectReleaseCmd(), f, true, "--file", filepath.Join(dir, fleet.DefaultProjectFile))
+
+	var unknown *hostkeys.ErrUnknownHost
+	if !errors.As(decided, &unknown) || unknown.Reason != hostkeys.ReasonRelease {
+		t.Fatalf("a release must refuse an unknown host with the Release reason, got %v", decided)
+	}
+	if _, statErr := os.Stat(filepath.Join(os.Getenv("BARYOVM_HOME"), "known_hosts")); statErr == nil {
+		t.Error("a release must not write known_hosts")
+	}
+	// ForceRefuse is undone when the release ends.
+	if got := sshx.HostKeyMode(); got != hostkeys.Learn {
+		t.Errorf("after the release HostKeyMode() = %v, want Learn (env 0)", got)
 	}
 }

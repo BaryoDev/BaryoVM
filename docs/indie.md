@@ -19,7 +19,8 @@ baryovm vm add myvm --host <vm-ip> --user ubuntu --key ~/.ssh/id_ed25519
 baryovm vm ping myvm
 ```
 
-`vm add` connects once to detect the OS and records the host key in `~/.baryovm/known_hosts`.
+`vm add` connects once to detect the OS. On a terminal it shows the host key fingerprint and asks
+before recording it in `~/.baryovm/known_hosts`.
 `vm ping` reports the host and the Docker version. If either fails, see
 [troubleshooting](troubleshooting.md).
 

@@ -28,7 +28,7 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMAddCmd() *cobra.Command {
-	var host, user, key, osName, shellName, remoteMode string
+	var host, user, key, osName, shellName, remoteMode, hostKeyFP string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -40,6 +40,12 @@ connection. If the host cannot be reached it is saved with no OS (read as
 linux) and a warning; a host key mismatch still fails. With --os windows the SSH
 shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
 host's default shell is powershell.exe.
+
+An unknown host key is asked about on a terminal and refused with no terminal or
+under -o json. A script or app that has had a person check the key can pass its
+SHA256 fingerprint with --host-key-fingerprint: a host offering exactly that key
+is recorded and the command continues, and any other key is refused. A host with
+a different recorded key is still refused.
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,6 +53,12 @@ host's default shell is powershell.exe.
 			store, err := fleet.Load()
 			if err != nil {
 				return err
+			}
+			if hostKeyFP != "" {
+				if !strings.HasPrefix(hostKeyFP, "SHA256:") {
+					return fmt.Errorf("--host-key-fingerprint must look like SHA256:..., as ssh-keygen -lf prints it")
+				}
+				defer sshx.TrustFingerprint(hostKeyFP)()
 			}
 			vm := fleet.VM{Name: name, Host: host, Port: port, User: user, KeyPath: key, Provider: "ssh"}
 			var unreached bool
@@ -91,7 +103,7 @@ host's default shell is powershell.exe.
 					return err
 				})
 				if err != nil {
-					ui.Emit(ui.Result{OK: false, Action: "vm add", Error: err.Error()})
+					ui.Emit(ui.Result{OK: false, Action: "vm add", Error: err.Error(), Data: errData(err)})
 					return err
 				}
 			}
@@ -122,6 +134,7 @@ host's default shell is powershell.exe.
 	cmd.Flags().StringVar(&osName, "os", "", "host OS, linux or windows (default: detect over SSH)")
 	cmd.Flags().StringVar(&shellName, "shell", "", "SSH shell of a Windows host, cmd or powershell (with --os windows; default cmd)")
 	cmd.Flags().StringVar(&remoteMode, "remote", "", "\"forced\" when the key is pinned to `baryovm remote serve` (see `vm remote install`)")
+	cmd.Flags().StringVar(&hostKeyFP, "host-key-fingerprint", "", "trust an unknown host that offers exactly this SHA256 fingerprint, without asking")
 	_ = cmd.MarkFlagRequired("host")
 	_ = cmd.MarkFlagRequired("key")
 	return cmd

@@ -11,6 +11,12 @@ linux) and a warning; a host key mismatch still fails. With --os windows the SSH
 shell is recorded as cmd, the OpenSSH default; pass --shell powershell if the
 host's default shell is powershell.exe.
 
+An unknown host key is asked about on a terminal and refused with no terminal or
+under -o json. A script or app that has had a person check the key can pass its
+SHA256 fingerprint with --host-key-fingerprint: a host offering exactly that key
+is recorded and the command continues, and any other key is refused. A host with
+a different recorded key is still refused.
+
 ```
 baryovm vm add <name> [flags]
 ```
@@ -20,6 +26,7 @@ baryovm vm add <name> [flags]
 ```
   -h, --help                          help for add
       --host string                   public IP or hostname (required)
+      --host-key-fingerprint string   trust an unknown host that offers exactly this SHA256 fingerprint, without asking
       --key string                    path to the private SSH key (required)
       --os string                     host OS, linux or windows (default: detect over SSH)
       --port int                      SSH port (default 22)

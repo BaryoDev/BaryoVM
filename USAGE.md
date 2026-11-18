@@ -56,7 +56,7 @@ a terminal you see the host and the fingerprint it offered, and a prompt:
 ```text
 ! 203.0.113.10:22 has no recorded host key
   offered: SHA256:9KpQ...
-  verify it: ssh-keyscan -p 22 -t ecdsa,ed25519 203.0.113.10 | ssh-keygen -lf -
+  verify it: ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 203.0.113.10 | ssh-keygen -lf -
 Trust this host key? [y/N]
 ```
 
@@ -103,7 +103,7 @@ So a CI job records the key first, and fails rather than trusting a new one:
 - name: Pin the host key
   run: |
     mkdir -p ~/.baryovm
-    ssh-keyscan -t ecdsa,ed25519 "$VM_HOST" >> ~/.baryovm/known_hosts
+    ssh-keyscan -t ecdsa,ed25519,rsa "$VM_HOST" >> ~/.baryovm/known_hosts
 
 - name: Deploy
   env:
@@ -174,6 +174,13 @@ give `--os linux|windows` and it does not connect at all. Any host with a POSIX 
 (Linux, macOS, FreeBSD) is recorded as `linux`. If the host cannot be reached (refused,
 timed out) or does not answer the probe, `vm add` still saves it, with no OS, which
 reads as Linux, and warns; run `vm add` again when the host is up, or pass `--os windows`.
+A new host's key is asked about on a terminal. A script or app (`-o json`, no terminal) cannot be
+asked, so `vm add` refuses and the JSON error carries `data.host`, `data.offered` and `data.reason`.
+Show that fingerprint to the person, and once they have checked it against the machine, run again
+with `--host-key-fingerprint SHA256:...`: a host offering exactly that key is recorded and the add
+continues, and any other key is refused with both fingerprints. The flag does not apply to a host
+that already has a different key on record, which is still a changed key, and a `project release`
+ignores it.
 A host key that does not match the one on record is not "unreachable": `vm add` fails
 and saves nothing. Entries from before this existed are read as Linux, and an `os` that
 is neither `linux` nor `windows` is refused by every command that uses it.

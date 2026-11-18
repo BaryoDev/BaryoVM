@@ -57,7 +57,8 @@ func ForceRefuse() (restore func()) {
 	prev := strictOverride
 	on := true
 	strictOverride = &on
-	return func() { strictOverride = prev }
+	forceRefuse++
+	return func() { strictOverride, forceRefuse = prev, forceRefuse-1 }
 }
 
 // strictSetting reports an explicit choice: 1 strict (refuse), 0 learn on first use, -1 nothing set.
@@ -111,6 +112,63 @@ func StrictHostKeys() bool { return HostKeyMode() == hostkeys.Refuse }
 // request before it connects.
 func StrictHostKeysRequested() bool { return strictSetting() == 1 }
 
+// outputJSON is set by the cli layer, so a refusal can say JSON was why nobody was asked.
+var outputJSON bool
+
+// SetOutputJSON tells sshx that output is JSON.
+func SetOutputJSON(on bool) { outputJSON = on }
+
+// forceRefuse counts open ForceRefuse calls.
+var forceRefuse int
+
+// expectedFingerprint is a SHA256 fingerprint the caller already checked, for one run.
+var expectedFingerprint string
+
+// TrustFingerprint trusts an unknown host whose offered key has this SHA256 fingerprint, without
+// asking, until the returned function is called. A different key is refused with both fingerprints,
+// and a host that already has a recorded key is unaffected (a changed key is still refused). It has
+// no effect during a project release.
+func TrustFingerprint(fp string) (restore func()) {
+	prev := expectedFingerprint
+	expectedFingerprint = fp
+	return func() { expectedFingerprint = prev }
+}
+
+// refuseReason is why an unknown host is refused without asking, for the error text.
+func refuseReason() hostkeys.Reason {
+	switch {
+	case forceRefuse > 0:
+		return hostkeys.ReasonRelease
+	case strictSetting() == 1:
+		return hostkeys.ReasonStrict
+	case outputJSON:
+		return hostkeys.ReasonJSON
+	}
+	return hostkeys.ReasonNoTerminal
+}
+
+// newHostKeyStore builds the store a dial uses, with the mode, the reason, the confirm hook and any
+// trusted fingerprint resolved.
+func newHostKeyStore(guard *handshakeGuard) *hostkeys.Store {
+	store := hostkeys.New(home()).Mode(HostKeyMode()).RefuseReason(refuseReason())
+	if confirm := ConfirmHostKey; confirm != nil {
+		// The handshake deadline is for a host that stalls, not for a person reading a fingerprint.
+		store.Confirm(func(host, fp string) bool {
+			var ok bool
+			guard.pause(func() { ok = confirm(host, fp) })
+			return ok
+		})
+	}
+	if expectedFingerprint != "" && forceRefuse == 0 {
+		store.ExpectFingerprint(expectedFingerprint)
+	}
+	return store
+}
+
+// HostKeyStore is the store Dial would use right now. The cli layer's tests use it to see what a
+// dial would decide without opening a connection.
+func HostKeyStore() *hostkeys.Store { return newHostKeyStore(&handshakeGuard{}) }
+
 // OnLearnHostKey is called the first time a host key is recorded, so the operator sees the
 // fingerprint they are now trusting. The cli layer sets it; sshx does not print (see CLAUDE.md on
 // the dependency direction), so a nil hook means the learning is silent.
@@ -151,15 +209,7 @@ func Dial(t Target) (*Client, error) {
 	defer closeAgent() // signing happens during the handshake, so the agent is done once Dial returns
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	guard := &handshakeGuard{}
-	store := hostkeys.New(home()).Mode(HostKeyMode())
-	if confirm := ConfirmHostKey; confirm != nil {
-		// The handshake deadline is for a host that stalls, not for a person reading a fingerprint.
-		store.Confirm(func(host, fp string) bool {
-			var ok bool
-			guard.pause(func() { ok = confirm(host, fp) })
-			return ok
-		})
-	}
+	store := newHostKeyStore(guard)
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},

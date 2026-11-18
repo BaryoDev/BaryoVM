@@ -142,23 +142,36 @@ be. The tool cannot tell, so it stops. If you rebuilt the machine:
 baryovm vm forget-key myvm
 ```
 
-The next connection learns the new key and prints its fingerprint, with an `ssh-keyscan` line to
-check it.
+The next connection asks about the new key (on a terminal) and shows its fingerprint, with an
+`ssh-keyscan` line to check it. With no terminal it is refused until you record the key.
 
-## `no recorded host key for <host>, and strict host key checking is on`
+## `no recorded host key for <host:port>, and ...`
 
-You passed `--strict-host-keys` (or set `BARYOVM_STRICT_HOST_KEYS=1`) for a host the tool has not
-seen. The message carries the offered fingerprint and a command to record it:
+The tool has not seen this host, and nobody could say yes to its key. The second half of the first
+line says why. Every one of them carries the offered fingerprint and a command to record it, after
+you compare the fingerprint to the machine:
 
 ```text
-no recorded host key for 203.0.113.10:22, and strict host key checking is on.
+no recorded host key for 203.0.113.10:22, and there is no terminal to ask on.
   offered  SHA256:...
 ...
-  ssh-keyscan -t ecdsa,ed25519 203.0.113.10 >> ~/.baryovm/known_hosts
+  ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 203.0.113.10 >> ~/.baryovm/known_hosts
 ```
 
-Compare the fingerprint to the machine, then run that line. Or connect once without the flag to
-learn the key. `--strict-host-keys=false` turns strict mode off for one command.
+- `there is no terminal to ask on`: stdin or stderr is not a terminal (a pipe, CI). Record the key
+  first. To learn on first use instead, set `BARYOVM_STRICT_HOST_KEYS=0` or pass
+  `--strict-host-keys=false`.
+- `output is JSON, so nobody can be asked`: `-o json` is for programs, so there is no prompt. Record
+  the key, or call `vm add` again with `--host-key-fingerprint SHA256:...` once a person has checked
+  the fingerprint. The JSON error carries `host`, `offered` and `reason` as fields.
+- `strict host key checking was requested`: you passed `--strict-host-keys` or set
+  `BARYOVM_STRICT_HOST_KEYS=1`. That always refuses an unknown host. Unset it to be asked instead.
+- `a project release never trusts a new host`: `project release` does not ask and does not learn.
+  Pin the key as `hostKey` in the project file (see below).
+- `host key for <host> not trusted`: you were asked and did not answer `y` or `yes`. Nothing was
+  recorded.
+- `does not match the fingerprint you gave`: `--host-key-fingerprint` was given and the host offered
+  another key. Nothing was recorded, and it is not the machine whose key you checked.
 
 ## `no recorded host key for <host:port> in <path>`
 

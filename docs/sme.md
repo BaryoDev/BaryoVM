@@ -14,8 +14,8 @@ baryovm vm add prod --host <vm-ip> --user deploy --key ~/.ssh/id_ed25519
 baryovm vm ping prod
 ```
 
-`vm add` records the host key the first time it connects. Check the fingerprint against the
-machine.
+`vm add` asks about the host key the first time it connects, and records it only if you answer
+`y`. Check the fingerprint against the machine first. With no terminal it refuses an unknown host.
 
 ## 2. Find what is running
 

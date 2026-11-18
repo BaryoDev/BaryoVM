@@ -161,7 +161,7 @@ func TestDialRefusesAndRecordsNothingWhenTheAnswerIsNo(t *testing.T) {
 	setHostKeyState(t, nil, true, func(string, string) bool { return false })
 	home, err := dialUnknownHost(t, host, port)
 	var unknown *hostkeys.ErrUnknownHost
-	if !errors.As(err, &unknown) || !unknown.Declined {
+	if !errors.As(err, &unknown) || unknown.Reason != hostkeys.ReasonDeclined {
 		t.Fatalf("want a declined ErrUnknownHost, got %v", err)
 	}
 	if recorded(home) != "" {
@@ -176,7 +176,7 @@ func TestDialRefusesAnUnknownHostWithNoTerminal(t *testing.T) {
 	setHostKeyState(t, nil, false, func(string, string) bool { asked.Add(1); return true })
 	home, err := dialUnknownHost(t, host, port)
 	var unknown *hostkeys.ErrUnknownHost
-	if !errors.As(err, &unknown) || unknown.Declined {
+	if !errors.As(err, &unknown) || unknown.Reason == hostkeys.ReasonDeclined {
 		t.Fatalf("want ErrUnknownHost that nobody was asked about, got %v", err)
 	}
 	if asked.Load() != 0 {
@@ -272,4 +272,83 @@ func netPipe(t *testing.T) (net.Conn, net.Conn) {
 		t.Fatal(err)
 	}
 	return <-acc, cli
+}
+
+func TestRefusalReasonFollowsHowTheRunWasStarted(t *testing.T) {
+	cases := []struct {
+		name     string
+		env      string
+		json     bool
+		force    bool
+		override *bool
+		want     hostkeys.Reason
+	}{
+		{"no terminal", "", false, false, nil, hostkeys.ReasonNoTerminal},
+		{"json", "", true, false, nil, hostkeys.ReasonJSON},
+		{"strict by env", "1", false, false, nil, hostkeys.ReasonStrict},
+		{"strict by flag", "", true, false, boolPtr(true), hostkeys.ReasonStrict},
+		{"release beats the rest", "1", true, true, boolPtr(true), hostkeys.ReasonRelease},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BARYOVM_STRICT_HOST_KEYS", c.env)
+			setHostKeyState(t, c.override, false, nil)
+			oldJSON := outputJSON
+			t.Cleanup(func() { outputJSON = oldJSON })
+			SetOutputJSON(c.json)
+			if c.force {
+				defer ForceRefuse()()
+			}
+			if got := refuseReason(); got != c.want {
+				t.Errorf("refuseReason() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDialTrustsAMatchingFingerprintWithNoPrompt(t *testing.T) {
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+	signer := ed25519Signer(t)
+	host, port := serveHostKeys(t, signer)
+	setHostKeyState(t, nil, false, nil)
+	defer TrustFingerprint(ssh.FingerprintSHA256(signer.PublicKey()))()
+	home, err := dialUnknownHost(t, host, port)
+	if err != nil {
+		t.Fatalf("a matching fingerprint must let the dial through: %v", err)
+	}
+	if recorded(home) == "" {
+		t.Error("the key must be recorded")
+	}
+}
+
+func TestDialRefusesAMismatchedFingerprintAndWritesNothing(t *testing.T) {
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "0")
+	host, port := serveHostKeys(t, ed25519Signer(t))
+	setHostKeyState(t, nil, false, nil)
+	defer TrustFingerprint(ssh.FingerprintSHA256(ed25519Signer(t).PublicKey()))()
+	home, err := dialUnknownHost(t, host, port)
+	var unknown *hostkeys.ErrUnknownHost
+	if !errors.As(err, &unknown) || unknown.Reason != hostkeys.ReasonFingerprint {
+		t.Fatalf("want ReasonFingerprint, got %v", err)
+	}
+	if recorded(home) != "" {
+		t.Error("a mismatch must write nothing")
+	}
+}
+
+func TestTrustFingerprintIsIgnoredDuringARelease(t *testing.T) {
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+	signer := ed25519Signer(t)
+	host, port := serveHostKeys(t, signer)
+	setHostKeyState(t, nil, false, nil)
+	defer TrustFingerprint(ssh.FingerprintSHA256(signer.PublicKey()))()
+	defer ForceRefuse()()
+	home, err := dialUnknownHost(t, host, port)
+	var unknown *hostkeys.ErrUnknownHost
+	if !errors.As(err, &unknown) || unknown.Reason != hostkeys.ReasonRelease {
+		t.Fatalf("a release must refuse a new host whatever fingerprint is given, got %v", err)
+	}
+	if recorded(home) != "" {
+		t.Error("nothing may be recorded")
+	}
 }

@@ -69,19 +69,47 @@ func (e *ErrChanged) Error() string {
 		e.Host, e.Stored, e.Offered, e.Host)
 }
 
-// ErrUnknownHost is returned for a host with no recorded key that was not trusted: refused outright
-// (strict, or no terminal to ask on) or declined when asked. It carries the offered fingerprint so an
-// operator can pin it after checking it, rather than having to go and fetch it.
+// Reason says why an unknown host was not trusted, so the message gives advice that works for that
+// case. The zero value is ReasonNoTerminal.
+type Reason string
+
+const (
+	// ReasonNoTerminal: nobody could be asked because there is no terminal (a pipe, CI).
+	ReasonNoTerminal Reason = ""
+	// ReasonJSON: nobody could be asked because output is JSON, which a program reads.
+	ReasonJSON Reason = "json"
+	// ReasonStrict: strict checking was requested by the flag or BARYOVM_STRICT_HOST_KEYS.
+	ReasonStrict Reason = "strict"
+	// ReasonRelease: a project release never trusts a new host, by prompt or otherwise.
+	ReasonRelease Reason = "release"
+	// ReasonDeclined: a person was asked and did not say yes.
+	ReasonDeclined Reason = "declined"
+	// ReasonFingerprint: the caller supplied the fingerprint it expected and the host offered another.
+	ReasonFingerprint Reason = "fingerprint"
+)
+
+// ErrUnknownHost is returned for a host with no recorded key that was not trusted. It carries the
+// offered fingerprint so an operator can pin it after checking it, rather than having to go and
+// fetch it, and the Reason so the message and a program reading it know what to do next.
 type ErrUnknownHost struct {
 	Host    string
 	Offered string
 	Store   string
-	// Declined is set when a person was asked and did not say yes. Unset means nobody was asked.
-	Declined bool
+	Reason  Reason
+	// Expected is the fingerprint the caller said to trust, set for ReasonFingerprint.
+	Expected string
 }
 
 func (e *ErrUnknownHost) Error() string {
-	if e.Declined {
+	record := fmt.Sprintf(
+		"Check that fingerprint against the machine, then record it before this runs:\n"+
+			"\n"+
+			"  %s >> %s\n", Keyscan(e.Host), e.Store)
+	learnAgain := "\n" +
+		"To learn an unknown host's key on first use instead, as releases before this one did, set\n" +
+		"BARYOVM_STRICT_HOST_KEYS=0 (or pass --strict-host-keys=false).\n"
+	switch e.Reason {
+	case ReasonDeclined:
 		return fmt.Sprintf(
 			"host key for %s not trusted.\n"+
 				"  offered  %s\n"+
@@ -91,21 +119,56 @@ func (e *ErrUnknownHost) Error() string {
 				"\n"+
 				"  %s >> %s\n",
 			e.Host, e.Offered, Keyscan(e.Host), e.Store)
+	case ReasonFingerprint:
+		return fmt.Sprintf(
+			"host key for %s does not match the fingerprint you gave.\n"+
+				"  expected %s\n"+
+				"  offered  %s\n"+
+				"\n"+
+				"Nothing was recorded. Whatever answered is not the machine whose key you checked.\n",
+			e.Host, e.Expected, e.Offered)
+	case ReasonStrict:
+		return fmt.Sprintf(
+			"no recorded host key for %s, and strict host key checking was requested (--strict-host-keys or\n"+
+				"BARYOVM_STRICT_HOST_KEYS).\n"+
+				"  offered  %s\n"+
+				"\n"+
+				"Strict checking refuses an unknown host without asking.\n"+
+				"\n"+
+				"%s"+
+				"\n"+
+				"To be asked instead, unset BARYOVM_STRICT_HOST_KEYS and drop --strict-host-keys.\n",
+			e.Host, e.Offered, record)
+	case ReasonRelease:
+		return fmt.Sprintf(
+			"no recorded host key for %s, and a project release never trusts a new host.\n"+
+				"  offered  %s\n"+
+				"\n"+
+				"It does not ask and it does not learn. Check that fingerprint against the machine and pin\n"+
+				"it as hostKey for that VM in the project file, or record it in known_hosts and pass\n"+
+				"--strict-host-keys:\n"+
+				"\n"+
+				"  %s >> %s\n",
+			e.Host, e.Offered, Keyscan(e.Host), e.Store)
+	case ReasonJSON:
+		return fmt.Sprintf(
+			"no recorded host key for %s, and output is JSON, so nobody can be asked.\n"+
+				"  offered  %s\n"+
+				"\n"+
+				"%s"+
+				"%s",
+			e.Host, e.Offered, record, learnAgain)
 	}
 	return fmt.Sprintf(
-		"no recorded host key for %s, and there is nobody to ask (strict host key checking, or no terminal).\n"+
+		"no recorded host key for %s, and there is no terminal to ask on.\n"+
 			"  offered  %s\n"+
 			"\n"+
 			"An unknown host is refused here, because nobody can check its key. A runner with no memory\n"+
 			"between runs would otherwise trust whatever answers on this address, every run.\n"+
 			"\n"+
-			"Check that fingerprint against the machine, then record it before this runs:\n"+
-			"\n"+
-			"  %s >> %s\n"+
-			"\n"+
-			"To learn an unknown host's key on first use instead, as releases before this one did, set\n"+
-			"BARYOVM_STRICT_HOST_KEYS=0 (or pass --strict-host-keys=false).\n",
-		e.Host, e.Offered, Keyscan(e.Host), e.Store)
+			"%s"+
+			"%s",
+		e.Host, e.Offered, record, learnAgain)
 }
 
 // Mode is what a Store does with a host that has no recorded key anywhere.
@@ -121,14 +184,14 @@ const (
 	Ask
 )
 
-// Keyscan is the ssh-keyscan command that fetches a host's ecdsa and ed25519 keys. ssh-keyscan
+// Keyscan is the ssh-keyscan command that fetches a host's ecdsa, ed25519 and rsa keys. ssh-keyscan
 // takes the port as -p and cannot resolve host:port.
 func Keyscan(hostport string) string {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
-		return "ssh-keyscan -t ecdsa,ed25519 " + hostport
+		return "ssh-keyscan -t ecdsa,ed25519,rsa " + hostport
 	}
-	return "ssh-keyscan -p " + port + " -t ecdsa,ed25519 " + host
+	return "ssh-keyscan -p " + port + " -t ecdsa,ed25519,rsa " + host
 }
 
 // Store is a known_hosts file BaryoVM owns, plus the user's own file as a read-only second source.
@@ -146,6 +209,13 @@ type Store struct {
 	// confirm is asked in Ask mode. It must not be called with the store locked by the caller, and it
 	// may block for as long as a person takes to read a fingerprint.
 	confirm func(host, fingerprint string) bool
+
+	// refuseReason is what a Refuse (or an Ask with no hook) reports as the reason.
+	refuseReason Reason
+
+	// expect is a fingerprint the caller already checked. An unknown host offering exactly that key is
+	// trusted without asking, in any mode. Empty means none.
+	expect string
 }
 
 // New returns the store rooted at dir, which is BaryoVM's home.
@@ -171,6 +241,20 @@ func (s *Store) Strict(on bool) *Store {
 // Mode sets what happens to an unknown host.
 func (s *Store) Mode(m Mode) *Store {
 	s.mode = m
+	return s
+}
+
+// RefuseReason sets the Reason carried by an unknown-host refusal that nobody was asked about.
+func (s *Store) RefuseReason(r Reason) *Store {
+	s.refuseReason = r
+	return s
+}
+
+// ExpectFingerprint trusts an unknown host whose offered key has exactly this SHA256 fingerprint,
+// without asking and in any mode, and refuses one that offers another. It never applies to a host
+// that already has a recorded key: a changed key is refused whatever fingerprint is given.
+func (s *Store) ExpectFingerprint(fp string) *Store {
+	s.expect = fp
 	return s
 }
 
@@ -245,16 +329,31 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		}
 
 		// Unknown everywhere: the fresh VM case.
+		if s.expect != "" {
+			if s.expect != offered {
+				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: ReasonFingerprint, Expected: s.expect}
+			}
+			return s.add(hostname, key)
+		}
 		switch s.mode {
 		case Refuse:
-			return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+			return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: s.refuseReason}
 		case Ask:
 			// A missing hook means nobody can be asked, which is a refusal, never a yes.
 			if s.confirm == nil {
-				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: s.refuseReason}
+			}
+			// One prompt at a time across every dial in the process. A second dial to the same new host
+			// waits here, and then finds the first answer already recorded instead of asking again.
+			askMu.Lock()
+			defer askMu.Unlock()
+			if err := s.check(s.path, hostname, remote, key); err == nil {
+				return nil
+			} else if err := s.refusal(err, s.path, hostname, offered); err != nil {
+				return err
 			}
 			if !s.confirm(hostname, offered) {
-				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Declined: true}
+				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: ReasonDeclined}
 			}
 			return s.add(hostname, key)
 		}
@@ -480,8 +579,21 @@ func (s *Store) storedFingerprint(path, hostname string) (string, error) {
 	return "", errNotFound
 }
 
-// add appends a host key to BaryoVM's own known_hosts, 0600 the same way fleet.json is written.
+// askMu serializes prompts. addMu makes the check-then-append in add one step, so two dials that both
+// learn the same host (the Learn mode, or a prompt answered for another host) write one line.
+var (
+	askMu sync.Mutex
+	addMu sync.Mutex
+)
+
+// add appends a host key to BaryoVM's own known_hosts, 0600 the same way fleet.json is written. A key
+// already recorded for the host is not written twice.
 func (s *Store) add(hostname string, key ssh.PublicKey) error {
+	addMu.Lock()
+	defer addMu.Unlock()
+	if err := s.check(s.path, hostname, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}, key); err == nil {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(s.path), err)
 	}

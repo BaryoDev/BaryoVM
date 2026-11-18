@@ -46,6 +46,7 @@ func newRoot() *cobra.Command {
 			}
 			// A person can be asked about an unknown host only on a terminal and not in JSON mode.
 			sshx.SetInteractive(ui.IsTTY() && !ui.JSON())
+			sshx.SetOutputJSON(ui.JSON())
 		},
 	}
 	jsonHelp(root)
@@ -161,6 +162,7 @@ func execute(root *cobra.Command, args []string) error {
 		outputFormat = "json"
 		ui.SetJSON(true)
 	}
+	sshx.SetOutputJSON(ui.JSON())
 	root.SetArgs(args)
 	return runRoot(root)
 }
@@ -184,7 +186,7 @@ func reportError(err error) int {
 	if ui.JSON() {
 		action = actionOf(failedPath)
 	}
-	ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+	ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 	return code
 }
 
@@ -213,6 +215,25 @@ func Execute() {
 	if code := run(newRoot(), os.Args[1:]); code != 0 {
 		os.Exit(code)
 	}
+}
+
+// errData is the structured part of a failed result, for the errors a program can act on. An unknown
+// host carries the host, the fingerprint it offered and why it was refused, so an app can show the
+// fingerprint, ask the person, and call again with --host-key-fingerprint. Other errors carry none.
+func errData(err error) any {
+	var u *hostkeys.ErrUnknownHost
+	if !errors.As(err, &u) {
+		return nil
+	}
+	reason := string(u.Reason)
+	if reason == "" {
+		reason = "no-terminal"
+	}
+	d := map[string]any{"host": u.Host, "offered": u.Offered, "reason": reason, "store": u.Store}
+	if u.Expected != "" {
+		d["expected"] = u.Expected
+	}
+	return d
 }
 
 // hostKeyPromptMu keeps two prompts apart when a fleet command dials several VMs at once.

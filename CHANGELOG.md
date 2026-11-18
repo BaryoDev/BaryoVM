@@ -35,7 +35,13 @@ previously accepted is called out here rather than left to be discovered.
   `known_hosts` first, or set `BARYOVM_STRICT_HOST_KEYS=0`. To get the old learn-on-first-use
   behaviour everywhere, set `BARYOVM_STRICT_HOST_KEYS=0` or pass `--strict-host-keys=false` (the
   flag wins over the environment). Known keys and changed keys behave as before, and time spent at
-  the prompt does not count against the 30 second handshake deadline.
+  the prompt does not count against the 30 second handshake deadline. The refusal says why nobody
+  was asked (no terminal, JSON, strict, a project release, declined) and only advises
+  `BARYOVM_STRICT_HOST_KEYS=0` where it applies. `vm add --host-key-fingerprint SHA256:...` lets a
+  script or app that has had a person check the key trust it without a prompt: a host offering
+  exactly that key is recorded, any other key is refused, and a changed key is still refused. Under
+  `-o json` the unknown-host error carries `host`, `offered` and `reason` as `data` fields. The
+  `ssh-keyscan` hint now includes `rsa`, and parallel dials to one new host prompt once.
 
 ### Fixed
 
