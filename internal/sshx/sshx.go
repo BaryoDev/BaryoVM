@@ -268,13 +268,8 @@ func (g *handshakeGuard) pause(fn func()) {
 	fn()
 }
 
-// dialWithHandshakeDeadline is ssh.Dial with a deadline on the connection until the handshake is
-// done, then cleared so a long command is not cut off.
-func dialWithHandshakeDeadline(addr string, cfg *ssh.ClientConfig, handshake time.Duration) (*ssh.Client, error) {
-	return dialGuarded(addr, cfg, handshake, &handshakeGuard{})
-}
-
-// dialGuarded is dialWithHandshakeDeadline whose deadline guard can be paused by a host key prompt.
+// dialGuarded is ssh.Dial with a deadline on the connection until the handshake is done, then
+// cleared so a long command is not cut off. A host key prompt pauses the deadline through guard.
 func dialGuarded(addr string, cfg *ssh.ClientConfig, handshake time.Duration, guard *handshakeGuard) (*ssh.Client, error) {
 	conn, err := net.DialTimeout("tcp", addr, cfg.Timeout)
 	if err != nil {
