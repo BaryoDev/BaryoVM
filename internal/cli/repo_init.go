@@ -88,7 +88,7 @@ complains until the first publish.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := runRepoInit(args[0], templateName, templatesDir, path, codeowner, branch, tokenRef, checks, approvals, force, replaceProt, yes && !dryRun)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "repo init", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "repo init", Error: err.Error(), Data: errData(err)})
 			}
 			return err
 		},
@@ -258,7 +258,7 @@ the actions write permission on the repository.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := runRepoVerify(args[0], templateName, templatesDir, workflow, ref, tokenRef, steps, timeout)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "repo verify", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "repo verify", Error: err.Error(), Data: errData(err)})
 			}
 			return err
 		},

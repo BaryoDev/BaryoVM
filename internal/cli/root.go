@@ -52,7 +52,7 @@ func newRoot() *cobra.Command {
 	jsonHelp(root)
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
-		"always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0)")
+		"always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newProjectCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newPublishCmd(), newCloudCmd(), newGuardCmd(), newSiteCmd(), newRemoteGroupCmd(), newRepoCmd(), newStatusCmd(), newShipCmd(), newProveCmd())
 	rejectUnknownSubcommands(root)
 	return root
@@ -208,7 +208,7 @@ func Execute() {
 		for _, l := range learned {
 			host, fp, _ := strings.Cut(l, " ")
 			ui.Warnf("learned the host key for %s: %s", host, fp)
-			ui.Detail("verify it", hostkeys.Keyscan(host)+" | ssh-keygen -lf -")
+			ui.Detail("check it", "against a fingerprint from the cloud console or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine")
 		}
 	}()
 
@@ -249,7 +249,8 @@ func confirmHostKey(host, fingerprint string) bool {
 	ui.Pause(func() {
 		ui.Warnf("%s has no recorded host key", host)
 		ui.Detail("offered", fingerprint)
-		ui.Detail("verify it", hostkeys.Keyscan(host)+" | ssh-keygen -lf -")
+		ui.Detail("check it", "against a fingerprint from the cloud console, the provider's serial console, or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine")
+		ui.Detail("not a check", "a keyscan of this address, a man in the middle answers it too")
 		ok = askYesNo(bufio.NewReader(os.Stdin), "Trust this host key? [y/N] ")
 	})
 	return ok

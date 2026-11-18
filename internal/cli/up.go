@@ -44,7 +44,7 @@ func newUpCmd() *cobra.Command {
 			// does not resolve must stop the command with nothing created.
 			env, err := buildEnv(envs, envRefs, true)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 
@@ -65,7 +65,7 @@ func newUpCmd() *cobra.Command {
 					return nil
 				}
 				if err != nil {
-					ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
+					ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error(), Data: errData(err)})
 					return err
 				}
 				vm = provisioned
@@ -86,7 +86,7 @@ func newUpCmd() *cobra.Command {
 				boot, err = bootstrap.EnsureRuntime(c, runtimeName)
 				return err
 			}); err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 
@@ -101,7 +101,7 @@ func newUpCmd() *cobra.Command {
 				rep, err = deploy.Run(c, deploy.Spec{Name: container, Image: image, Ports: ports, Env: env, Pull: pull, Runtime: runtimeName})
 				return err
 			}); err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "up", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 

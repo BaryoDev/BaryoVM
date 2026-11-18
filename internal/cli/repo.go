@@ -144,7 +144,7 @@ for git's credential store. URLs that carry a user or token are refused.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := runRepoMove(args[0], f)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "repo move", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "repo move", Error: err.Error(), Data: errData(err)})
 			}
 			return err
 		},

@@ -14,9 +14,11 @@ host's default shell is powershell.exe.
 An unknown host key is asked about on a terminal and refused with no terminal or
 under -o json. A script or app that has had a person check the key can pass its
 SHA256 fingerprint with --host-key-fingerprint: a host offering exactly that key
-is recorded and the command continues, and any other key is refused. This holds
-under --strict-host-keys too, since the flag is the checked key. A host with a
-different recorded key is still refused.
+is recorded and the command continues, and any other key is refused, also for a
+host that already has a recorded key. This holds under --strict-host-keys too,
+since the flag is the checked key. It cannot be combined with --os or --remote
+forced, which make no connection. A host with a different recorded key is still
+refused.
 
 ```
 baryovm vm add <name> [flags]
@@ -40,7 +42,7 @@ baryovm vm add <name> [flags]
 
 ```
   -o, --output string      output format: human | json (default "human")
-      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0)
+      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false
 ```
 
 ### SEE ALSO

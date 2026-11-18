@@ -35,7 +35,7 @@ func newDeployCmd() *cobra.Command {
 			}
 			env, err := buildEnv(envs, envRefs, !dryRun)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			spec := deploy.Spec{Name: name, Image: image, Ports: ports, Env: env, Pull: pull, Runtime: runtimeName}
@@ -57,7 +57,7 @@ func newDeployCmd() *cobra.Command {
 				return err
 			})
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "deploy", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			ui.Emit(ui.Result{

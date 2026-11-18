@@ -16,7 +16,7 @@ baryovm vm [flags]
 
 ```
   -o, --output string      output format: human | json (default "human")
-      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0)
+      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false
 ```
 
 ### SEE ALSO
@@ -25,7 +25,7 @@ baryovm vm [flags]
 * [baryovm vm add](baryovm_vm_add.md)	 - Register an existing VM by host + SSH key
 * [baryovm vm bootstrap](baryovm_vm_bootstrap.md)	 - Install the container runtime (docker or podman) on a VM (idempotent)
 * [baryovm vm exec](baryovm_vm_exec.md)	 - Run a command on a registered VM over SSH
-* [baryovm vm forget-key](baryovm_vm_forget-key.md)	 - Forget a VM's recorded SSH host key, so the next connection asks about it again
+* [baryovm vm forget-key](baryovm_vm_forget-key.md)	 - Forget a VM's recorded SSH host key, so the next connection treats it as unknown
 * [baryovm vm harden](baryovm_vm_harden.md)	 - Apply the SSH hardening policy to a VM
 * [baryovm vm health](baryovm_vm_health.md)	 - Ask a VM the questions an owner should ask monthly (read only)
 * [baryovm vm list](baryovm_vm_list.md)	 - List registered VMs

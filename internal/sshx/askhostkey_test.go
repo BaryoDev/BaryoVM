@@ -105,6 +105,13 @@ func dialUnknownHost(t *testing.T, host string, port int) (string, error) {
 	home := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("BARYOVM_HOME", home)
+	return home, dialWithLoginKey(t, host, port)
+}
+
+// dialWithLoginKey dials with a fresh login key and the home already in the environment, so two
+// calls share one known_hosts.
+func dialWithLoginKey(t *testing.T, host string, port int) error {
+	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate login key: %v", err)
@@ -121,7 +128,7 @@ func dialUnknownHost(t *testing.T, host string, port int) (string, error) {
 	if err == nil {
 		c.c.Close()
 	}
-	return home, err
+	return err
 }
 
 func recorded(home string) string {
@@ -231,6 +238,41 @@ func TestPromptTimeIsNotCountedAgainstTheHandshakeDeadline(t *testing.T) {
 
 	if _, err := dialUnknownHost(t, host, port); err != nil {
 		t.Fatalf("a prompt longer than the handshake deadline must not fail the dial: %v", err)
+	}
+}
+
+// A second dial to the same new host waits for the first prompt to finish. That wait is not the
+// host stalling either, so it must not run the second dial's handshake deadline out.
+func TestWaitingBehindAnotherPromptIsNotCountedAgainstTheHandshakeDeadline(t *testing.T) {
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+	host, port := serveHostKeys(t, ed25519Signer(t))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BARYOVM_HOME", t.TempDir())
+	asking := make(chan struct{})
+	var asked atomic.Int32
+	setHostKeyState(t, nil, true, func(string, string) bool {
+		asked.Add(1)
+		close(asking)
+		time.Sleep(900 * time.Millisecond)
+		return true
+	})
+	old := handshakeTimeout
+	handshakeTimeout = 300 * time.Millisecond
+	defer func() { handshakeTimeout = old }()
+
+	first := make(chan error, 1)
+	go func() { first <- dialWithLoginKey(t, host, port) }()
+	<-asking
+	second := make(chan error, 1)
+	go func() { second <- dialWithLoginKey(t, host, port) }()
+	if err := <-first; err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("the dial that waited behind the prompt must not hit the handshake deadline: %v", err)
+	}
+	if asked.Load() != 1 {
+		t.Errorf("asked %d times, want once", asked.Load())
 	}
 }
 

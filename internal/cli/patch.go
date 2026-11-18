@@ -70,7 +70,7 @@ func newVMPatchCmd() *cobra.Command {
 			var problem *patch.Problem
 			stackBroken := errors.As(runErr, &problem)
 			if runErr != nil && !stackBroken {
-				ui.Emit(ui.Result{OK: false, Action: action, Error: runErr.Error()})
+				ui.Emit(ui.Result{OK: false, Action: action, Error: runErr.Error(), Data: errData(runErr)})
 				return runErr
 			}
 

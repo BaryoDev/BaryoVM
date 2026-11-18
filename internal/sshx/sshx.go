@@ -152,12 +152,9 @@ func refuseReason() hostkeys.Reason {
 func newHostKeyStore(guard *handshakeGuard) *hostkeys.Store {
 	store := hostkeys.New(home()).Mode(HostKeyMode()).RefuseReason(refuseReason())
 	if confirm := ConfirmHostKey; confirm != nil {
-		// The handshake deadline is for a host that stalls, not for a person reading a fingerprint.
-		store.Confirm(func(host, fp string) bool {
-			var ok bool
-			guard.pause(func() { ok = confirm(host, fp) })
-			return ok
-		})
+		// The handshake deadline is for a host that stalls, not for a person reading a fingerprint or
+		// a dial queued behind another prompt, so the guard covers the whole waiting-and-asking section.
+		store.Confirm(confirm).Guard(guard.pause)
 	}
 	if expectedFingerprint != "" && forceRefuse == 0 {
 		store.ExpectFingerprint(expectedFingerprint)

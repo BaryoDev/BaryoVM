@@ -276,7 +276,7 @@ func newStackSetPublishCmd() *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fail := func(err error) error {
-				ui.Emit(ui.Result{OK: false, Action: "stack set-publish", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "stack set-publish", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			if clear == (file != "") {

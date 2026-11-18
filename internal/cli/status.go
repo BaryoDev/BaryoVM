@@ -59,7 +59,7 @@ func newStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			const action = "status"
 			fail := func(err error) error {
-				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 				return &exitError{code: 1, msg: err.Error(), silent: true}
 			}
 			if workers < 1 {

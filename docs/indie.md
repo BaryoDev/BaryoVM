@@ -20,7 +20,8 @@ baryovm vm ping myvm
 ```
 
 `vm add` connects once to detect the OS. On a terminal it shows the host key fingerprint and asks
-before recording it in `~/.baryovm/known_hosts`.
+before recording it in `~/.baryovm/known_hosts`. Asking on a terminal and refusing with no terminal
+is the default. `BARYOVM_STRICT_HOST_KEYS=0` learns a new host without asking.
 `vm ping` reports the host and the Docker version. If either fails, see
 [troubleshooting](troubleshooting.md).
 

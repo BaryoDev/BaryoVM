@@ -66,7 +66,7 @@ func newProjectReleaseCmd() *cobra.Command {
 			}
 			p, err := fleet.LoadProject(file)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			order := p.ReleaseOrder()
@@ -110,7 +110,7 @@ func newProjectReleaseCmd() *cobra.Command {
 				}
 				if vm.HostKey == "" {
 					if !requested {
-						return fail(fmt.Errorf("vms[%d].hostKey: vm %q has no pinned host key, and a project release never trusts a host on first use: add its public key to the file (`ssh-keyscan -t ed25519 %s`, check the fingerprint) or pass --strict-host-keys with the key already in known_hosts", i, vm.Name, vm.Host))
+						return fail(fmt.Errorf("vms[%d].hostKey: vm %q has no pinned host key, and a project release never trusts a host on first use: add its public key to the file (`ssh-keyscan -t ed25519 %s` shows what the host offers, so check that fingerprint against the cloud console or the machine itself, not against the scan) or pass --strict-host-keys with the key already in known_hosts", i, vm.Name, vm.Host))
 					}
 					continue
 				}
@@ -178,7 +178,7 @@ func newProjectExportCmd() *cobra.Command {
 			}
 			if _, err := os.Stat(abs); err == nil && !force {
 				e := fmt.Errorf("%s already exists: pass --force to replace it", out)
-				ui.Emit(ui.Result{OK: false, Action: action, Error: e.Error()})
+				ui.Emit(ui.Result{OK: false, Action: action, Error: e.Error(), Data: errData(e)})
 				return e
 			}
 			if name == "" {
@@ -193,7 +193,7 @@ func newProjectExportCmd() *cobra.Command {
 			}
 			p, b, err := exportProject(store, filepath.Dir(abs), name, keyEnv, stacks, known)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			if err := os.WriteFile(abs, b, 0o644); err != nil { // #nosec G306 -- meant to be committed

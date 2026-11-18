@@ -44,9 +44,11 @@ host's default shell is powershell.exe.
 An unknown host key is asked about on a terminal and refused with no terminal or
 under -o json. A script or app that has had a person check the key can pass its
 SHA256 fingerprint with --host-key-fingerprint: a host offering exactly that key
-is recorded and the command continues, and any other key is refused. This holds
-under --strict-host-keys too, since the flag is the checked key. A host with a
-different recorded key is still refused.
+is recorded and the command continues, and any other key is refused, also for a
+host that already has a recorded key. This holds under --strict-host-keys too,
+since the flag is the checked key. It cannot be combined with --os or --remote
+forced, which make no connection. A host with a different recorded key is still
+refused.
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,6 +60,11 @@ different recorded key is still refused.
 			if hostKeyFP != "" {
 				if !strings.HasPrefix(hostKeyFP, "SHA256:") {
 					return fmt.Errorf("--host-key-fingerprint must look like SHA256:..., as ssh-keygen -lf prints it")
+				}
+				// With a manual OS or a forced key no connection is made, so the fingerprint would never
+				// be checked. Say so before anything is saved.
+				if osName != "" || remoteMode == fleet.RemoteForced {
+					return fmt.Errorf("--host-key-fingerprint needs a connection to check the key, but --os and --remote %s skip it; drop one of them", fleet.RemoteForced)
 				}
 				defer sshx.TrustFingerprint(hostKeyFP)()
 			}
@@ -220,7 +227,7 @@ func newVMPingCmd() *cobra.Command {
 				return nil
 			})
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "vm ping", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "vm ping", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			data := map[string]string{"host": strings.TrimSpace(uname), "docker": strings.TrimSpace(docker)}
@@ -266,7 +273,7 @@ func newVMBootstrapCmd() *cobra.Command {
 				return err
 			})
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "vm bootstrap", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "vm bootstrap", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			msg := vm.Name + " ready: " + rep.DockerVersion
@@ -298,7 +305,7 @@ func requireVM(name string) (fleet.VM, error) {
 	return *vm, nil
 }
 
-// newVMForgetKeyCmd drops a recorded host key so the next connection asks about the new one.
+// newVMForgetKeyCmd drops a recorded host key so the next connection treats the new one as unknown.
 //
 // This exists because refusing a changed key is only useful if there is a stated way through it. A
 // rebuilt VM presents a new key legitimately, and without this command the operator's options are
@@ -307,8 +314,19 @@ func requireVM(name string) (fleet.VM, error) {
 func newVMForgetKeyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "forget-key <name-or-host>",
-		Short: "Forget a VM's recorded SSH host key, so the next connection asks about it again",
-		Args:  cobra.ExactArgs(1),
+		Short: "Forget a VM's recorded SSH host key, so the next connection treats it as unknown",
+		Long: strings.TrimSpace(`
+Forget the host key BaryoVM recorded for a VM, for when the VM was rebuilt and now has a new one.
+
+This clears only BaryoVM's own store. If ~/.ssh/known_hosts still holds the old key, the rebuilt
+host is refused again as a changed key; remove that line with ssh-keygen -R too.
+
+After that the host is unknown, and the next connection depends on the mode: on a terminal it asks
+whether to trust the new key, with no terminal, under -o json or with --strict-host-keys it is
+refused, and with --strict-host-keys=false (or BARYOVM_STRICT_HOST_KEYS=0) it learns the new key
+without asking. Check the new fingerprint against the cloud console or the machine itself first.
+`),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
 
@@ -335,7 +353,7 @@ func newVMForgetKeyCmd() *cobra.Command {
 			ui.Emit(ui.Result{
 				OK:      true,
 				Action:  "vm forget-key",
-				Message: fmt.Sprintf("forgot %d host key(s) for %s, the next connection will ask about the new one", n, target),
+				Message: fmt.Sprintf("forgot %d host key(s) for %s, the next connection treats the new one as unknown (ask, refuse or learn, by mode)", n, target),
 			})
 			return nil
 		},

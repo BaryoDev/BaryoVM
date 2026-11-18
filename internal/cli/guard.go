@@ -161,7 +161,7 @@ func finishGuard(v guard.Verdict, tool string, args []string) error {
 	code, err := passthrough(tool, args)
 	if err != nil {
 		auditGuard(v, false, "could not run "+tool, time.Since(start))
-		ui.Emit(ui.Result{OK: false, Action: v.Action, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: v.Action, Error: err.Error(), Data: errData(err)})
 		return &exitError{code: 127, msg: err.Error(), silent: true}
 	}
 	if code != 0 {
@@ -261,7 +261,7 @@ func newGuardInstallHooksCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			written, err := installHooks(force)
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "guard install-hooks", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "guard install-hooks", Error: err.Error(), Data: errData(err)})
 				return &exitError{code: 1, msg: err.Error(), silent: true}
 			}
 			ui.Emit(ui.Result{OK: true, Action: "guard install-hooks", Message: "installed " + strings.Join(written, ", "), Data: written})

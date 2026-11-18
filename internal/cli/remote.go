@@ -128,7 +128,7 @@ func refuseForcedFlags(stack, action, flags string) error {
 		return nil
 	}
 	err = fmt.Errorf("on a forced VM `%s` returns the fixed tail the VM allows: %s are not available", action, flags)
-	ui.Emit(ui.Result{OK: false, Action: action, Message: stack, Error: err.Error()})
+	ui.Emit(ui.Result{OK: false, Action: action, Message: stack, Error: err.Error(), Data: errData(err)})
 	return err
 }
 
@@ -151,7 +151,7 @@ func forcedOp(vm *fleet.VM, stack, action string, op remote.Op) error {
 		return e
 	})
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: action, Message: stack, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Message: stack, Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	var note string
@@ -256,7 +256,7 @@ func newVMRemoteInstallCmd() *cobra.Command {
 func runRemoteInstall(name, binary, pubKey string) error {
 	const action = "vm remote install"
 	fail := func(err error) error {
-		ui.Emit(ui.Result{OK: false, Action: action, Message: name, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Message: name, Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	vm, err := requireVM(name)

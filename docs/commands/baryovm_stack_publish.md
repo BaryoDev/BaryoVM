@@ -35,7 +35,7 @@ baryovm stack publish <name> [flags]
 
 ```
   -o, --output string      output format: human | json (default "human")
-      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0)
+      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false
 ```
 
 ### SEE ALSO

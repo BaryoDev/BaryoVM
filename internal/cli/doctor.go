@@ -110,7 +110,7 @@ func newDoctorCmd() *cobra.Command {
 			if !fix {
 				ui.Detail("hint", "run `baryovm doctor --fix` to install what BaryoVM can install")
 			}
-			ui.Emit(ui.Result{OK: false, Action: "doctor", Error: err.Error()})
+			ui.Emit(ui.Result{OK: false, Action: "doctor", Error: err.Error(), Data: errData(err)})
 			return err
 		},
 	}

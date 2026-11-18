@@ -536,3 +536,104 @@ func TestConcurrentAskForOneHostPromptsOnceAndRecordsOnce(t *testing.T) {
 		t.Errorf("known_hosts has %d lines, want 1:\n%s", n, b)
 	}
 }
+
+// The answer to a prompt can arrive after something else recorded a different key for the host. The
+// add must then refuse like any changed key and leave the file alone.
+func TestAddAfterTheAnswerRefusesWhenAnotherKeyWasRecordedMeanwhile(t *testing.T) {
+	dir := t.TempDir()
+	a, b := newKey(t), newKey(t)
+	s := New(dir).Mode(Ask)
+	s.extraPath = ""
+	s.Confirm(func(string, string) bool {
+		other := New(dir)
+		other.extraPath = ""
+		if err := other.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+			t.Errorf("record the other key: %v", err)
+		}
+		return true
+	})
+	var ce *ErrChanged
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), a); !errors.As(err, &ce) {
+		t.Fatalf("want ErrChanged, got %T: %v", err, err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "known_hosts"))
+	if strings.Count(string(data), "\n") != 1 || strings.Contains(string(data), sshBase64(a)) || !strings.Contains(string(data), sshBase64(b)) {
+		t.Errorf("only key B may be on file:\n%s", data)
+	}
+}
+
+// A key that is already recorded is a success that writes nothing.
+func TestAddOfAnAlreadyRecordedKeyWritesNothing(t *testing.T) {
+	s := newStore(t)
+	key := newKey(t)
+	if err := s.add("192.0.2.10:22", key); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(s.Path())
+	if err := s.add("192.0.2.10:22", key); err != nil {
+		t.Fatalf("a recorded key is a success: %v", err)
+	}
+	after, _ := os.ReadFile(s.Path())
+	if string(before) != string(after) {
+		t.Errorf("nothing may be written:\nbefore %s\nafter %s", before, after)
+	}
+}
+
+// The fingerprint a caller verified must still be the key on offer for a host that is already
+// known, or it would be ignored and the caller would think the check happened.
+func TestExpectedFingerprintIsCheckedForAnAlreadyRecordedHost(t *testing.T) {
+	s := newStore(t)
+	b := newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+		t.Fatal(err)
+	}
+	wrong := ssh.FingerprintSHA256(newKey(t))
+	s.ExpectFingerprint(wrong)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), b)
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Reason != ReasonFingerprint {
+		t.Fatalf("want ReasonFingerprint, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), wrong) || !strings.Contains(err.Error(), ssh.FingerprintSHA256(b)) {
+		t.Errorf("both fingerprints must be in the message: %v", err)
+	}
+	s.ExpectFingerprint(ssh.FingerprintSHA256(b))
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+		t.Fatalf("a matching fingerprint for the recorded key is fine: %v", err)
+	}
+}
+
+// The guard wraps the whole wait-and-ask section, so the lock wait is inside it.
+func TestGuardWrapsTheWaitForAnotherPrompt(t *testing.T) {
+	dir := t.TempDir()
+	key := newKey(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	first := New(dir).Mode(Ask).Confirm(func(string, string) bool {
+		close(started)
+		<-release
+		return true
+	})
+	first.extraPath = ""
+	done := make(chan error, 1)
+	go func() { done <- first.Callback(nil)("192.0.2.10:22", addr(t), key) }()
+	<-started
+
+	var inGuard atomic.Bool
+	second := New(dir).Mode(Ask).Confirm(func(string, string) bool { t.Error("asked a second time"); return false })
+	second.extraPath = ""
+	second.Guard(func(fn func()) { inGuard.Store(true); fn() })
+	res := make(chan error, 1)
+	go func() { res <- second.Callback(nil)("192.0.2.10:22", addr(t), key) }()
+	time.Sleep(50 * time.Millisecond)
+	if !inGuard.Load() {
+		t.Error("the guard must be entered before the wait for the other prompt")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-res; err != nil {
+		t.Fatal(err)
+	}
+}

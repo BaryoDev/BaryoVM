@@ -56,7 +56,8 @@ a terminal you see the host and the fingerprint it offered, and a prompt:
 ```text
 ! 203.0.113.10:22 has no recorded host key
   offered: SHA256:9KpQ...
-  verify it: ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 203.0.113.10 | ssh-keygen -lf -
+  check it: against a fingerprint from the cloud console or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine
+  not a check: a keyscan of this address, a man in the middle answers it too
 Trust this host key? [y/N]
 ```
 
@@ -103,7 +104,8 @@ So a CI job records the key first, and fails rather than trusting a new one:
 - name: Pin the host key
   run: |
     mkdir -p ~/.baryovm
-    ssh-keyscan -t ecdsa,ed25519,rsa "$VM_HOST" >> ~/.baryovm/known_hosts
+    # VM_KNOWN_HOSTS is the known_hosts line you checked against the cloud console or the machine
+    echo "$VM_KNOWN_HOSTS" >> ~/.baryovm/known_hosts
 
 - name: Deploy
   env:
@@ -113,7 +115,10 @@ So a CI job records the key first, and fails rather than trusting a new one:
 
 Better still, commit the expected `known_hosts` or keep it in a secret, so the
 pin is reviewed rather than fetched from the network on every run. `ssh-keyscan`
-at deploy time trusts whatever answers; a committed file does not.
+at deploy time shows only what the host offers, and a man in the middle answers it too, so it is
+not verification. Compare the fingerprint with one from a separate trusted channel (the cloud
+console, the provider's serial console, or `ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub` run on the
+machine) and keep the checked line, not a fresh scan.
 
 The flag beats the environment, so `--strict-host-keys=false` is how a human
 turns it off for one command on a machine where the workflow sets it globally.
@@ -1195,8 +1200,8 @@ What the file may and may not hold:
   file's directory. A literal private key, token or password in any field, including fields this
   version does not know, is refused with the field named, before anything connects. The error never
   repeats the value.
-- `hostKey` is the VM's public host key (`ssh-keyscan -t ed25519 <host>`, then check the
-  fingerprint). It is public, so it is committed.
+- `hostKey` is the VM's public host key (`ssh-keyscan -t ed25519 <host>` shows what the host
+  offers; check its fingerprint against the cloud console or the machine, not the scan). It is public, so it is committed.
 - `order` lists the stacks to release. Leave it out and every stack is released in the order written.
 
 `project release` stops at the first failed release or verify and leaves later stacks untouched. The

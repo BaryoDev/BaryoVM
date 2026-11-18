@@ -238,7 +238,7 @@ func newVMProvisionCmd() *cobra.Command {
 				return nil
 			}
 			if err != nil {
-				ui.Emit(ui.Result{OK: false, Action: "vm provision", Error: err.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "vm provision", Error: err.Error(), Data: errData(err)})
 				return err
 			}
 			ui.Emit(ui.Result{OK: true, Action: "vm provision", Message: fmt.Sprintf("%s ready at %s", vm.Name, vm.Host), Data: vm})

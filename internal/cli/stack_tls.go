@@ -35,7 +35,7 @@ func newStackTLSCmd() *cobra.Command {
 			"  baryovm stack tls app --config ./baryovm.release.json",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fail := func(e error) error {
-				ui.Emit(ui.Result{OK: false, Action: "stack tls", Error: e.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "stack tls", Error: e.Error(), Data: errData(e)})
 				return e
 			}
 			store, err := fleet.Load()

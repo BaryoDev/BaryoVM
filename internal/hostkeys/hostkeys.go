@@ -100,9 +100,18 @@ type ErrUnknownHost struct {
 	Expected string
 }
 
+// verifyNote says where to get a fingerprint worth comparing against. A keyscan of the same address
+// is not one: whoever answers the connection answers the scan too.
+const verifyNote = "Compare that fingerprint with one from a separate trusted source: the cloud console, the\n" +
+	"provider's serial console, or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub run on the machine\n" +
+	"itself. A keyscan of the same address is not a check, because a man in the middle answers\n" +
+	"it too.\n" +
+	"\n"
+
 func (e *ErrUnknownHost) Error() string {
 	record := fmt.Sprintf(
-		"Check that fingerprint against the machine, then record it before this runs:\n"+
+		verifyNote+
+			"Once it matches, record what the host offers before this runs:\n"+
 			"\n"+
 			"  %s >> %s\n", Keyscan(e.Host), e.Store)
 	learnAgain := "\n" +
@@ -114,11 +123,13 @@ func (e *ErrUnknownHost) Error() string {
 			"host key for %s not trusted.\n"+
 				"  offered  %s\n"+
 				"\n"+
-				"Nothing was recorded. To trust it later, check that fingerprint against the machine and\n"+
-				"record it:\n"+
+				"Nothing was recorded. To trust it later:\n"+
+				"\n"+
+				"%s"+
+				"Once it matches, record what the host offers:\n"+
 				"\n"+
 				"  %s >> %s\n",
-			e.Host, e.Offered, Keyscan(e.Host), e.Store)
+			e.Host, e.Offered, verifyNote, Keyscan(e.Host), e.Store)
 	case ReasonFingerprint:
 		return fmt.Sprintf(
 			"host key for %s does not match the fingerprint you gave.\n"+
@@ -144,12 +155,14 @@ func (e *ErrUnknownHost) Error() string {
 			"no recorded host key for %s, and a project release never trusts a new host.\n"+
 				"  offered  %s\n"+
 				"\n"+
-				"It does not ask and it does not learn. Check that fingerprint against the machine and pin\n"+
-				"it as hostKey for that VM in the project file, or record it in known_hosts and pass\n"+
-				"--strict-host-keys:\n"+
+				"It does not ask and it does not learn.\n"+
+				"\n"+
+				"%s"+
+				"Once it matches, pin it as hostKey for that VM in the project file, or record what the\n"+
+				"host offers in known_hosts and pass --strict-host-keys:\n"+
 				"\n"+
 				"  %s >> %s\n",
-			e.Host, e.Offered, Keyscan(e.Host), e.Store)
+			e.Host, e.Offered, verifyNote, Keyscan(e.Host), e.Store)
 	case ReasonJSON:
 		return fmt.Sprintf(
 			"no recorded host key for %s, and output is JSON, so nobody can be asked.\n"+
@@ -210,6 +223,10 @@ type Store struct {
 	// may block for as long as a person takes to read a fingerprint.
 	confirm func(host, fingerprint string) bool
 
+	// guard, when set, wraps the whole wait-and-ask section of Ask mode, including the wait for
+	// another prompt to finish. The caller uses it to set a handshake deadline aside meanwhile.
+	guard func(fn func())
+
 	// refuseReason is what a Refuse (or an Ask with no hook) reports as the reason.
 	refuseReason Reason
 
@@ -265,6 +282,13 @@ func (s *Store) Confirm(fn func(host, fingerprint string) bool) *Store {
 	return s
 }
 
+// Guard sets a wrapper that Ask mode runs the whole waiting-and-asking section inside. It is called
+// only when an unknown host is about to be asked about, never for a known key.
+func (s *Store) Guard(fn func(fn func())) *Store {
+	s.guard = fn
+	return s
+}
+
 // Callback returns an ssh.HostKeyCallback implementing the Store's mode for unknown hosts.
 //
 // learned is called with the fingerprint when a key is recorded for the first time in Learn mode, so
@@ -309,7 +333,7 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		// Our own file first. A key we recorded is the one we mean to check against.
 		err := s.check(s.path, hostname, remote, key)
 		if err == nil {
-			return nil
+			return s.expectMatches(hostname, offered)
 		}
 		if err := s.refusal(err, s.path, hostname, offered); err != nil {
 			return err
@@ -320,6 +344,9 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		if s.extraPath != "" {
 			err := s.check(s.extraPath, hostname, remote, key)
 			if err == nil {
+				if err := s.expectMatches(hostname, offered); err != nil {
+					return err
+				}
 				// Record it in ours too, so the trust does not depend on a file we do not own.
 				return s.add(hostname, key)
 			}
@@ -344,18 +371,31 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: s.refuseReason}
 			}
 			// One prompt at a time across every dial in the process. A second dial to the same new host
-			// waits here, and then finds the first answer already recorded instead of asking again.
-			askMu.Lock()
-			defer askMu.Unlock()
-			if err := s.check(s.path, hostname, remote, key); err == nil {
-				return nil
-			} else if err := s.refusal(err, s.path, hostname, offered); err != nil {
-				return err
+			// waits here, and then finds the first answer already recorded instead of asking again. The
+			// guard covers the wait as well as the prompt, so time spent queued behind another prompt is
+			// not counted against the handshake deadline either.
+			var res error
+			locked := func() {
+				askMu.Lock()
+				defer askMu.Unlock()
+				if err := s.check(s.path, hostname, remote, key); err == nil {
+					return
+				} else if err := s.refusal(err, s.path, hostname, offered); err != nil {
+					res = err
+					return
+				}
+				if !s.confirm(hostname, offered) {
+					res = &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: ReasonDeclined}
+					return
+				}
+				res = s.add(hostname, key)
 			}
-			if !s.confirm(hostname, offered) {
-				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: ReasonDeclined}
+			if s.guard != nil {
+				s.guard(locked)
+			} else {
+				locked()
 			}
-			return s.add(hostname, key)
+			return res
 		}
 		// Learn it.
 		if err := s.add(hostname, key); err != nil {
@@ -371,6 +411,16 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 // refusal turns a failed check into the error to return, or nil when the host is simply absent from
 // path. Everything that is not "absent" refuses: a file that cannot be read may hold the very key that
 // would have refused this one, so learning past it fails open.
+// expectMatches is the check for a host that already has a recorded key. A fingerprint the caller
+// said it verified must still be the key on offer, so a wrong one is refused with both fingerprints
+// instead of being ignored because the host happens to be known.
+func (s *Store) expectMatches(hostname, offered string) error {
+	if s.expect != "" && s.expect != offered {
+		return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Reason: ReasonFingerprint, Expected: s.expect}
+	}
+	return nil
+}
+
 func (s *Store) refusal(err error, path, hostname, offered string) error {
 	var re *knownhosts.RevokedError
 	switch {
@@ -591,8 +641,13 @@ var (
 func (s *Store) add(hostname string, key ssh.PublicKey) error {
 	addMu.Lock()
 	defer addMu.Unlock()
+	// Only a host with no entry at all may be written. A matching key is already there, and a changed,
+	// revoked or unreadable entry means someone recorded something else since the decision was made,
+	// so it is refused the way a changed key always is and nothing is written.
 	if err := s.check(s.path, hostname, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}, key); err == nil {
 		return nil
+	} else if err := s.refusal(err, s.path, hostname, ssh.FingerprintSHA256(key)); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(s.path), err)

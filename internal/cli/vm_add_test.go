@@ -13,9 +13,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
@@ -335,5 +337,86 @@ func TestVMAddUnknownHostJSONErrorCarriesTheOfferedFingerprint(t *testing.T) {
 	}
 	if out.OK || out.Data.Offered != ssh.FingerprintSHA256(served.PublicKey()) || !strings.Contains(out.Data.Host, host) {
 		t.Errorf("structured fields missing or wrong: %+v", out)
+	}
+}
+
+// With --os or a forced key no connection is made, so the fingerprint would never be checked. That is
+// refused before anything is saved.
+func TestVMAddHostKeyFingerprintIsRefusedWhenNoConnectionIsMade(t *testing.T) {
+	fp := ssh.FingerprintSHA256(newSigner(t).PublicKey())
+	for _, extra := range [][]string{{"--os", "linux"}, {"--remote", "forced"}} {
+		t.Run(strings.Join(extra, " "), func(t *testing.T) {
+			t.Setenv("BARYOVM_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+			args := append([]string{"box", "--host", "192.0.2.1", "--key", writeTestKey(t), "--host-key-fingerprint", fp}, extra...)
+			_, _, err := runCmdE(t, newVMAddCmd(), nil, true, args...)
+			if err == nil || !strings.Contains(err.Error(), "--host-key-fingerprint needs a connection") {
+				t.Fatalf("want the no-connection refusal, got %v", err)
+			}
+			if store, _ := fleet.Load(); store.Find("box") != nil {
+				t.Error("the VM must not be saved")
+			}
+		})
+	}
+}
+
+// A host that already has key B recorded and offers B must still refuse a supplied fingerprint A, with
+// both fingerprints, rather than ignore it.
+func TestVMAddHostKeyFingerprintIsCheckedAgainstARecordedHost(t *testing.T) {
+	bvmHome := t.TempDir()
+	t.Setenv("BARYOVM_HOME", bvmHome)
+	t.Setenv("HOME", t.TempDir())
+	host, port, served := serveOneKey(t)
+	line := knownhosts.Line([]string{net.JoinHostPort(host, port)}, served.PublicKey())
+	if err := os.WriteFile(filepath.Join(bvmHome, "known_hosts"), []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrong := ssh.FingerprintSHA256(newSigner(t).PublicKey())
+	_, _, err := runCmdE(t, newVMAddCmd(), nil, true, "box", "--host", host, "--port", port, "--key", writeTestKey(t),
+		"--host-key-fingerprint", wrong)
+	if err == nil || !strings.Contains(err.Error(), wrong) || !strings.Contains(err.Error(), ssh.FingerprintSHA256(served.PublicKey())) {
+		t.Fatalf("want a refusal naming both fingerprints, got %v", err)
+	}
+	if store, _ := fleet.Load(); store.Find("box") != nil {
+		t.Error("the VM must not be saved")
+	}
+}
+
+// ping and bootstrap write their own failure before returning, and ui.Emit drops every later call, so
+// the structured fields have to be in that first one.
+func TestVMPingAndBootstrapUnknownHostJSONErrorCarriesTheOfferedFingerprint(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  func() *cobra.Command
+	}{{"vm ping", newVMPingCmd}, {"vm bootstrap", newVMBootstrapCmd}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BARYOVM_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("BARYOVM_STRICT_HOST_KEYS", "")
+			host, port, served := serveOneKey(t)
+			p, _ := strconv.Atoi(port)
+			store, _ := fleet.Load()
+			store.Upsert(fleet.VM{Name: "box", Host: host, Port: p, User: "u", KeyPath: writeTestKey(t), Provider: "ssh", OS: "linux"})
+			if err := store.Save(); err != nil {
+				t.Fatal(err)
+			}
+			stdout, _, err := runCmdE(t, c.cmd(), nil, true, "box")
+			if err == nil {
+				t.Fatal("an unknown host under JSON must be refused")
+			}
+			var out struct {
+				Data struct {
+					Host    string `json:"host"`
+					Offered string `json:"offered"`
+					Reason  string `json:"reason"`
+				} `json:"data"`
+			}
+			if jerr := json.Unmarshal([]byte(stdout), &out); jerr != nil {
+				t.Fatalf("not one JSON document (%v): %q", jerr, stdout)
+			}
+			if out.Data.Offered != ssh.FingerprintSHA256(served.PublicKey()) || out.Data.Reason == "" || !strings.Contains(out.Data.Host, host) {
+				t.Errorf("host, offered and reason must be in the result: %+v", out)
+			}
+		})
 	}
 }

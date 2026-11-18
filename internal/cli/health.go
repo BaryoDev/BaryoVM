@@ -178,6 +178,6 @@ func withThresholds(r health.Report, o health.Options) health.Report {
 // failHealth emits a failed result and returns the silent exit error, so Execute exits non-zero
 // without printing a second JSON document. Every path that emits goes through here.
 func failHealth(err error) error {
-	ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error()})
+	ui.Emit(ui.Result{OK: false, Action: "vm health", Error: err.Error(), Data: errData(err)})
 	return &exitError{code: 1, msg: err.Error(), silent: true}
 }

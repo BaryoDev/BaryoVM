@@ -114,7 +114,7 @@ func dryStackBackup(name string) error {
 	}
 	script, err := backup.BackupScript(backupConfig(st))
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "stack backup", Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: "stack backup", Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	p := newDryRunPlan(name)
@@ -142,7 +142,7 @@ func dryStackRestore(name, file string) error {
 	}
 	script, err := backup.RestoreScriptE(backupConfig(st), file)
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "stack restore", Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: "stack restore", Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	p.add("restore", script)
