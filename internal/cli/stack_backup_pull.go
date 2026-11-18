@@ -116,7 +116,7 @@ func pullBackupSet(c sshx.Runner, cfg backup.Config, out, dir string) ([]PulledF
 func runStackBackupPull(name string) error {
 	const action = "stack backup"
 	fail := func(err error) error {
-		ui.Emit(ui.Result{OK: false, Action: action, Message: name, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Message: name, Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	store, err := fleet.Load()

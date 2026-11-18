@@ -98,7 +98,7 @@ func runRunner(action string, o ghrunner.Options, remove bool) error {
 		err = requireLinux(&vm, action)
 	}
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	dial := func() (ghrunner.Remote, error) { return dialChecked(&vm) }

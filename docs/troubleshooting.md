@@ -142,23 +142,58 @@ be. The tool cannot tell, so it stops. If you rebuilt the machine:
 baryovm vm forget-key myvm
 ```
 
-The next connection learns the new key and prints its fingerprint, with an `ssh-keyscan` line to
-check it.
+`forget-key` clears only BaryoVM's own store. If `~/.ssh/known_hosts` still holds the old key, the
+rebuilt host is refused again as a changed key; remove that line with `ssh-keygen -R <host>` too.
 
-## `no recorded host key for <host>, and strict host key checking is on`
+After that the host is unknown, and the next connection depends on the mode:
 
-You passed `--strict-host-keys` (or set `BARYOVM_STRICT_HOST_KEYS=1`) for a host the tool has not
-seen. The message carries the offered fingerprint and a command to record it:
+- On a terminal it asks about the new key and shows its fingerprint. Compare it with the cloud
+  console or the machine itself.
+- With no terminal, under `-o json` or with `--strict-host-keys` it is refused until you record the
+  key.
+- With `--strict-host-keys=false` (or `BARYOVM_STRICT_HOST_KEYS=0`) it learns the new key without
+  asking.
+
+## `no recorded host key for <host:port>, and ...`
+
+The tool has not seen this host, and nobody could say yes to its key. The second half of the first
+line says why. Every one of them carries the offered fingerprint and a command to record it. First
+compare the fingerprint with one from a separate trusted source (the cloud console, the provider's
+serial console, or `ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub` on the machine). A keyscan of the
+same address is not a check, because a man in the middle answers it too. The command below only
+records what the host offers:
 
 ```text
-no recorded host key for 203.0.113.10:22, and strict host key checking is on.
+no recorded host key for 203.0.113.10:22, and there is no terminal to ask on.
   offered  SHA256:...
 ...
-  ssh-keyscan -t ecdsa,ed25519 203.0.113.10 >> ~/.baryovm/known_hosts
+  ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 203.0.113.10 >> ~/.baryovm/known_hosts
 ```
 
-Compare the fingerprint to the machine, then run that line. Or connect once without the flag to
-learn the key. `--strict-host-keys=false` turns strict mode off for one command.
+Do not append the scan blindly. Save it to a file, check each key's fingerprint against the one you
+verified out of band, and append only the lines that match:
+
+```sh
+ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 203.0.113.10 > /tmp/scan.keys
+ssh-keygen -lf /tmp/scan.keys
+# keep only the lines whose fingerprint matches, then:
+cat /tmp/scan.keys >> ~/.baryovm/known_hosts
+```
+
+- `there is no terminal to ask on`: stdin or stderr is not a terminal (a pipe, CI). Record the key
+  first. To learn on first use instead, set `BARYOVM_STRICT_HOST_KEYS=0` or pass
+  `--strict-host-keys=false`.
+- `output is JSON, so nobody can be asked`: `-o json` is for programs, so there is no prompt. Record
+  the key, or call `vm add` again with `--host-key-fingerprint SHA256:...` once a person has checked
+  the fingerprint. The JSON error carries `host`, `offered` and `reason` as fields.
+- `strict host key checking was requested`: you passed `--strict-host-keys` or set
+  `BARYOVM_STRICT_HOST_KEYS=1`. That always refuses an unknown host. Unset it to be asked instead.
+- `a project release never trusts a new host`: `project release` does not ask and does not learn.
+  Pin the key as `hostKey` in the project file (see below).
+- `host key for <host> not trusted`: you were asked and did not answer `y` or `yes`. Nothing was
+  recorded.
+- `does not match the fingerprint you gave`: `--host-key-fingerprint` was given and the host offered
+  another key. Nothing was recorded, and it is not the machine whose key you checked.
 
 ## `no recorded host key for <host:port> in <path>`
 
@@ -172,7 +207,7 @@ vms[0].hostKey: vm "client-vm" has no pinned host key, and a project release nev
 on first use: add its public key to the file ...
 ```
 
-Add `hostKey` to the project file (`ssh-keyscan -t ed25519 <host>`, then check the fingerprint), or
+Add `hostKey` to the project file (`ssh-keyscan -t ed25519 <host>` shows what the host offers; check its fingerprint against the cloud console or the machine, not the scan), or
 pass `--strict-host-keys` with the key already in `~/.baryovm/known_hosts`.
 
 ## `vm add` warns `could not reach ... to detect its OS`

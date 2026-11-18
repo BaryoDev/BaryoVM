@@ -12,7 +12,7 @@ CLI-first: the MAUI app and MCP server drive this same CLI (with -o json).
 ```
   -h, --help               help for baryovm
   -o, --output string      output format: human | json (default "human")
-      --strict-host-keys   refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)
+      --strict-host-keys   always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false
 ```
 
 ### SEE ALSO

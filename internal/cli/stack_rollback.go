@@ -38,7 +38,7 @@ func newStackRollbackCmd() *cobra.Command {
 func runStackRollback(name string, list bool) error {
 	const action = "stack rollback"
 	fail := func(err error) error {
-		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	store, err := fleet.Load()

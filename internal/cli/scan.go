@@ -77,7 +77,7 @@ func newScanCmd() *cobra.Command {
 				return nil
 			})
 			if runErr != nil {
-				ui.Emit(ui.Result{OK: false, Action: "scan", Error: runErr.Error()})
+				ui.Emit(ui.Result{OK: false, Action: "scan", Error: runErr.Error(), Data: errData(runErr)})
 				return &exitError{code: 1, msg: runErr.Error(), silent: true}
 			}
 

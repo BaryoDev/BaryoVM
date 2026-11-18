@@ -12,7 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -279,7 +282,7 @@ func TestStrictStillReportsAChangedKeyAsChanged(t *testing.T) {
 	if err := s.Callback(nil)("192.0.2.10:22", addr(t), first); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	s.strict = true
+	s.Strict(true)
 	err := s.Callback(nil)("192.0.2.10:22", addr(t), second)
 	var ce *ErrChanged
 	if !errors.As(err, &ce) {
@@ -289,17 +292,17 @@ func TestStrictStillReportsAChangedKeyAsChanged(t *testing.T) {
 
 func TestKeyscanPassesThePortAsAFlag(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"192.0.2.10:22", "ssh-keyscan -p 22 -t ecdsa,ed25519 192.0.2.10"},
-		{"192.0.2.10:2222", "ssh-keyscan -p 2222 -t ecdsa,ed25519 192.0.2.10"},
-		{"[2001:db8::1]:22", "ssh-keyscan -p 22 -t ecdsa,ed25519 2001:db8::1"},
-		{"vm.example", "ssh-keyscan -t ecdsa,ed25519 vm.example"},
+		{"192.0.2.10:22", "ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 192.0.2.10"},
+		{"192.0.2.10:2222", "ssh-keyscan -p 2222 -t ecdsa,ed25519,rsa 192.0.2.10"},
+		{"[2001:db8::1]:22", "ssh-keyscan -p 22 -t ecdsa,ed25519,rsa 2001:db8::1"},
+		{"vm.example", "ssh-keyscan -t ecdsa,ed25519,rsa vm.example"},
 	} {
 		if got := Keyscan(c.in); got != c.want {
 			t.Errorf("Keyscan(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 	err := &ErrUnknownHost{Host: "192.0.2.10:2222", Offered: "SHA256:x", Store: "/k"}
-	if !strings.Contains(err.Error(), "ssh-keyscan -p 2222 -t ecdsa,ed25519 192.0.2.10 >> /k") {
+	if !strings.Contains(err.Error(), "ssh-keyscan -p 2222 -t ecdsa,ed25519,rsa 192.0.2.10 >> /k") {
 		t.Errorf("strict-mode error must keep the port: %s", err)
 	}
 }
@@ -322,5 +325,315 @@ func TestKnownHostsForReturnsOnlyTheRecordedKeyOfThatHost(t *testing.T) {
 	}
 	if none, _ := s.KnownHostsFor("192.0.2.99:22"); none != "" {
 		t.Errorf("an unknown host must give no keys, got %q", none)
+	}
+}
+
+func TestAskTrustsAndRecordsOnYes(t *testing.T) {
+	var gotHost, gotFP string
+	s := newStore(t).Mode(Ask).Confirm(func(host, fp string) bool {
+		gotHost, gotFP = host, fp
+		return true
+	})
+	key := newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("a yes must trust the key: %v", err)
+	}
+	if gotHost != "192.0.2.10:22" || gotFP != ssh.FingerprintSHA256(key) {
+		t.Errorf("confirm saw %q %q, want the host and the offered fingerprint", gotHost, gotFP)
+	}
+	if b, _ := os.ReadFile(s.Path()); !strings.Contains(string(b), "192.0.2.10") {
+		t.Error("a yes must record the key")
+	}
+	// Recorded, so the next connection is a known host and is not asked again.
+	again := newStore(t).Mode(Ask).Confirm(func(string, string) bool { t.Error("asked about a known host"); return false })
+	again.path = s.Path()
+	if err := again.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("known key after a yes: %v", err)
+	}
+}
+
+func TestAskRefusesAndWritesNothingOnNo(t *testing.T) {
+	s := newStore(t).Mode(Ask).Confirm(func(string, string) bool { return false })
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Reason != ReasonDeclined {
+		t.Fatalf("want a declined ErrUnknownHost, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "not trusted") {
+		t.Errorf("a declined key must say it was not trusted: %v", err)
+	}
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("a no must not write a known_hosts entry")
+	}
+}
+
+func TestAskWithNoConfirmHookRefuses(t *testing.T) {
+	s := newStore(t).Mode(Ask)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Reason == ReasonDeclined {
+		t.Fatalf("want ErrUnknownHost with nobody asked, got %T: %v", err, err)
+	}
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("nothing may be written when nobody was asked")
+	}
+}
+
+func TestLearnModeStillLearnsWithoutAsking(t *testing.T) {
+	s := newStore(t).Mode(Learn).Confirm(func(string, string) bool { t.Error("learn mode must not ask"); return false })
+	var learned string
+	if err := s.Callback(func(_, fp string) { learned = fp })("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+		t.Fatalf("learn: %v", err)
+	}
+	if learned == "" {
+		t.Error("the learned hook must be called in Learn mode")
+	}
+	if _, err := os.Stat(s.Path()); err != nil {
+		t.Error("Learn must record the key")
+	}
+}
+
+func TestAskDoesNotCallTheLearnedHook(t *testing.T) {
+	s := newStore(t).Mode(Ask).Confirm(func(string, string) bool { return true })
+	if err := s.Callback(func(_, _ string) { t.Error("the person just saw the fingerprint; learned must not repeat it") })("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A changed key is refused in every mode, and Ask must not even prompt for it.
+func TestAChangedKeyIsRefusedInEveryMode(t *testing.T) {
+	for _, m := range []Mode{Learn, Refuse, Ask} {
+		s := newStore(t)
+		if err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+			t.Fatalf("first: %v", err)
+		}
+		s.Mode(m).Confirm(func(string, string) bool { t.Error("a changed key must not be asked about"); return true })
+		var ce *ErrChanged
+		if err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t)); !errors.As(err, &ce) {
+			t.Errorf("mode %v: want ErrChanged, got %T: %v", m, err, err)
+		}
+	}
+}
+
+func TestUnknownHostMessageNamesTheWayBackToLearning(t *testing.T) {
+	msg := (&ErrUnknownHost{Host: "192.0.2.10:22", Offered: "SHA256:x", Store: "/k"}).Error()
+	for _, want := range []string{"BARYOVM_STRICT_HOST_KEYS=0", "ssh-keyscan", "/k"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message must mention %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "strict host key checking is on") {
+		t.Error("the message must be right for the no-terminal default too")
+	}
+}
+
+func TestUnknownHostMessageMatchesTheReason(t *testing.T) {
+	base := ErrUnknownHost{Host: "192.0.2.10:22", Offered: "SHA256:off", Store: "/k"}
+	cases := []struct {
+		reason  Reason
+		want    []string
+		notWant []string
+	}{
+		{ReasonNoTerminal, []string{"no terminal to ask on", "BARYOVM_STRICT_HOST_KEYS=0", "ssh-keyscan"}, []string{"strict host key checking was requested"}},
+		{ReasonJSON, []string{"output is JSON", "BARYOVM_STRICT_HOST_KEYS=0", "ssh-keyscan"}, []string{"no terminal"}},
+		{ReasonStrict, []string{"strict host key checking was requested", "ssh-keyscan", "unset BARYOVM_STRICT_HOST_KEYS"}, []string{"to learn an unknown host's key"}},
+		{ReasonRelease, []string{"project release never trusts a new host", "hostKey"}, []string{"BARYOVM_STRICT_HOST_KEYS=0"}},
+		{ReasonDeclined, []string{"not trusted", "Nothing was recorded"}, []string{"BARYOVM_STRICT_HOST_KEYS=0"}},
+		{ReasonFingerprint, []string{"does not match the fingerprint you gave", "expected SHA256:want", "offered  SHA256:off"}, []string{"BARYOVM_STRICT_HOST_KEYS=0"}},
+	}
+	for _, c := range cases {
+		e := base
+		e.Reason = c.reason
+		e.Expected = "SHA256:want"
+		msg := e.Error()
+		for _, w := range c.want {
+			if !strings.Contains(msg, w) {
+				t.Errorf("reason %q: message must mention %q:\n%s", c.reason, w, msg)
+			}
+		}
+		for _, w := range c.notWant {
+			if strings.Contains(msg, w) {
+				t.Errorf("reason %q: message must not mention %q:\n%s", c.reason, w, msg)
+			}
+		}
+	}
+}
+
+func TestExpectedFingerprintTrustsAMatchInAnyModeAndWritesIt(t *testing.T) {
+	for _, m := range []Mode{Learn, Refuse, Ask} {
+		s := newStore(t).Mode(m)
+		key := newKey(t)
+		s.ExpectFingerprint(ssh.FingerprintSHA256(key))
+		if err := s.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+			t.Fatalf("mode %v: a matching fingerprint must trust the key: %v", m, err)
+		}
+		if b, _ := os.ReadFile(s.Path()); !strings.Contains(string(b), "192.0.2.10") {
+			t.Errorf("mode %v: the key must be recorded", m)
+		}
+	}
+}
+
+func TestExpectedFingerprintMismatchRefusesWithBothAndWritesNothing(t *testing.T) {
+	s := newStore(t).Mode(Learn)
+	key := newKey(t)
+	s.ExpectFingerprint(ssh.FingerprintSHA256(newKey(t)))
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), key)
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Reason != ReasonFingerprint {
+		t.Fatalf("want ErrUnknownHost with ReasonFingerprint, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), ue.Expected) || !strings.Contains(err.Error(), ssh.FingerprintSHA256(key)) {
+		t.Errorf("both fingerprints must be in the message: %v", err)
+	}
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("a mismatch must write nothing")
+	}
+}
+
+// The fingerprint only vouches for an unknown host. A host with another key on record is changed.
+func TestExpectedFingerprintDoesNotOverrideAChangedKey(t *testing.T) {
+	s := newStore(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+		t.Fatal(err)
+	}
+	second := newKey(t)
+	s.ExpectFingerprint(ssh.FingerprintSHA256(second))
+	var ce *ErrChanged
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), second); !errors.As(err, &ce) {
+		t.Fatalf("want ErrChanged, got %T: %v", err, err)
+	}
+}
+
+// Fleet commands dial several VMs at once. Two dials to one new host must prompt once and record one
+// line, the second answered from the first.
+func TestConcurrentAskForOneHostPromptsOnceAndRecordsOnce(t *testing.T) {
+	dir := t.TempDir()
+	key := newKey(t)
+	var asked atomic.Int32
+	confirm := func(string, string) bool {
+		asked.Add(1)
+		time.Sleep(100 * time.Millisecond)
+		return true
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := New(dir).Mode(Ask).Confirm(confirm)
+			s.extraPath = ""
+			if err := s.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+				t.Errorf("callback: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if asked.Load() != 1 {
+		t.Errorf("asked %d times, want once", asked.Load())
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "known_hosts"))
+	if n := strings.Count(strings.TrimSpace(string(b)), "\n") + 1; n != 1 {
+		t.Errorf("known_hosts has %d lines, want 1:\n%s", n, b)
+	}
+}
+
+// The answer to a prompt can arrive after something else recorded a different key for the host. The
+// add must then refuse like any changed key and leave the file alone.
+func TestAddAfterTheAnswerRefusesWhenAnotherKeyWasRecordedMeanwhile(t *testing.T) {
+	dir := t.TempDir()
+	a, b := newKey(t), newKey(t)
+	s := New(dir).Mode(Ask)
+	s.extraPath = ""
+	s.Confirm(func(string, string) bool {
+		other := New(dir)
+		other.extraPath = ""
+		if err := other.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+			t.Errorf("record the other key: %v", err)
+		}
+		return true
+	})
+	var ce *ErrChanged
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), a); !errors.As(err, &ce) {
+		t.Fatalf("want ErrChanged, got %T: %v", err, err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "known_hosts"))
+	if strings.Count(string(data), "\n") != 1 || strings.Contains(string(data), sshBase64(a)) || !strings.Contains(string(data), sshBase64(b)) {
+		t.Errorf("only key B may be on file:\n%s", data)
+	}
+}
+
+// A key that is already recorded is a success that writes nothing.
+func TestAddOfAnAlreadyRecordedKeyWritesNothing(t *testing.T) {
+	s := newStore(t)
+	key := newKey(t)
+	if err := s.add("192.0.2.10:22", key); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(s.Path())
+	if err := s.add("192.0.2.10:22", key); err != nil {
+		t.Fatalf("a recorded key is a success: %v", err)
+	}
+	after, _ := os.ReadFile(s.Path())
+	if string(before) != string(after) {
+		t.Errorf("nothing may be written:\nbefore %s\nafter %s", before, after)
+	}
+}
+
+// The fingerprint a caller verified must still be the key on offer for a host that is already
+// known, or it would be ignored and the caller would think the check happened.
+func TestExpectedFingerprintIsCheckedForAnAlreadyRecordedHost(t *testing.T) {
+	s := newStore(t)
+	b := newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+		t.Fatal(err)
+	}
+	wrong := ssh.FingerprintSHA256(newKey(t))
+	s.ExpectFingerprint(wrong)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), b)
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Reason != ReasonFingerprint {
+		t.Fatalf("want ReasonFingerprint, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), wrong) || !strings.Contains(err.Error(), ssh.FingerprintSHA256(b)) {
+		t.Errorf("both fingerprints must be in the message: %v", err)
+	}
+	s.ExpectFingerprint(ssh.FingerprintSHA256(b))
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), b); err != nil {
+		t.Fatalf("a matching fingerprint for the recorded key is fine: %v", err)
+	}
+}
+
+// The guard wraps the whole wait-and-ask section, so the lock wait is inside it.
+func TestGuardWrapsTheWaitForAnotherPrompt(t *testing.T) {
+	dir := t.TempDir()
+	key := newKey(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	first := New(dir).Mode(Ask).Confirm(func(string, string) bool {
+		close(started)
+		<-release
+		return true
+	})
+	first.extraPath = ""
+	done := make(chan error, 1)
+	go func() { done <- first.Callback(nil)("192.0.2.10:22", addr(t), key) }()
+	<-started
+
+	var inGuard atomic.Bool
+	second := New(dir).Mode(Ask).Confirm(func(string, string) bool { t.Error("asked a second time"); return false })
+	second.extraPath = ""
+	second.Guard(func(fn func()) { inGuard.Store(true); fn() })
+	res := make(chan error, 1)
+	go func() { res <- second.Callback(nil)("192.0.2.10:22", addr(t), key) }()
+	time.Sleep(50 * time.Millisecond)
+	if !inGuard.Load() {
+		t.Error("the guard must be entered before the wait for the other prompt")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-res; err != nil {
+		t.Fatal(err)
 	}
 }

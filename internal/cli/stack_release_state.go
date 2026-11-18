@@ -118,7 +118,7 @@ func refuseState(l releasestate.Loc, s *releasestate.State, name string) error {
 func runReleaseClear(vm *fleet.VM, l releasestate.Loc, bcfg backup.Config, name string) error {
 	sc, err := dialRelease(vm)
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "stack release", Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: "stack release", Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	defer sc.Close()
@@ -135,7 +135,7 @@ func runReleaseClear(vm *fleet.VM, l releasestate.Loc, bcfg backup.Config, name 
 		err = releasestate.Remove(sc, l)
 	}
 	if err != nil {
-		ui.Emit(ui.Result{OK: false, Action: "stack release", Error: err.Error()})
+		ui.Emit(ui.Result{OK: false, Action: "stack release", Error: err.Error(), Data: errData(err)})
 		return err
 	}
 	data := map[string]any{"stateFile": l.File, "cleared": prev != nil}

@@ -30,8 +30,11 @@ $ baryovm vm ping azure-x86
   host: Linux 7.0.0-1017-azure
   docker: not installed
 ✓ azure-x86 reachable
-! learned the host key for <the VM>:22: SHA256:...
-  verify it: ssh-keyscan -t ecdsa,ed25519 <the VM>:22 | ssh-keygen -lf -
+! <the VM>:22 has no recorded host key
+  offered: SHA256:...
+  check it: against a fingerprint from the cloud console or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine
+  not a check: a keyscan of this address, a man in the middle answers it too
+Trust this host key? [y/N] y
 
 $ baryovm vm exec azure-x86 -- cat /etc/os-release
 PRETTY_NAME="Ubuntu 24.04.5 LTS"

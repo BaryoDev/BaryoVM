@@ -7,11 +7,13 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
@@ -42,12 +44,15 @@ func newRoot() *cobra.Command {
 			if cmd.Flags().Changed("strict-host-keys") {
 				sshx.SetStrictHostKeys(strictHostKeys)
 			}
+			// A person can be asked about an unknown host only on a terminal and not in JSON mode.
+			sshx.SetInteractive(ui.IsTTY() && !ui.JSON())
+			sshx.SetOutputJSON(ui.JSON())
 		},
 	}
 	jsonHelp(root)
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
-		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
+		"always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0). A project release never learns or asks, even with =false")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newProjectCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newPublishCmd(), newCloudCmd(), newGuardCmd(), newSiteCmd(), newRemoteGroupCmd(), newRepoCmd(), newStatusCmd(), newShipCmd(), newProveCmd())
 	rejectUnknownSubcommands(root)
 	return root
@@ -157,6 +162,7 @@ func execute(root *cobra.Command, args []string) error {
 		outputFormat = "json"
 		ui.SetJSON(true)
 	}
+	sshx.SetOutputJSON(ui.JSON())
 	root.SetArgs(args)
 	return runRoot(root)
 }
@@ -180,7 +186,7 @@ func reportError(err error) int {
 	if ui.JSON() {
 		action = actionOf(failedPath)
 	}
-	ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error()})
+	ui.Emit(ui.Result{OK: false, Action: action, Error: err.Error(), Data: errData(err)})
 	return code
 }
 
@@ -197,17 +203,57 @@ func Execute() {
 	sshx.OnLearnHostKey = func(host, fingerprint string) {
 		learned = append(learned, host+" "+fingerprint)
 	}
+	sshx.ConfirmHostKey = confirmHostKey
 	defer func() {
 		for _, l := range learned {
 			host, fp, _ := strings.Cut(l, " ")
 			ui.Warnf("learned the host key for %s: %s", host, fp)
-			ui.Detail("verify it", hostkeys.Keyscan(host)+" | ssh-keygen -lf -")
+			ui.Detail("check it", "against a fingerprint from the cloud console or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine")
 		}
 	}()
 
 	if code := run(newRoot(), os.Args[1:]); code != 0 {
 		os.Exit(code)
 	}
+}
+
+// errData is the structured part of a failed result, for the errors a program can act on. An unknown
+// host carries the host, the fingerprint it offered and why it was refused, so an app can show the
+// fingerprint, ask the person, and call again with --host-key-fingerprint. Other errors carry none.
+func errData(err error) any {
+	var u *hostkeys.ErrUnknownHost
+	if !errors.As(err, &u) {
+		return nil
+	}
+	reason := string(u.Reason)
+	if reason == "" {
+		reason = "no-terminal"
+	}
+	d := map[string]any{"host": u.Host, "offered": u.Offered, "reason": reason, "store": u.Store}
+	if u.Expected != "" {
+		d["expected"] = u.Expected
+	}
+	return d
+}
+
+// hostKeyPromptMu keeps two prompts apart when a fleet command dials several VMs at once.
+var hostKeyPromptMu sync.Mutex
+
+// confirmHostKey asks the person whether to trust an unknown host's key. Only y or yes trusts; an
+// empty answer, EOF or a read error does not. The spinner is paused around it, because the dial
+// usually runs inside ui.Step and the spinner would erase the prompt.
+func confirmHostKey(host, fingerprint string) bool {
+	hostKeyPromptMu.Lock()
+	defer hostKeyPromptMu.Unlock()
+	var ok bool
+	ui.Pause(func() {
+		ui.Warnf("%s has no recorded host key", host)
+		ui.Detail("offered", fingerprint)
+		ui.Detail("check it", "against a fingerprint from the cloud console, the provider's serial console, or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine")
+		ui.Detail("not a check", "a keyscan of this address, a man in the middle answers it too")
+		ok = askYesNo(bufio.NewReader(os.Stdin), "Trust this host key? [y/N] ")
+	})
+	return ok
 }
 
 // run is Execute without the process exit: the command, then the error report, then the exit code.

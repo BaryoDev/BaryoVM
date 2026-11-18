@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -136,6 +137,22 @@ func Emit(r Result) {
 	}
 }
 
+// frameMu is held while the spinner draws a frame and while a prompt owns the line, so the two never
+// write at once.
+var frameMu sync.Mutex
+
+// Pause runs fn with any spinner stopped and its line cleared, for a prompt that has to be read
+// and answered. The spinner redraws every 80ms, which would erase a prompt drawn under it. It
+// resumes when fn returns. Safe to call with no spinner running.
+func Pause(fn func()) {
+	frameMu.Lock()
+	defer frameMu.Unlock()
+	if !jsonMode && isTTY() {
+		fmt.Fprint(os.Stderr, "\r\033[K")
+	}
+	fn()
+}
+
 var dotFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // Step runs fn while showing a dot spinner (baryo-cli's spinner.Dot), then
@@ -157,7 +174,9 @@ func Step(msg string, fn func() error) error {
 				return
 			case <-t.C:
 				frame := AccentStyle.Render(dotFrames[i%len(dotFrames)])
+				frameMu.Lock()
 				fmt.Fprintf(os.Stderr, "\r%s %s", frame, DimStyle.Render(msg))
+				frameMu.Unlock()
 				i++
 			}
 		}

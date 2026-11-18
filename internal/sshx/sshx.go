@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,34 +36,146 @@ func home() string {
 	return filepath.Join(h, ".baryovm")
 }
 
-// StrictHostKeys reports whether an unknown host should be refused rather than learned.
-//
-// Read from the environment rather than passed down, because it has to reach a dial from every
-// command without threading a parameter through six engine packages that have no business knowing
-// about it. BARYOVM_STRICT_HOST_KEYS=1 is the form a CI job sets once for the whole workflow.
-//
 // strictOverride is what the --strict-host-keys flag sets, so the flag wins over the environment.
 var strictOverride *bool
+
+// interactive is set by the cli layer when a person can be asked: stdin and stderr are terminals and
+// output is not JSON. sshx cannot look, because the terminal and the output mode live in ui and the
+// dependency direction in CLAUDE.md runs one way. Unset means nobody can be asked.
+var interactive bool
 
 // SetStrictHostKeys is how the cli layer applies its flag.
 func SetStrictHostKeys(on bool) { strictOverride = &on }
 
-// StrictHostKeys resolves the flag, then the environment.
-func StrictHostKeys() bool {
-	if strictOverride != nil {
-		return *strictOverride
-	}
-	switch os.Getenv("BARYOVM_STRICT_HOST_KEYS") {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
+// SetInteractive tells sshx whether a person can be asked about an unknown host key.
+func SetInteractive(on bool) { interactive = on }
+
+// ForceRefuse makes every unknown host a refusal until the returned function is called, whatever the
+// flag, the environment or the terminal say. A release uses it so that no host is ever trusted on
+// first use during one, by prompt or otherwise.
+func ForceRefuse() (restore func()) {
+	prev := strictOverride
+	on := true
+	strictOverride = &on
+	forceRefuse++
+	return func() { strictOverride, forceRefuse = prev, forceRefuse-1 }
 }
+
+// strictSetting reports an explicit choice: 1 strict (refuse), 0 learn on first use, -1 nothing set.
+// The flag wins over the environment. BARYOVM_STRICT_HOST_KEYS is what a CI job sets once for the
+// whole workflow, read here rather than passed down because it has to reach a dial from every
+// command without threading a parameter through six engine packages.
+func strictSetting() int {
+	if strictOverride != nil {
+		if *strictOverride {
+			return 1
+		}
+		return 0
+	}
+	switch strings.ToLower(os.Getenv("BARYOVM_STRICT_HOST_KEYS")) {
+	case "1", "true", "yes", "on":
+		return 1
+	case "0", "false", "no", "off":
+		return 0
+	}
+	return -1
+}
+
+// resolveMode is the rule for an unknown host. An explicit strict setting refuses, an explicit
+// non-strict one learns on first use, and with nothing set a person is asked when there is one (and
+// something to ask them with) and the host is refused when there is not.
+func resolveMode(setting int, canAsk bool) hostkeys.Mode {
+	switch setting {
+	case 1:
+		return hostkeys.Refuse
+	case 0:
+		return hostkeys.Learn
+	}
+	if canAsk {
+		return hostkeys.Ask
+	}
+	return hostkeys.Refuse
+}
+
+// HostKeyMode resolves the flag, then the environment, then whether a person can be asked.
+func HostKeyMode() hostkeys.Mode {
+	return resolveMode(strictSetting(), interactive && ConfirmHostKey != nil)
+}
+
+// StrictHostKeys reports whether an unknown host will be refused without asking. With nothing set
+// that is true when there is no terminal, so it is not the same as "strict was requested"; see
+// StrictHostKeysRequested.
+func StrictHostKeys() bool { return HostKeyMode() == hostkeys.Refuse }
+
+// StrictHostKeysRequested reports whether the flag or BARYOVM_STRICT_HOST_KEYS asked for strict
+// checking. A project release needs this, not the default: it must have a pin or an explicit strict
+// request before it connects.
+func StrictHostKeysRequested() bool { return strictSetting() == 1 }
+
+// outputJSON is set by the cli layer, so a refusal can say JSON was why nobody was asked.
+var outputJSON bool
+
+// SetOutputJSON tells sshx that output is JSON.
+func SetOutputJSON(on bool) { outputJSON = on }
+
+// forceRefuse counts open ForceRefuse calls.
+var forceRefuse int
+
+// expectedFingerprint is a SHA256 fingerprint the caller already checked, for one run.
+var expectedFingerprint string
+
+// TrustFingerprint trusts an unknown host whose offered key has this SHA256 fingerprint, without
+// asking, until the returned function is called. A different key is refused with both fingerprints,
+// and a host that already has a recorded key is unaffected (a changed key is still refused). It has
+// no effect during a project release.
+func TrustFingerprint(fp string) (restore func()) {
+	prev := expectedFingerprint
+	expectedFingerprint = fp
+	return func() { expectedFingerprint = prev }
+}
+
+// refuseReason is why an unknown host is refused without asking, for the error text.
+func refuseReason() hostkeys.Reason {
+	switch {
+	case forceRefuse > 0:
+		return hostkeys.ReasonRelease
+	case strictSetting() == 1:
+		return hostkeys.ReasonStrict
+	case outputJSON:
+		return hostkeys.ReasonJSON
+	}
+	return hostkeys.ReasonNoTerminal
+}
+
+// newHostKeyStore builds the store a dial uses, with the mode, the reason, the confirm hook and any
+// trusted fingerprint resolved.
+func newHostKeyStore(guard *handshakeGuard) *hostkeys.Store {
+	store := hostkeys.New(home()).Mode(HostKeyMode()).RefuseReason(refuseReason())
+	if confirm := ConfirmHostKey; confirm != nil {
+		// The handshake deadline is for a host that stalls, not for a person reading a fingerprint or
+		// a dial queued behind another prompt, so the guard covers the whole waiting-and-asking section.
+		store.Confirm(confirm).Guard(guard.pause)
+	}
+	if expectedFingerprint != "" && forceRefuse == 0 {
+		store.ExpectFingerprint(expectedFingerprint)
+	}
+	return store
+}
+
+// HostKeyStore is the store Dial would use right now. The cli layer's tests use it to see what a
+// dial would decide without opening a connection.
+func HostKeyStore() *hostkeys.Store { return newHostKeyStore(&handshakeGuard{}) }
 
 // OnLearnHostKey is called the first time a host key is recorded, so the operator sees the
 // fingerprint they are now trusting. The cli layer sets it; sshx does not print (see CLAUDE.md on
 // the dependency direction), so a nil hook means the learning is silent.
 var OnLearnHostKey func(host, fingerprint string)
+
+// ConfirmHostKey asks whether to trust an unknown host's key, and returns true only for a yes. The
+// cli layer sets it and does the prompting; sshx never prints or reads input. It may block for as
+// long as a person takes, and Dial keeps that time out of the handshake deadline. A nil hook means an
+// unknown host cannot be asked about and is refused.
+var ConfirmHostKey func(host, fingerprint string) bool
 
 func learned(host, fingerprint string) {
 	if OnLearnHostKey != nil {
@@ -92,7 +205,8 @@ func Dial(t Target) (*Client, error) {
 	}
 	defer closeAgent() // signing happens during the handshake, so the agent is done once Dial returns
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
-	store := hostkeys.New(home()).Strict(StrictHostKeys())
+	guard := &handshakeGuard{}
+	store := newHostKeyStore(guard)
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -102,7 +216,7 @@ func Dial(t Target) (*Client, error) {
 		HostKeyAlgorithms: store.Algorithms(addr),
 		Timeout:           15 * time.Second,
 	}
-	c, err := dialWithHandshakeDeadline(addr, cfg, handshakeTimeout)
+	c, err := dialGuarded(addr, cfg, handshakeTimeout, guard)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
@@ -121,9 +235,39 @@ var (
 	keepAliveReplyTimeout = 20 * time.Second
 )
 
-// dialWithHandshakeDeadline is ssh.Dial with a deadline on the connection until the handshake is
-// done, then cleared so a long command is not cut off.
-func dialWithHandshakeDeadline(addr string, cfg *ssh.ClientConfig, handshake time.Duration) (*ssh.Client, error) {
+// handshakeGuard lets the handshake deadline be set aside while something waits on a person.
+type handshakeGuard struct {
+	mu        sync.Mutex
+	conn      net.Conn
+	handshake time.Duration
+}
+
+func (g *handshakeGuard) set(conn net.Conn, handshake time.Duration) {
+	g.mu.Lock()
+	g.conn, g.handshake = conn, handshake
+	g.mu.Unlock()
+}
+
+// pause clears the connection deadline, runs fn, then gives the rest of the handshake a fresh full
+// window. The time fn takes is not counted against the deadline.
+func (g *handshakeGuard) pause(fn func()) {
+	g.mu.Lock()
+	conn, handshake := g.conn, g.handshake
+	g.mu.Unlock()
+	if conn != nil {
+		_ = conn.SetDeadline(time.Time{})
+	}
+	defer func() {
+		if conn != nil {
+			_ = conn.SetDeadline(time.Now().Add(handshake))
+		}
+	}()
+	fn()
+}
+
+// dialGuarded is ssh.Dial with a deadline on the connection until the handshake is done, then
+// cleared so a long command is not cut off. A host key prompt pauses the deadline through guard.
+func dialGuarded(addr string, cfg *ssh.ClientConfig, handshake time.Duration, guard *handshakeGuard) (*ssh.Client, error) {
 	conn, err := net.DialTimeout("tcp", addr, cfg.Timeout)
 	if err != nil {
 		return nil, err
@@ -132,6 +276,7 @@ func dialWithHandshakeDeadline(addr string, cfg *ssh.ClientConfig, handshake tim
 		_ = conn.Close()
 		return nil, err
 	}
+	guard.set(conn, handshake)
 	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()

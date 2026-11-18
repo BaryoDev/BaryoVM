@@ -50,9 +50,22 @@ baryovm vm forget-key oracle     # drop its recorded SSH host key
 
 ### Host keys
 
-The first connection to a machine records its SSH host key in
-`~/.baryovm/known_hosts` and prints the fingerprint. Every connection after that
-must match, and one that does not stops the command:
+The first connection to a machine asks about its SSH host key, like OpenSSH. On
+a terminal you see the host and the fingerprint it offered, and a prompt:
+
+```text
+! 203.0.113.10:22 has no recorded host key
+  offered: SHA256:9KpQ...
+  check it: against a fingerprint from the cloud console or ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the machine
+  not a check: a keyscan of this address, a man in the middle answers it too
+Trust this host key? [y/N]
+```
+
+Only `y` or `yes` trusts it and records it in `~/.baryovm/known_hosts`. Anything
+else, including an empty answer, refuses and records nothing. With no terminal
+(a pipe, CI) or with `-o json`, nobody can be asked, so an unknown host is
+refused. Every connection after the first must match the recorded key, and one
+that does not stops the command:
 
 ```text
 host key for 203.0.113.10:22 changed
@@ -63,8 +76,12 @@ host key for 203.0.113.10:22 changed
 A rebuilt VM is the ordinary reason, and so is someone answering on that address
 who should not be. BaryoVM cannot tell them apart, so it stops. If you rebuilt
 the machine, `baryovm vm forget-key <name-or-host>` drops the old key and the
-next connection learns the new one. There is no flag that turns the check off
-for every host.
+next connection asks about the new one. There is no flag that turns the check
+off for every host.
+
+To get the old behaviour back, where an unknown host is learned on first use
+without asking, set `BARYOVM_STRICT_HOST_KEYS=0` (or pass
+`--strict-host-keys=false`).
 
 ### Host keys in CI
 
@@ -73,7 +90,9 @@ between runs, so every run is the first one, and learning a key on each run
 means trusting whatever answers on that address, every time, with a key that can
 dump your database.
 
-Strict mode refuses to learn. An unknown host is an error:
+A CI job has no terminal, so an unknown host is refused by default. Setting
+strict mode says so explicitly, and also refuses on a terminal instead of
+asking:
 
 ```sh
 export BARYOVM_STRICT_HOST_KEYS=1     # or --strict-host-keys
@@ -85,7 +104,8 @@ So a CI job records the key first, and fails rather than trusting a new one:
 - name: Pin the host key
   run: |
     mkdir -p ~/.baryovm
-    ssh-keyscan -t ecdsa,ed25519 "$VM_HOST" >> ~/.baryovm/known_hosts
+    # VM_KNOWN_HOSTS is the known_hosts line you checked against the cloud console or the machine
+    echo "$VM_KNOWN_HOSTS" >> ~/.baryovm/known_hosts
 
 - name: Deploy
   env:
@@ -95,10 +115,15 @@ So a CI job records the key first, and fails rather than trusting a new one:
 
 Better still, commit the expected `known_hosts` or keep it in a secret, so the
 pin is reviewed rather than fetched from the network on every run. `ssh-keyscan`
-at deploy time trusts whatever answers; a committed file does not.
+at deploy time shows only what the host offers, and a man in the middle answers it too, so it is
+not verification. Compare the fingerprint with one from a separate trusted channel (the cloud
+console, the provider's serial console, or `ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub` run on the
+machine) and keep the checked line, not a fresh scan.
 
 The flag beats the environment, so `--strict-host-keys=false` is how a human
 turns it off for one command on a machine where the workflow sets it globally.
+A job that used to rely on learning a fresh VM must now pin the key as above, or
+set `BARYOVM_STRICT_HOST_KEYS=0` to keep learning.
 
 ### Keys held by ssh-agent
 
@@ -154,6 +179,14 @@ give `--os linux|windows` and it does not connect at all. Any host with a POSIX 
 (Linux, macOS, FreeBSD) is recorded as `linux`. If the host cannot be reached (refused,
 timed out) or does not answer the probe, `vm add` still saves it, with no OS, which
 reads as Linux, and warns; run `vm add` again when the host is up, or pass `--os windows`.
+A new host's key is asked about on a terminal. A script or app (`-o json`, no terminal) cannot be
+asked, so `vm add` refuses and the JSON error carries `data.host`, `data.offered` and `data.reason`.
+Show that fingerprint to the person, and once they have checked it against the machine, run again
+with `--host-key-fingerprint SHA256:...`: a host offering exactly that key is recorded and the add
+continues, and any other key is refused with both fingerprints. This holds under strict mode too,
+since the fingerprint is the checked key. The flag does not apply to a host
+that already has a different key on record, which is still a changed key, and a `project release`
+ignores it.
 A host key that does not match the one on record is not "unreachable": `vm add` fails
 and saves nothing. Entries from before this existed are read as Linux, and an `os` that
 is neither `linux` nor `windows` is refused by every command that uses it.
@@ -1167,8 +1200,8 @@ What the file may and may not hold:
   file's directory. A literal private key, token or password in any field, including fields this
   version does not know, is refused with the field named, before anything connects. The error never
   repeats the value.
-- `hostKey` is the VM's public host key (`ssh-keyscan -t ed25519 <host>`, then check the
-  fingerprint). It is public, so it is committed.
+- `hostKey` is the VM's public host key (`ssh-keyscan -t ed25519 <host>` shows what the host
+  offers; check its fingerprint against the cloud console or the machine, not the scan). It is public, so it is committed.
 - `order` lists the stacks to release. Leave it out and every stack is released in the order written.
 
 `project release` stops at the first failed release or verify and leaves later stacks untouched. The
@@ -1176,7 +1209,7 @@ What the file may and may not hold:
 partial. Each stack goes through the same code as `stack release` (backup first, sync, build,
 compose up, verify), so a safeguard added to one is in the other.
 
-It never trusts a host on first use. Each VM needs a pinned `hostKey`, or the run needs
+It never trusts a host on first use, and never asks about one. Each VM needs a pinned `hostKey`, or the run needs
 `--strict-host-keys` (or `BARYOVM_STRICT_HOST_KEYS=1`) with the key already in known_hosts. A pinned
 key is held for that run only and never written to disk, so a committed file cannot change what the
 machine trusts. If `$BARYOVM_HOME/known_hosts` or `~/.ssh/known_hosts` already holds a different key
