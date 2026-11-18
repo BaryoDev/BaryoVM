@@ -158,6 +158,9 @@ func TestVMAddHostKeyMismatchStillFailsAndSavesNothing(t *testing.T) {
 func TestVMAddDetectionFailureKeepsTheErrorAndDoesNotSayUnreachable(t *testing.T) {
 	t.Setenv("BARYOVM_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	// The test server's key is new and there is no terminal, which is refused by default. This test
+	// is about detection, so it learns the key the way releases before host key prompts did.
+	t.Setenv("BARYOVM_STRICT_HOST_KEYS", "0")
 
 	cfg := &ssh.ServerConfig{NoClientAuth: true}
 	cfg.AddHostKey(newSigner(t))
