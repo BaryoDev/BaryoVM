@@ -284,7 +284,7 @@ func requireVM(name string) (fleet.VM, error) {
 	return *vm, nil
 }
 
-// newVMForgetKeyCmd drops a recorded host key so the next connection learns the new one.
+// newVMForgetKeyCmd drops a recorded host key so the next connection asks about the new one.
 //
 // This exists because refusing a changed key is only useful if there is a stated way through it. A
 // rebuilt VM presents a new key legitimately, and without this command the operator's options are
@@ -293,7 +293,7 @@ func requireVM(name string) (fleet.VM, error) {
 func newVMForgetKeyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "forget-key <name-or-host>",
-		Short: "Forget a VM's recorded SSH host key, so the next connection learns it again",
+		Short: "Forget a VM's recorded SSH host key, so the next connection asks about it again",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
@@ -321,7 +321,7 @@ func newVMForgetKeyCmd() *cobra.Command {
 			ui.Emit(ui.Result{
 				OK:      true,
 				Action:  "vm forget-key",
-				Message: fmt.Sprintf("forgot %d host key(s) for %s, the next connection will learn the new one", n, target),
+				Message: fmt.Sprintf("forgot %d host key(s) for %s, the next connection will ask about the new one", n, target),
 			})
 			return nil
 		},

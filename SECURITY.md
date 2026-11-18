@@ -24,19 +24,23 @@ down.
   material**.
 - **Host identity**. Before running anything on a VM, BaryoVM checks the host's
   SSH key against `~/.baryovm/known_hosts` (override with `BARYOVM_HOME`),
-  written **owner-only (`0600`)**. The first connection to a machine records the
-  key and prints its fingerprint; every later connection must match. A key that
+  written **owner-only (`0600`)**. The first connection to a machine shows the
+  fingerprint and asks `Trust this host key? [y/N]` on a terminal, and records
+  the key only on a yes. With no terminal, or with `-o json`, an unknown host is
+  refused. Every later connection must match. A key that
   has **changed** stops the command and prints both fingerprints, because a
   rebuilt VM and someone else answering on that address look identical from
   here. `baryovm vm forget-key <name-or-host>` drops one recorded key so the
-  next connection learns the new one. There is no flag that disables the check
-  for every host. Your own `~/.ssh/known_hosts` is read as an additional source,
+  next connection asks about the new one. There is no flag that disables the
+  check for every host; `BARYOVM_STRICT_HOST_KEYS=0` (or `--strict-host-keys=false`)
+  goes back to learning an unknown host without asking. Your own `~/.ssh/known_hosts` is read as an additional source,
   never written.
 - **Host identity in CI**. Trust on first use assumes there is a first use. A
   runner with no memory between runs would learn a key every run, which is not
-  verification. Set `BARYOVM_STRICT_HOST_KEYS=1` (or `--strict-host-keys`) and
-  BaryoVM refuses an unknown host instead of learning it, so the job fails
-  rather than trusting whatever answered. Record the key first, ideally from a
+  verification. A runner has no terminal, so BaryoVM refuses an unknown host by
+  default and the job fails rather than trusting whatever answered. Setting
+  `BARYOVM_STRICT_HOST_KEYS=1` (or `--strict-host-keys`) says so explicitly, and
+  also refuses on a terminal instead of asking. Record the key first, ideally from a
   committed file or a secret rather than an `ssh-keyscan` at deploy time.
 - **App secrets**. BaryoVM never reads or copies your apps' secrets. Backups
   may copy a stack's config file (e.g. `.env`) into the remote backup directory

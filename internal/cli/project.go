@@ -95,6 +95,11 @@ func newProjectReleaseCmd() *cobra.Command {
 				used[store.FindStack(n).VM] = true
 			}
 			// Pins live for this run only: a committed file must not change what this machine trusts.
+			// Whatever the default would do for an ordinary command, a release never asks about a host
+			// and never learns one: the unpinned check below needs the explicit request, and every
+			// unknown host is refused at connect.
+			requested := sshx.StrictHostKeysRequested()
+			defer sshx.ForceRefuse()()
 			hk := hostkeys.New(baryovmHome())
 			hostkeys.ResetSessionPins()
 			defer hostkeys.ResetSessionPins()
@@ -104,7 +109,7 @@ func newProjectReleaseCmd() *cobra.Command {
 					continue
 				}
 				if vm.HostKey == "" {
-					if !sshx.StrictHostKeys() {
+					if !requested {
 						return fail(fmt.Errorf("vms[%d].hostKey: vm %q has no pinned host key, and a project release never trusts a host on first use: add its public key to the file (`ssh-keyscan -t ed25519 %s`, check the fingerprint) or pass --strict-host-keys with the key already in known_hosts", i, vm.Name, vm.Host))
 					}
 					continue

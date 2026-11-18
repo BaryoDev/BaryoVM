@@ -25,6 +25,18 @@ previously accepted is called out here rather than left to be discovered.
   server block in a shape the step does not edit is reported, and a rejected jail, a rolled-back
   drop or a failed reload ends the run with an error.
 
+### Changed
+
+- **A new VM host key is now asked about on a terminal, and refused when there is no terminal.**
+  On a terminal you see the host and the offered fingerprint and answer `Trust this host key?
+  [y/N]`; only `y` or `yes` records it. With no terminal (a pipe, CI) or with `-o json`, an
+  unknown host is refused, as `--strict-host-keys` always did. This refuses something the last
+  release accepted: a CI job that relied on learning a fresh VM must now pin the key in
+  `known_hosts` first, or set `BARYOVM_STRICT_HOST_KEYS=0`. To get the old learn-on-first-use
+  behaviour everywhere, set `BARYOVM_STRICT_HOST_KEYS=0` or pass `--strict-host-keys=false` (the
+  flag wins over the environment). Known keys and changed keys behave as before, and time spent at
+  the prompt does not count against the 30 second handshake deadline.
+
 ### Fixed
 
 - **A silent SSH host no longer hangs the CLI.** The handshake has its own 30 second deadline (the

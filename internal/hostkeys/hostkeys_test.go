@@ -279,7 +279,7 @@ func TestStrictStillReportsAChangedKeyAsChanged(t *testing.T) {
 	if err := s.Callback(nil)("192.0.2.10:22", addr(t), first); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	s.strict = true
+	s.Strict(true)
 	err := s.Callback(nil)("192.0.2.10:22", addr(t), second)
 	var ce *ErrChanged
 	if !errors.As(err, &ce) {
@@ -322,5 +322,104 @@ func TestKnownHostsForReturnsOnlyTheRecordedKeyOfThatHost(t *testing.T) {
 	}
 	if none, _ := s.KnownHostsFor("192.0.2.99:22"); none != "" {
 		t.Errorf("an unknown host must give no keys, got %q", none)
+	}
+}
+
+func TestAskTrustsAndRecordsOnYes(t *testing.T) {
+	var gotHost, gotFP string
+	s := newStore(t).Mode(Ask).Confirm(func(host, fp string) bool {
+		gotHost, gotFP = host, fp
+		return true
+	})
+	key := newKey(t)
+	if err := s.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("a yes must trust the key: %v", err)
+	}
+	if gotHost != "192.0.2.10:22" || gotFP != ssh.FingerprintSHA256(key) {
+		t.Errorf("confirm saw %q %q, want the host and the offered fingerprint", gotHost, gotFP)
+	}
+	if b, _ := os.ReadFile(s.Path()); !strings.Contains(string(b), "192.0.2.10") {
+		t.Error("a yes must record the key")
+	}
+	// Recorded, so the next connection is a known host and is not asked again.
+	again := newStore(t).Mode(Ask).Confirm(func(string, string) bool { t.Error("asked about a known host"); return false })
+	again.path = s.Path()
+	if err := again.Callback(nil)("192.0.2.10:22", addr(t), key); err != nil {
+		t.Fatalf("known key after a yes: %v", err)
+	}
+}
+
+func TestAskRefusesAndWritesNothingOnNo(t *testing.T) {
+	s := newStore(t).Mode(Ask).Confirm(func(string, string) bool { return false })
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || !ue.Declined {
+		t.Fatalf("want a declined ErrUnknownHost, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "not trusted") {
+		t.Errorf("a declined key must say it was not trusted: %v", err)
+	}
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("a no must not write a known_hosts entry")
+	}
+}
+
+func TestAskWithNoConfirmHookRefuses(t *testing.T) {
+	s := newStore(t).Mode(Ask)
+	err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t))
+	var ue *ErrUnknownHost
+	if !errors.As(err, &ue) || ue.Declined {
+		t.Fatalf("want ErrUnknownHost with nobody asked, got %T: %v", err, err)
+	}
+	if _, err := os.Stat(s.Path()); err == nil {
+		t.Fatal("nothing may be written when nobody was asked")
+	}
+}
+
+func TestLearnModeStillLearnsWithoutAsking(t *testing.T) {
+	s := newStore(t).Mode(Learn).Confirm(func(string, string) bool { t.Error("learn mode must not ask"); return false })
+	var learned string
+	if err := s.Callback(func(_, fp string) { learned = fp })("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+		t.Fatalf("learn: %v", err)
+	}
+	if learned == "" {
+		t.Error("the learned hook must be called in Learn mode")
+	}
+	if _, err := os.Stat(s.Path()); err != nil {
+		t.Error("Learn must record the key")
+	}
+}
+
+func TestAskDoesNotCallTheLearnedHook(t *testing.T) {
+	s := newStore(t).Mode(Ask).Confirm(func(string, string) bool { return true })
+	if err := s.Callback(func(_, _ string) { t.Error("the person just saw the fingerprint; learned must not repeat it") })("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A changed key is refused in every mode, and Ask must not even prompt for it.
+func TestAChangedKeyIsRefusedInEveryMode(t *testing.T) {
+	for _, m := range []Mode{Learn, Refuse, Ask} {
+		s := newStore(t)
+		if err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t)); err != nil {
+			t.Fatalf("first: %v", err)
+		}
+		s.Mode(m).Confirm(func(string, string) bool { t.Error("a changed key must not be asked about"); return true })
+		var ce *ErrChanged
+		if err := s.Callback(nil)("192.0.2.10:22", addr(t), newKey(t)); !errors.As(err, &ce) {
+			t.Errorf("mode %v: want ErrChanged, got %T: %v", m, err, err)
+		}
+	}
+}
+
+func TestUnknownHostMessageNamesTheWayBackToLearning(t *testing.T) {
+	msg := (&ErrUnknownHost{Host: "192.0.2.10:22", Offered: "SHA256:x", Store: "/k"}).Error()
+	for _, want := range []string{"BARYOVM_STRICT_HOST_KEYS=0", "ssh-keyscan", "/k"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message must mention %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "strict host key checking is on") {
+		t.Error("the message must be right for the no-terminal default too")
 	}
 }

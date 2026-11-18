@@ -103,8 +103,15 @@ every interpolated value with `sshx.Quote`**. This is the injection boundary and
 it is covered by tests in `internal/sshx/sshx_test.go`. A remote command built
 with `fmt.Sprintf` and a bare `%s` is a bug even when the value looks safe.
 
-Host identity is verified in `internal/hostkeys`: trust on first use against
-`$BARYOVM_HOME/known_hosts`, then refuse on change. The user's own
+Host identity is verified in `internal/hostkeys`: ask on first use against
+`$BARYOVM_HOME/known_hosts`, then refuse on change. An unknown host is a
+`hostkeys.Mode`: Ask on a terminal (not JSON), Refuse with no terminal or under
+`--strict-host-keys`, Learn under `--strict-host-keys=false` or
+`BARYOVM_STRICT_HOST_KEYS=0`. The mode is resolved in `sshx.HostKeyMode`; the
+cli layer sets `sshx.SetInteractive` and `sshx.ConfirmHostKey` (the prompt,
+which pauses the spinner), because engine packages never print. The prompt
+time is kept out of the SSH handshake deadline, and `project release` forces
+Refuse for its run. The user's own
 `~/.ssh/known_hosts` is read as a second source, since a key they checked by
 hand is better than one offered to us now. There is deliberately no flag that
 skips the check for every host, because the moment one exists it ends up in a

@@ -7,11 +7,13 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/BaryoDev/BaryoVM/internal/fleet"
 	"github.com/BaryoDev/BaryoVM/internal/hostkeys"
@@ -42,12 +44,14 @@ func newRoot() *cobra.Command {
 			if cmd.Flags().Changed("strict-host-keys") {
 				sshx.SetStrictHostKeys(strictHostKeys)
 			}
+			// A person can be asked about an unknown host only on a terminal and not in JSON mode.
+			sshx.SetInteractive(ui.IsTTY() && !ui.JSON())
 		},
 	}
 	jsonHelp(root)
 	root.PersistentFlags().StringVarP(&outputFormat, "output", "o", "human", "output format: human | json")
 	root.PersistentFlags().BoolVar(&strictHostKeys, "strict-host-keys", false,
-		"refuse an unknown host instead of learning its key (also BARYOVM_STRICT_HOST_KEYS=1)")
+		"always refuse an unknown host; =false learns its key on first use instead of asking (also BARYOVM_STRICT_HOST_KEYS=1 or 0)")
 	root.AddCommand(newVersionCmd(), newVMCmd(), newDeployCmd(), newDoctorCmd(), newUpCmd(), newStackCmd(), newProjectCmd(), newScanCmd(), newGitCmd(), newGhCmd(), newPublishCmd(), newCloudCmd(), newGuardCmd(), newSiteCmd(), newRemoteGroupCmd(), newRepoCmd(), newStatusCmd(), newShipCmd(), newProveCmd())
 	rejectUnknownSubcommands(root)
 	return root
@@ -197,6 +201,7 @@ func Execute() {
 	sshx.OnLearnHostKey = func(host, fingerprint string) {
 		learned = append(learned, host+" "+fingerprint)
 	}
+	sshx.ConfirmHostKey = confirmHostKey
 	defer func() {
 		for _, l := range learned {
 			host, fp, _ := strings.Cut(l, " ")
@@ -208,6 +213,25 @@ func Execute() {
 	if code := run(newRoot(), os.Args[1:]); code != 0 {
 		os.Exit(code)
 	}
+}
+
+// hostKeyPromptMu keeps two prompts apart when a fleet command dials several VMs at once.
+var hostKeyPromptMu sync.Mutex
+
+// confirmHostKey asks the person whether to trust an unknown host's key. Only y or yes trusts; an
+// empty answer, EOF or a read error does not. The spinner is paused around it, because the dial
+// usually runs inside ui.Step and the spinner would erase the prompt.
+func confirmHostKey(host, fingerprint string) bool {
+	hostKeyPromptMu.Lock()
+	defer hostKeyPromptMu.Unlock()
+	var ok bool
+	ui.Pause(func() {
+		ui.Warnf("%s has no recorded host key", host)
+		ui.Detail("offered", fingerprint)
+		ui.Detail("verify it", hostkeys.Keyscan(host)+" | ssh-keygen -lf -")
+		ok = askYesNo(bufio.NewReader(os.Stdin), "Trust this host key? [y/N] ")
+	})
+	return ok
 }
 
 // run is Execute without the process exit: the command, then the error report, then the exit code.

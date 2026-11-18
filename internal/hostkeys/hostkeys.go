@@ -10,10 +10,12 @@
 // about to do next, which includes pg_dump output streamed over the session and the contents of a
 // stack's config file.
 //
-// Trust on first use, then refuse on change:
+// Ask on first use, then refuse on change:
 //
-//   - Unknown host: record the key, print the fingerprint, continue. This is the fresh VM case and
-//     it is the one time a key can be learned without a second channel to check it against.
+//   - Unknown host: what happens is the Store's Mode. Ask hands the fingerprint to a confirm hook
+//     (the cli layer prompts a person) and records the key only on a yes. Refuse is an error, for CI
+//     and anything else with nobody to ask. Learn records it and carries on, which is how releases
+//     before this one behaved and is still available for someone who wants it.
 //   - Known host, same key: continue silently.
 //   - Known host, different key: refuse, print both fingerprints, and name the one command that
 //     accepts the new key for that host. There is deliberately no flag that turns the check off
@@ -67,28 +69,57 @@ func (e *ErrChanged) Error() string {
 		e.Host, e.Stored, e.Offered, e.Host)
 }
 
-// ErrUnknownHost is returned in strict mode for a host with no recorded key. It carries the offered
-// fingerprint so an operator can pin it after checking it, rather than having to go and fetch it.
+// ErrUnknownHost is returned for a host with no recorded key that was not trusted: refused outright
+// (strict, or no terminal to ask on) or declined when asked. It carries the offered fingerprint so an
+// operator can pin it after checking it, rather than having to go and fetch it.
 type ErrUnknownHost struct {
 	Host    string
 	Offered string
 	Store   string
+	// Declined is set when a person was asked and did not say yes. Unset means nobody was asked.
+	Declined bool
 }
 
 func (e *ErrUnknownHost) Error() string {
+	if e.Declined {
+		return fmt.Sprintf(
+			"host key for %s not trusted.\n"+
+				"  offered  %s\n"+
+				"\n"+
+				"Nothing was recorded. To trust it later, check that fingerprint against the machine and\n"+
+				"record it:\n"+
+				"\n"+
+				"  %s >> %s\n",
+			e.Host, e.Offered, Keyscan(e.Host), e.Store)
+	}
 	return fmt.Sprintf(
-		"no recorded host key for %s, and strict host key checking is on.\n"+
+		"no recorded host key for %s, and there is nobody to ask (strict host key checking, or no terminal).\n"+
 			"  offered  %s\n"+
 			"\n"+
-			"Strict mode refuses to learn a key, because there is nobody here to check it. A runner\n"+
-			"with no memory between runs would otherwise trust whatever answers on this address,\n"+
-			"every run.\n"+
+			"An unknown host is refused here, because nobody can check its key. A runner with no memory\n"+
+			"between runs would otherwise trust whatever answers on this address, every run.\n"+
 			"\n"+
 			"Check that fingerprint against the machine, then record it before this runs:\n"+
 			"\n"+
-			"  %s >> %s\n",
+			"  %s >> %s\n"+
+			"\n"+
+			"To learn an unknown host's key on first use instead, as releases before this one did, set\n"+
+			"BARYOVM_STRICT_HOST_KEYS=0 (or pass --strict-host-keys=false).\n",
 		e.Host, e.Offered, Keyscan(e.Host), e.Store)
 }
+
+// Mode is what a Store does with a host that has no recorded key anywhere.
+type Mode int
+
+const (
+	// Learn records the key and carries on (trust on first use). It is the zero value because that is
+	// what a Store did before modes existed; the cli layer picks the real default.
+	Learn Mode = iota
+	// Refuse returns ErrUnknownHost without asking.
+	Refuse
+	// Ask calls the Store's confirm hook. No hook, or an answer other than yes, refuses.
+	Ask
+)
 
 // Keyscan is the ssh-keyscan command that fetches a host's ecdsa and ed25519 keys. ssh-keyscan
 // takes the port as -p and cannot resolve host:port.
@@ -105,14 +136,16 @@ type Store struct {
 	path      string // BaryoVM's own known_hosts, written here
 	extraPath string // the user's ~/.ssh/known_hosts, read but never written
 
-	// strict refuses to learn. An unknown host is an error rather than a key recorded on faith.
-	//
-	// Trust on first use assumes there is a first use: one moment where a key is learned and every
-	// connection after it is checked. A CI runner has no memory between runs, so every run is the
-	// first one, and TOFU degrades to accepting whatever answers on the recorded address, every
-	// time, with a key that can dump the production database. Strict mode is how CI says "I already
-	// know this key, and if you do not, stop".
-	strict bool
+	// mode decides an unknown host. Trust on first use assumes there is a first use: one moment where
+	// a key is learned and every connection after it is checked. A CI runner has no memory between
+	// runs, so every run is the first one, and TOFU degrades to accepting whatever answers on the
+	// recorded address, every time, with a key that can dump the production database. Refuse is how
+	// CI says "I already know this key, and if you do not, stop".
+	mode Mode
+
+	// confirm is asked in Ask mode. It must not be called with the store locked by the caller, and it
+	// may block for as long as a person takes to read a fingerprint.
+	confirm func(host, fingerprint string) bool
 }
 
 // New returns the store rooted at dir, which is BaryoVM's home.
@@ -125,16 +158,34 @@ func New(dir string) *Store {
 }
 
 // Strict makes an unknown host an error rather than something to learn. Set it wherever there is no
-// human to check a fingerprint and no memory between runs.
+// human to check a fingerprint and no memory between runs. Strict(false) is Mode(Learn).
 func (s *Store) Strict(on bool) *Store {
-	s.strict = on
+	if on {
+		s.mode = Refuse
+	} else {
+		s.mode = Learn
+	}
 	return s
 }
 
-// Callback returns an ssh.HostKeyCallback implementing trust on first use.
+// Mode sets what happens to an unknown host.
+func (s *Store) Mode(m Mode) *Store {
+	s.mode = m
+	return s
+}
+
+// Confirm sets the hook Ask mode calls with the host and the offered fingerprint. Only a true answer
+// trusts the key. The hostkeys package never prints or reads input, so whoever sets this does that.
+func (s *Store) Confirm(fn func(host, fingerprint string) bool) *Store {
+	s.confirm = fn
+	return s
+}
+
+// Callback returns an ssh.HostKeyCallback implementing the Store's mode for unknown hosts.
 //
-// learned is called with the fingerprint when a key is recorded for the first time, so the caller
-// can tell the operator what it just trusted. It is not called when the key was already known.
+// learned is called with the fingerprint when a key is recorded for the first time in Learn mode, so
+// the caller can tell the operator what it just trusted. It is not called when the key was already
+// known, nor in Ask mode, where the person has just seen the fingerprint.
 func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		offered := ssh.FingerprintSHA256(key)
@@ -194,8 +245,18 @@ func (s *Store) Callback(learned func(host, fingerprint string)) ssh.HostKeyCall
 		}
 
 		// Unknown everywhere: the fresh VM case.
-		if s.strict {
+		switch s.mode {
+		case Refuse:
 			return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+		case Ask:
+			// A missing hook means nobody can be asked, which is a refusal, never a yes.
+			if s.confirm == nil {
+				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path}
+			}
+			if !s.confirm(hostname, offered) {
+				return &ErrUnknownHost{Host: hostname, Offered: offered, Store: s.path, Declined: true}
+			}
+			return s.add(hostname, key)
 		}
 		// Learn it.
 		if err := s.add(hostname, key); err != nil {
