@@ -84,6 +84,7 @@ VERSION=0.3.0; OS=$(uname -s | tr A-Z a-z); ARCH=$(uname -m | sed 's/x86_64/amd6
 curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/baryovm_${VERSION}_${OS}_${ARCH}.tar.gz
 curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing        # verify before you run it
+gh attestation verify baryovm_${VERSION}_${OS}_${ARCH}.tar.gz -R BaryoDev/BaryoVM   # built by release.yml here
 tar xzf baryovm_${VERSION}_${OS}_${ARCH}.tar.gz && sudo mv baryovm /usr/local/bin/
 ```
 
