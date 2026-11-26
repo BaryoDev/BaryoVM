@@ -84,9 +84,12 @@ VERSION=0.3.0; OS=$(uname -s | tr A-Z a-z); ARCH=$(uname -m | sed 's/x86_64/amd6
 curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/baryovm_${VERSION}_${OS}_${ARCH}.tar.gz
 curl -fsSLO https://github.com/BaryoDev/BaryoVM/releases/download/v$VERSION/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing        # verify before you run it
-gh attestation verify baryovm_${VERSION}_${OS}_${ARCH}.tar.gz -R BaryoDev/BaryoVM   # built by release.yml here
 tar xzf baryovm_${VERSION}_${OS}_${ARCH}.tar.gz && sudo mv baryovm /usr/local/bin/
 ```
+
+Releases after 0.6.0 also carry a build provenance attestation. Before the `tar` step, check that
+the archive was built by `release.yml` in this repository with
+`gh attestation verify baryovm_${VERSION}_${OS}_${ARCH}.tar.gz -R BaryoDev/BaryoVM`.
 
 **From source**, which needs Go 1.25 or newer:
 
