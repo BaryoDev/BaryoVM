@@ -87,6 +87,10 @@ shasum -a 256 -c checksums.txt --ignore-missing        # verify before you run i
 tar xzf baryovm_${VERSION}_${OS}_${ARCH}.tar.gz && sudo mv baryovm /usr/local/bin/
 ```
 
+Releases after 0.6.0 also carry a build provenance attestation. Before the `tar` step, check that
+the archive was built by `release.yml` in this repository with
+`gh attestation verify baryovm_${VERSION}_${OS}_${ARCH}.tar.gz -R BaryoDev/BaryoVM`.
+
 **From source**, which needs Go 1.25 or newer:
 
 ```sh

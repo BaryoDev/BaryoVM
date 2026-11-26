@@ -10,6 +10,11 @@ previously accepted is called out here rather than left to be discovered.
 
 ### Added
 
+- **Release archives carry a build provenance attestation.** A new job in `release.yml` signs one
+  for every archive in `checksums.txt` (keyless, GitHub OIDC), in a job of its own so the
+  goreleaser job never holds an OIDC token. Check a download with `gh attestation verify
+  baryovm_<version>_<os>_<arch>.tar.gz -R BaryoDev/BaryoVM`. Releases up to 0.6.0 have none.
+
 - **`vm harden` can ban nginx scanners.** `--nginx-ban-probes` writes a `baryovm-nginx-probes`
   filter and jail in their own files (`jail.local` is not touched). The jail watches every absolute
   `access_log` path in `nginx -T` and bans sources whose request path asks for `.env`, `.git`,

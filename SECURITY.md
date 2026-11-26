@@ -93,6 +93,19 @@ down.
   offered. On other VMs baryovm echoes a random token first and refuses if a forced command
   swallowed it.
 
+## Verifying a release
+
+Each release after 0.6.0 carries a build provenance attestation for every archive in its
+`checksums.txt`, signed by `release.yml` in this repository (keyless, GitHub OIDC). Check a
+download with the GitHub CLI:
+
+```sh
+gh attestation verify baryovm_<version>_<os>_<arch>.tar.gz -R BaryoDev/BaryoVM
+```
+
+Releases up to 0.6.0 have no attestation; `checksums.txt` is the only check for those. The
+binaries are not code-signed or notarised for macOS.
+
 ## Your responsibilities
 
 - `vm runner` is the one opt-in exception to the agentless design: it leaves GitHub's runner
